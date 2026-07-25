@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
-import 'word_card.dart';
+import 'word_detail_page.dart';
 
 /// 将数据库中的字面 \n 替换为真正的换行符
 String _normalizeNewlines(String? text) {
@@ -20,14 +21,17 @@ class _SearchPageState extends State<SearchPage> {
   final _searchController = TextEditingController();
   final _focusNode = FocusNode();
   List<SearchResult> _suggestions = [];
-  CombinedResult? _selectedResult;
   bool _isSearching = false;
   String? _errorMessage;
+  List<String> _searchHistory = [];
+
+  static const _historyKey = 'search_history';
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    _loadSearchHistory();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
@@ -41,12 +45,46 @@ class _SearchPageState extends State<SearchPage> {
     super.dispose();
   }
 
+  Future<void> _loadSearchHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = prefs.getStringList(_historyKey);
+    if (!mounted) return;
+    setState(() {
+      _searchHistory = history ?? [];
+    });
+  }
+
+  Future<void> _addToHistory(String word) async {
+    _searchHistory.remove(word);
+    _searchHistory.insert(0, word);
+    if (_searchHistory.length > 30) {
+      _searchHistory = _searchHistory.sublist(0, 30);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_historyKey, _searchHistory);
+  }
+
+  Future<void> _removeFromHistory(int index) async {
+    setState(() {
+      _searchHistory.removeAt(index);
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_historyKey, _searchHistory);
+  }
+
+  Future<void> _clearHistory() async {
+    setState(() {
+      _searchHistory.clear();
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_historyKey);
+  }
+
   void _onSearchChanged() {
     final query = _searchController.text.trim();
     if (query.isEmpty) {
       setState(() {
         _suggestions = [];
-        _selectedResult = null;
         _errorMessage = null;
       });
       return;
@@ -77,30 +115,35 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _onSelectWord(String word) async {
-    setState(() {
-      _isSearching = true;
-      _errorMessage = null;
-      _suggestions = [];
-    });
+    await _addToHistory(word);
+
+    if (!mounted) return;
 
     try {
       final result = await DictionaryService.searchAllExact(word);
       if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => WordDetailPage(result: result, word: word),
+        ),
+      );
+
+      _searchController.clear();
       setState(() {
-        _selectedResult = result;
-        _isSearching = false;
-        if (!result.hasAny) {
-          _errorMessage = '未找到 "$word" 的释义';
-        }
+        _suggestions = [];
+        _errorMessage = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _isSearching = false;
         _errorMessage = '查询失败: $e';
       });
     }
   }
+
+  bool get _isIdle => _searchController.text.trim().isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -134,7 +177,6 @@ class _SearchPageState extends State<SearchPage> {
                     onPressed: () {
                       _searchController.clear();
                       setState(() {
-                        _selectedResult = null;
                         _suggestions = [];
                         _errorMessage = null;
                       });
@@ -149,9 +191,115 @@ class _SearchPageState extends State<SearchPage> {
               },
             ),
           ),
-          Expanded(child: _buildContent()),
+          Expanded(child: _isIdle ? _buildHistoryContent() : _buildContent()),
         ],
       ),
+    );
+  }
+
+  /// 空闲时显示搜索历史或默认提示
+  Widget _buildHistoryContent() {
+    if (_searchHistory.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.menu_book_rounded,
+              size: 80,
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '输入单词或中文开始查询',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '支持英汉双词典离线查询',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Row(
+            children: [
+              Icon(
+                Icons.history,
+                size: 18,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                '搜索历史',
+                style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const Spacer(),
+              TextButton.icon(
+                icon: const Icon(Icons.delete_sweep, size: 18),
+                label: const Text('清空'),
+                onPressed: _clearHistory,
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            itemCount: _searchHistory.length,
+            itemBuilder: (context, index) {
+              final word = _searchHistory[index];
+              return Dismissible(
+                key: ValueKey('history_$word'),
+                direction: DismissDirection.endToStart,
+                background: Container(
+                  alignment: Alignment.centerRight,
+                  padding: const EdgeInsets.only(right: 20),
+                  color: Theme.of(context).colorScheme.error,
+                  child: Icon(
+                    Icons.delete_outline,
+                    color: Theme.of(context).colorScheme.onError,
+                  ),
+                ),
+                onDismissed: (_) => _removeFromHistory(index),
+                child: ListTile(
+                  leading: Icon(
+                    Icons.history,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  title: Text(word),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  dense: true,
+                  onTap: () => _onSelectWord(word),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
@@ -184,10 +332,6 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
       );
-    }
-
-    if (_selectedResult != null) {
-      return SingleChildScrollView(child: _buildDetailResult());
     }
 
     if (_suggestions.isNotEmpty) {
@@ -231,148 +375,6 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
 
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.menu_book_rounded,
-            size: 80,
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '输入单词或中文开始查询',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '支持英汉双词典离线查询',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDetailResult() {
-    final result = _selectedResult!;
-    final children = <Widget>[];
-
-    if (result.enEntry != null) {
-      children.add(WordCard(entry: result.enEntry!));
-    }
-
-    if (result.cnEntry != null) {
-      children.add(_CedictCard(entry: result.cnEntry!));
-    }
-
-    return Column(children: children);
-  }
-}
-
-class _CedictCard extends StatelessWidget {
-  final CedictEntry entry;
-
-  const _CedictCard({required this.entry});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 简体中文 & 繁体
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  entry.simplified,
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: colorScheme.primary,
-                  ),
-                ),
-                if (entry.traditional != null &&
-                    entry.traditional != entry.simplified)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 12),
-                    child: Text(
-                      entry.traditional!,
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-
-            // 拼音
-            if (entry.pinyin != null && entry.pinyin!.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  entry.pinyin!,
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-
-            const SizedBox(height: 16),
-
-            // 英文释义
-            _Section(
-              title: '英文释义',
-              child: Text(
-                _normalizeNewlines(entry.definitions),
-                style: theme.textTheme.bodyLarge,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _Section extends StatelessWidget {
-  final String title;
-  final Widget child;
-
-  const _Section({required this.title, required this.child});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: theme.colorScheme.primary,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          child,
-        ],
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }
