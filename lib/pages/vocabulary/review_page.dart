@@ -1,14 +1,12 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../models/word_entry.dart';
-import '../../services/dictionary_service.dart';
 import '../../services/learning_service.dart';
-
-/// 将数据库中的字面 \n 替换为真正的换行符
-String _normalizeNewlines(String? text) {
-  if (text == null) return '';
-  return text.replaceAll('\\n', '\n');
-}
+import 'shared/bottom_bar_widget.dart';
+import 'shared/data_loader.dart';
+import 'shared/quiz_widget.dart';
+import 'shared/recall_widgets.dart';
+import 'shared/word_utils.dart';
 
 /// 学习类型：新词学习（第二遍）或复习
 enum ReviewType { learning, review }
@@ -85,7 +83,6 @@ class _ReviewPageState extends State<ReviewPage>
     );
     _animController.forward();
 
-    // 预加载所有词的释义
     _loadAllEntries();
   }
 
@@ -97,39 +94,10 @@ class _ReviewPageState extends State<ReviewPage>
 
   Future<void> _loadAllEntries() async {
     // 并行加载所有词的释义
-    final futures = _words.asMap().entries.map((e) async {
-      final entry = await DictionaryService.searchEnExact(e.value);
-      return MapEntry(e.key, entry);
-    });
+    _entryCache.addAll(await loadEntries(words: _words));
 
-    final results = await Future.wait(futures);
-    for (final r in results) {
-      _entryCache[r.key] = r.value;
-    }
-
-    // 加载全局干扰项池（从已学单词中随机取10个）
-    try {
-      final distractors = await LearningService.getRandomDistractors(
-        excludeWords: _words,
-        count: 10,
-      );
-      // 异步加载干扰项的释义
-      final distractorFutures = distractors.keys.map((w) async {
-        final entry = await DictionaryService.searchEnExact(w);
-        if (entry?.translation != null && entry!.translation!.isNotEmpty) {
-          return MapEntry(w, entry.translation!);
-        }
-        return MapEntry(w, '');
-      });
-      final distractorResults = await Future.wait(distractorFutures);
-      for (final r in distractorResults) {
-        if (r.value.isNotEmpty) {
-          _distractorPool[r.key] = r.value;
-        }
-      }
-    } catch (_) {
-      // 加载失败不影响正常复习
-    }
+    // 加载全局干扰项池
+    _distractorPool.addAll(await loadDistractorPool(excludeWords: _words));
 
     if (mounted) {
       setState(() {});
@@ -143,7 +111,6 @@ class _ReviewPageState extends State<ReviewPage>
 
   void _onBrowseNext() {
     if (_isLastWordInBatch) {
-      // 本批浏览完成，进入选择题阶段
       setState(() {
         _currentPhase = 1;
         _currentIndexInBatch = 0;
@@ -162,29 +129,26 @@ class _ReviewPageState extends State<ReviewPage>
 
   void _generateQuizOptions() {
     final entry = _entryCache[_globalIndex];
-    final correctMeaning = _extractFirstMeaning(entry?.translation);
+    final correctMeaning = extractFirstMeaning(entry?.translation);
 
-    // 收集所有其他词的第一条释义作为干扰项池
     final allOtherMeanings = <String>[];
     for (int i = 0; i < _words.length; i++) {
       if (i == _globalIndex) continue;
       final e = _entryCache[i];
-      final m = _extractFirstMeaning(e?.translation);
+      final m = extractFirstMeaning(e?.translation);
       if (m.isNotEmpty && m != correctMeaning) {
         allOtherMeanings.add(m);
       }
     }
 
-    // 洗牌后取3个干扰项
     allOtherMeanings.shuffle(Random());
     final distractors = allOtherMeanings.take(3).toList();
 
-    // 如果干扰项不足3个，从全局干扰项池补充
     if (distractors.length < 3) {
       final poolEntries = _distractorPool.values.toList()..shuffle(Random());
       for (final m in poolEntries) {
         if (distractors.length >= 3) break;
-        final extracted = _extractFirstMeaning(m);
+        final extracted = extractFirstMeaning(m);
         if (extracted.isNotEmpty &&
             extracted != correctMeaning &&
             !distractors.contains(extracted)) {
@@ -193,12 +157,10 @@ class _ReviewPageState extends State<ReviewPage>
       }
     }
 
-    // 如果仍不足3个，用占位填充
     while (distractors.length < 3) {
       distractors.add('（无干扰项）');
     }
 
-    // 构建4个选项 + 标记正确项
     final options = [correctMeaning, ...distractors];
     options.shuffle(Random());
 
@@ -211,22 +173,6 @@ class _ReviewPageState extends State<ReviewPage>
     _animController.forward(from: 0);
   }
 
-  String _extractFirstMeaning(String? translation) {
-    if (translation == null || translation.isEmpty) return '（无释义）';
-    final parts = translation
-        .replaceAll('\\n', '\n')
-        .split(RegExp(r'[\n；;，,]'));
-    for (final p in parts) {
-      final trimmed = p.trim();
-      if (trimmed.isEmpty) continue;
-      final cleaned = trimmed
-          .replaceFirst(RegExp(r'^[a-z]+\.\s*', caseSensitive: false), '')
-          .trim();
-      if (cleaned.isNotEmpty) return cleaned;
-    }
-    return translation;
-  }
-
   void _onQuizSelect(int optionIndex) {
     if (_quizAnswered) return;
     setState(() {
@@ -237,7 +183,6 @@ class _ReviewPageState extends State<ReviewPage>
 
   void _onQuizConfirm() {
     if (_isLastWordInBatch) {
-      // 本批选择题完成，进入回忆阶段
       setState(() {
         _currentPhase = 2;
         _currentIndexInBatch = 0;
@@ -280,9 +225,7 @@ class _ReviewPageState extends State<ReviewPage>
     _results[word] = result;
 
     if (_isLastWordInBatch) {
-      // 检查是否还有下一批
       if (_currentBatchStart + _batchSize >= _words.length) {
-        // 全部完成，保存结果
         _finishAndSave();
       } else {
         setState(() {
@@ -366,7 +309,6 @@ class _ReviewPageState extends State<ReviewPage>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    // 不显示阶段标题，只显示进度
     return PopScope(
       canPop: true,
       child: Scaffold(
@@ -396,7 +338,17 @@ class _ReviewPageState extends State<ReviewPage>
                     child: _buildCurrentPhase(theme, colorScheme),
                   ),
                 ),
-                _buildBottomBar(theme, colorScheme),
+                WordLearningBottomBar(
+                  currentPhase: _currentPhase,
+                  globalIndex: _globalIndex,
+                  totalWords: _words.length,
+                  quizAnswered: _quizAnswered,
+                  showingAnswer: _showingAnswer,
+                  onLearnNext: _onBrowseNext,
+                  onQuizConfirm: _onQuizConfirm,
+                  onRecallFirstChoice: _onRecallFirstChoice,
+                  onRecallSecondChoice: _onRecallSecondChoice,
+                ),
               ],
             ),
           ),
@@ -410,7 +362,15 @@ class _ReviewPageState extends State<ReviewPage>
       case 0:
         return _buildBrowsePhase(theme, colorScheme);
       case 1:
-        return _buildQuizPhase(theme, colorScheme);
+        return QuizPhaseView(
+          word: _currentWord,
+          options: _quizOptions,
+          correctOptionIndex: _correctOptionIndex,
+          selectedOption: _selectedQuizOption,
+          isAnswered: _quizAnswered,
+          hintText: '选择正确的释义：',
+          onSelect: _onQuizSelect,
+        );
       case 2:
         return _buildRecallPhase(theme, colorScheme);
       default:
@@ -423,8 +383,10 @@ class _ReviewPageState extends State<ReviewPage>
   Widget _buildBrowsePhase(ThemeData theme, ColorScheme colorScheme) {
     final word = _currentWord;
     final entry = _entryCache[_globalIndex];
-    final hasDefinition =
-        entry?.translation != null && entry!.translation!.isNotEmpty;
+    final phonetic = entry?.phonetic;
+    final translation = entry?.translation;
+    final definition = entry?.definition;
+    final hasDefinition = translation != null && translation.isNotEmpty;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
@@ -444,9 +406,9 @@ class _ReviewPageState extends State<ReviewPage>
         const SizedBox(height: 12),
 
         // 音标
-        if (entry?.phonetic != null && entry!.phonetic!.isNotEmpty)
+        if (phonetic != null && phonetic.isNotEmpty)
           Text(
-            '/${entry.phonetic}/',
+            '/$phonetic/',
             style: theme.textTheme.titleLarge?.copyWith(
               color: colorScheme.onSurfaceVariant,
               fontStyle: FontStyle.italic,
@@ -465,7 +427,7 @@ class _ReviewPageState extends State<ReviewPage>
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              _normalizeNewlines(entry.translation),
+              normalizeNewlines(translation),
               style: theme.textTheme.bodyLarge,
               textAlign: TextAlign.center,
             ),
@@ -474,7 +436,7 @@ class _ReviewPageState extends State<ReviewPage>
         const SizedBox(height: 16),
 
         // 英文释义
-        if (entry?.definition != null && entry!.definition!.isNotEmpty)
+        if (definition != null && definition.isNotEmpty)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
@@ -483,7 +445,7 @@ class _ReviewPageState extends State<ReviewPage>
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
-              _normalizeNewlines(entry.definition),
+              normalizeNewlines(definition),
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -496,350 +458,23 @@ class _ReviewPageState extends State<ReviewPage>
     );
   }
 
-  // ─── 选择题阶段 UI（仅内容区域）────────────────
-
-  Widget _buildQuizPhase(ThemeData theme, ColorScheme colorScheme) {
-    final word = _currentWord;
-    final colors = [
-      colorScheme.primary,
-      Colors.orange,
-      Colors.teal,
-      Colors.deepPurple,
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const Spacer(flex: 1),
-
-        // 单词
-        Text(
-          word,
-          style: theme.textTheme.displayMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: colorScheme.primary,
-          ),
-          textAlign: TextAlign.center,
-        ),
-
-        const SizedBox(height: 16),
-
-        // 简短提示
-        Text(
-          '选择正确的释义：',
-          style: theme.textTheme.bodyLarge?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-
-        const SizedBox(height: 24),
-
-        // 4个选项
-        ...List.generate(_quizOptions.length, (i) {
-          final isSelected = _selectedQuizOption == i;
-          final isCorrectOption = i == _correctOptionIndex;
-          Color? bgColor;
-          Color? borderColor;
-          Color textColor = colorScheme.onSurface;
-
-          if (_quizAnswered) {
-            if (isCorrectOption) {
-              bgColor = Colors.green.withValues(alpha: 0.15);
-              borderColor = Colors.green;
-              textColor = Colors.green.shade700;
-            } else if (isSelected && !isCorrectOption) {
-              bgColor = Colors.red.withValues(alpha: 0.1);
-              borderColor = Colors.red;
-              textColor = Colors.red.shade700;
-            }
-          } else if (isSelected) {
-            bgColor = colorScheme.primaryContainer;
-            borderColor = colorScheme.primary;
-          }
-
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: _quizAnswered ? null : () => _onQuizSelect(i),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: bgColor,
-                  side: BorderSide(
-                    color: borderColor ?? colorScheme.outline,
-                    width: isSelected ? 2 : 1,
-                  ),
-                  foregroundColor: textColor,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 32,
-                      height: 32,
-                      decoration: BoxDecoration(
-                        color: colors[i % colors.length].withValues(
-                          alpha: _quizAnswered ? 0.15 : 0.2,
-                        ),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        ['A', 'B', 'C', 'D'][i],
-                        style: TextStyle(
-                          color: colors[i % colors.length],
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _quizOptions[i],
-                        style: const TextStyle(fontSize: 16),
-                      ),
-                    ),
-                    if (_quizAnswered && isCorrectOption)
-                      const Icon(Icons.check_circle, color: Colors.green),
-                    if (_quizAnswered && isSelected && !isCorrectOption)
-                      const Icon(Icons.cancel, color: Colors.red),
-                  ],
-                ),
-              ),
-            ),
-          );
-        }),
-
-        const Spacer(flex: 2),
-      ],
-    );
-  }
-
   // ─── 回忆阶段 UI ─────────────────────────────
 
   Widget _buildRecallPhase(ThemeData theme, ColorScheme colorScheme) {
     final word = _currentWord;
     final entry = _entryCache[_globalIndex];
-    final hasDefinition =
-        entry?.translation != null && entry!.translation!.isNotEmpty;
 
     if (!_showingAnswer) {
-      return _buildRecallPhase1(word, theme, colorScheme);
+      return RecallPhase1View(word: word, hintText: '回想这个词的含义：');
     } else {
-      return _buildRecallPhase2(word, entry, hasDefinition, theme, colorScheme);
+      final hasDefinition =
+          entry?.translation != null && entry!.translation!.isNotEmpty;
+      return RecallPhase2View(
+        word: word,
+        entry: entry,
+        hasDefinition: hasDefinition,
+        confirmText: '核对你的记忆：',
+      );
     }
-  }
-
-  Widget _buildRecallPhase1(
-    String word,
-    ThemeData theme,
-    ColorScheme colorScheme,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const Spacer(flex: 2),
-
-        // 提示文字（中性化）
-        Text(
-          '回想这个词的含义：',
-          style: theme.textTheme.bodyLarge?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-        const SizedBox(height: 32),
-
-        Text(
-          word,
-          style: theme.textTheme.displayLarge?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: colorScheme.primary,
-          ),
-          textAlign: TextAlign.center,
-        ),
-
-        const Spacer(flex: 3),
-      ],
-    );
-  }
-
-  Widget _buildRecallPhase2(
-    String word,
-    WordEntry? entry,
-    bool hasDefinition,
-    ThemeData theme,
-    ColorScheme colorScheme,
-  ) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const Spacer(flex: 1),
-
-        // 单词
-        Text(
-          word,
-          style: theme.textTheme.displayMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-            color: colorScheme.primary,
-          ),
-          textAlign: TextAlign.center,
-        ),
-
-        const SizedBox(height: 12),
-
-        // 音标
-        if (entry?.phonetic != null && entry!.phonetic!.isNotEmpty)
-          Text(
-            '/${entry.phonetic}/',
-            style: theme.textTheme.titleLarge?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-              fontStyle: FontStyle.italic,
-            ),
-          ),
-
-        const SizedBox(height: 20),
-
-        // 中文释义
-        if (hasDefinition)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              _normalizeNewlines(entry!.translation),
-              style: theme.textTheme.bodyLarge,
-              textAlign: TextAlign.center,
-            ),
-          ),
-
-        const SizedBox(height: 24),
-
-        // 中性确认提示
-        Text(
-          '核对你的记忆：',
-          style: theme.textTheme.titleSmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-
-        const Spacer(flex: 2),
-      ],
-    );
-  }
-
-  // ─── 底部按钮栏 ──────────────────────────────
-
-  Widget _buildBottomBar(ThemeData theme, ColorScheme colorScheme) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // 进度条
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: LinearProgressIndicator(
-            value: (_globalIndex + 1) / _words.length,
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // 根据阶段显示不同按钮
-        if (_currentPhase == 0)
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _onBrowseNext,
-              icon: const Icon(Icons.arrow_forward),
-              label: const Text('下一步'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
-          )
-        else if (_currentPhase == 1)
-          // 选择题：仅在选择后显示"继续"按钮
-          _quizAnswered
-              ? SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _onQuizConfirm,
-                    icon: const Icon(Icons.arrow_forward),
-                    label: const Text('继续'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                  ),
-                )
-              : const SizedBox.shrink()
-        else if (_currentPhase == 2 && !_showingAnswer)
-          // 回忆阶段1：我记得 / 忘记了
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _onRecallFirstChoice(false),
-                  icon: const Icon(Icons.sentiment_dissatisfied, size: 28),
-                  label: const Text('忘记了', style: TextStyle(fontSize: 16)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 20),
-                    foregroundColor: colorScheme.error,
-                    side: BorderSide(color: colorScheme.error),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: () => _onRecallFirstChoice(true),
-                  icon: const Icon(Icons.sentiment_satisfied, size: 28),
-                  label: const Text('我记得', style: TextStyle(fontSize: 16)),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 20),
-                  ),
-                ),
-              ),
-            ],
-          )
-        else if (_currentPhase == 2 && _showingAnswer)
-          // 回忆阶段2：记错了 / 继续
-          Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () => _onRecallSecondChoice(false),
-                  icon: const Icon(Icons.error_outline, size: 24),
-                  label: const Text('记错了', style: TextStyle(fontSize: 16)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    foregroundColor: Colors.orange,
-                    side: const BorderSide(color: Colors.orange),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () => _onRecallSecondChoice(true),
-                  icon: const Icon(Icons.check_circle_outline, size: 24),
-                  label: const Text('继续', style: TextStyle(fontSize: 16)),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    backgroundColor: colorScheme.primary,
-                  ),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
   }
 }
