@@ -17,6 +17,7 @@ dependencies:
     sqflite_common_ffi: ^2.3.4+4
     shared_preferences: ^2.3.5
     archive: ^4.0.2
+    package_info_plus: ^10.2.1
 
 dev_dependencies:
     flutter_test:

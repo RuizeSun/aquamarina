@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -168,49 +169,31 @@ class _SettingsPageState extends State<SettingsPage> {
 
           const Divider(),
 
-          // 开源许可证
-          _SectionHeader(title: '信息'),
-          ListTile(
-            leading: Icon(
-              Icons.description_outlined,
-              color: colorScheme.primary,
-            ),
-            title: const Text('开源许可证'),
-            subtitle: const Text('ecdict · CC-CEDICT'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _showLicenses(context),
-          ),
-
-          const Divider(),
-
-          _SectionHeader(title: '关于'),
           ListTile(
             leading: Icon(Icons.info_outline, color: colorScheme.primary),
-            title: const Text('Aquamarina'),
-            subtitle: const Text('v1.0.0'),
-          ),
-          ListTile(
-            leading: Icon(Icons.code, color: colorScheme.primary),
-            title: const Text('Flutter'),
-            subtitle: Text(
-              Theme.of(context).platform == TargetPlatform.android
-                  ? 'Android'
-                  : Theme.of(context).platform == TargetPlatform.iOS
-                  ? 'iOS'
-                  : 'Windows',
-            ),
+            title: const Text('关于 Aquamarina'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showAbout(context),
           ),
         ],
       ),
     );
   }
 
-  void _showLicenses(BuildContext context) {
-    showLicensePage(
+  void _showAbout(BuildContext context) async {
+    final platform = Theme.of(context).platform == TargetPlatform.android
+        ? 'Android'
+        : Theme.of(context).platform == TargetPlatform.iOS
+        ? 'iOS'
+        : 'Windows';
+    final info = await PackageInfo.fromPlatform();
+    final version = 'v${info.version}';
+    if (!context.mounted) return;
+    showAboutDialog(
       context: context,
-      applicationName: 'Aquamarina',
-      applicationVersion: 'v1.0.0',
-      applicationLegalese: 'Copyright © 2026 Aquamarina',
+      applicationName: info.appName,
+      applicationVersion: version,
+      applicationLegalese: '当前平台: $platform',
     );
   }
 }
