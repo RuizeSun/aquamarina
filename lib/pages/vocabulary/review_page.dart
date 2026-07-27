@@ -347,9 +347,16 @@ class _ReviewPageState extends State<ReviewPage>
         body: SafeArea(
           child: Padding(
             padding: const EdgeInsets.all(24),
-            child: FadeTransition(
-              opacity: _fadeAnimation,
-              child: _buildCurrentPhase(theme, colorScheme),
+            child: Column(
+              children: [
+                Expanded(
+                  child: FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: _buildCurrentPhase(theme, colorScheme),
+                  ),
+                ),
+                _buildBottomBar(theme, colorScheme),
+              ],
             ),
           ),
         ),
@@ -370,7 +377,7 @@ class _ReviewPageState extends State<ReviewPage>
     }
   }
 
-  // ─── 浏览阶段 UI ─────────────────────────────
+  // ─── 浏览阶段 UI（仅内容区域）──────────────────
 
   Widget _buildBrowsePhase(ThemeData theme, ColorScheme colorScheme) {
     final word = _currentWord;
@@ -444,38 +451,11 @@ class _ReviewPageState extends State<ReviewPage>
           ),
 
         const Spacer(flex: 3),
-
-        // 下一步按钮
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: _onBrowseNext,
-            icon: const Icon(Icons.arrow_forward),
-            label: const Text('下一步'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // 进度条
-        LinearProgressIndicator(value: (_globalIndex + 1) / _words.length),
-        const SizedBox(height: 4),
-        Text(
-          '${_globalIndex + 1}/${_words.length}',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-
-        const Spacer(flex: 1),
       ],
     );
   }
 
-  // ─── 选择题阶段 UI ───────────────────────────
+  // ─── 选择题阶段 UI（仅内容区域）────────────────
 
   Widget _buildQuizPhase(ThemeData theme, ColorScheme colorScheme) {
     final word = _currentWord;
@@ -594,27 +574,6 @@ class _ReviewPageState extends State<ReviewPage>
         }),
 
         const Spacer(flex: 2),
-
-        // 确认按钮（仅在选择后显示）
-        if (_quizAnswered)
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: _onQuizConfirm,
-              icon: const Icon(Icons.arrow_forward),
-              label: const Text('继续'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
-          ),
-
-        const SizedBox(height: 16),
-
-        // 进度条
-        LinearProgressIndicator(value: (_globalIndex + 1) / _words.length),
-
-        const Spacer(flex: 1),
       ],
     );
   }
@@ -663,40 +622,6 @@ class _ReviewPageState extends State<ReviewPage>
         ),
 
         const Spacer(flex: 3),
-
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => _onRecallFirstChoice(false),
-                icon: const Icon(Icons.sentiment_dissatisfied, size: 28),
-                label: const Text('忘记了', style: TextStyle(fontSize: 16)),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                  foregroundColor: colorScheme.error,
-                  side: BorderSide(color: colorScheme.error),
-                ),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => _onRecallFirstChoice(true),
-                icon: const Icon(Icons.sentiment_satisfied, size: 28),
-                label: const Text('我记得', style: TextStyle(fontSize: 16)),
-                style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                ),
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 16),
-
-        LinearProgressIndicator(value: (_globalIndex + 1) / _words.length),
-
-        const Spacer(flex: 1),
       ],
     );
   }
@@ -708,94 +633,172 @@ class _ReviewPageState extends State<ReviewPage>
     ThemeData theme,
     ColorScheme colorScheme,
   ) {
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const SizedBox(height: 16),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const Spacer(flex: 1),
 
-          // 单词
-          Text(
-            word,
-            style: theme.textTheme.displayMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: colorScheme.primary,
-            ),
-            textAlign: TextAlign.center,
+        // 单词
+        Text(
+          word,
+          style: theme.textTheme.displayMedium?.copyWith(
+            fontWeight: FontWeight.bold,
+            color: colorScheme.primary,
           ),
+          textAlign: TextAlign.center,
+        ),
 
-          const SizedBox(height: 12),
+        const SizedBox(height: 12),
 
-          // 音标
-          if (entry?.phonetic != null && entry!.phonetic!.isNotEmpty)
-            Text(
-              '/${entry.phonetic}/',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-
-          const SizedBox(height: 20),
-
-          // 中文释义
-          if (hasDefinition)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                _normalizeNewlines(entry!.translation),
-                style: theme.textTheme.bodyLarge,
-                textAlign: TextAlign.center,
-              ),
-            ),
-
-          const SizedBox(height: 24),
-
-          // 中性确认提示
+        // 音标
+        if (entry?.phonetic != null && entry!.phonetic!.isNotEmpty)
           Text(
-            '核对你的记忆：',
-            style: theme.textTheme.titleSmall?.copyWith(
+            '/${entry.phonetic}/',
+            style: theme.textTheme.titleLarge?.copyWith(
               color: colorScheme.onSurfaceVariant,
+              fontStyle: FontStyle.italic,
             ),
           ),
-          const SizedBox(height: 12),
 
-          SizedBox(
+        const SizedBox(height: 20),
+
+        // 中文释义
+        if (hasDefinition)
+          Container(
             width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: () => _onRecallSecondChoice(false),
-              icon: const Icon(Icons.error_outline, size: 24),
-              label: const Text('记错了', style: TextStyle(fontSize: 16)),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                foregroundColor: Colors.orange,
-                side: const BorderSide(color: Colors.orange),
-              ),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _normalizeNewlines(entry!.translation),
+              style: theme.textTheme.bodyLarge,
+              textAlign: TextAlign.center,
             ),
           ),
-          const SizedBox(height: 12),
 
+        const SizedBox(height: 24),
+
+        // 中性确认提示
+        Text(
+          '核对你的记忆：',
+          style: theme.textTheme.titleSmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+
+        const Spacer(flex: 2),
+      ],
+    );
+  }
+
+  // ─── 底部按钮栏 ──────────────────────────────
+
+  Widget _buildBottomBar(ThemeData theme, ColorScheme colorScheme) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 进度条
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: LinearProgressIndicator(
+            value: (_globalIndex + 1) / _words.length,
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // 根据阶段显示不同按钮
+        if (_currentPhase == 0)
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: () => _onRecallSecondChoice(true),
-              icon: const Icon(Icons.check_circle_outline, size: 24),
-              label: const Text('继续', style: TextStyle(fontSize: 16)),
+              onPressed: _onBrowseNext,
+              icon: const Icon(Icons.arrow_forward),
+              label: const Text('下一步'),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
-                backgroundColor: colorScheme.primary,
               ),
             ),
+          )
+        else if (_currentPhase == 1)
+          // 选择题：仅在选择后显示"继续"按钮
+          _quizAnswered
+              ? SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _onQuizConfirm,
+                    icon: const Icon(Icons.arrow_forward),
+                    label: const Text('继续'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink()
+        else if (_currentPhase == 2 && !_showingAnswer)
+          // 回忆阶段1：我记得 / 忘记了
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _onRecallFirstChoice(false),
+                  icon: const Icon(Icons.sentiment_dissatisfied, size: 28),
+                  label: const Text('忘记了', style: TextStyle(fontSize: 16)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    foregroundColor: colorScheme.error,
+                    side: BorderSide(color: colorScheme.error),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: () => _onRecallFirstChoice(true),
+                  icon: const Icon(Icons.sentiment_satisfied, size: 28),
+                  label: const Text('我记得', style: TextStyle(fontSize: 16)),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                  ),
+                ),
+              ),
+            ],
+          )
+        else if (_currentPhase == 2 && _showingAnswer)
+          // 回忆阶段2：记错了 / 继续
+          Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _onRecallSecondChoice(false),
+                  icon: const Icon(Icons.error_outline, size: 24),
+                  label: const Text('记错了', style: TextStyle(fontSize: 16)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    foregroundColor: Colors.orange,
+                    side: const BorderSide(color: Colors.orange),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => _onRecallSecondChoice(true),
+                  icon: const Icon(Icons.check_circle_outline, size: 24),
+                  label: const Text('继续', style: TextStyle(fontSize: 16)),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    backgroundColor: colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
           ),
-
-          const SizedBox(height: 32),
-        ],
-      ),
+      ],
     );
   }
 }
