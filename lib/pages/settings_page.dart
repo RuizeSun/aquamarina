@@ -9,8 +9,8 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  int _reviewLimit = 5;
-  int _learningLimit = 5;
+  int _reviewLimit = 10;
+  int _learningLimit = 10;
 
   static const String _reviewLimitKey = 'review_limit';
   static const String _learningLimitKey = 'learning_limit';
@@ -24,8 +24,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 5;
-      _learningLimit = prefs.getInt(_learningLimitKey) ?? 5;
+      _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
+      _learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
     });
   }
 
