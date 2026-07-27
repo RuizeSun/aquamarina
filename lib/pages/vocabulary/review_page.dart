@@ -213,14 +213,19 @@ class _ReviewPageState extends State<ReviewPage>
 
   void _onRecallSecondChoice(bool correct) {
     final word = _currentWord.trim().toLowerCase();
+    final quizCorrect = _selectedQuizOption == _correctOptionIndex;
 
     String result;
     if (_firstChoice == false) {
-      result = 'forgot';
-    } else if (_firstChoice == true && correct == false) {
+      // 一开始就没想起来
+      // 选择题选对 → 可能是蒙对的，hard；选错 → 彻底忘记，forgot
+      result = quizCorrect ? 'hard' : 'forgot';
+    } else if (!correct) {
+      // 自以为记得但实际错了 → 掌握不牢
       result = 'hard';
     } else {
-      result = 'easy';
+      // 确实想对了，再参考选择题确认是否真正掌握
+      result = quizCorrect ? 'easy' : 'hard';
     }
     _results[word] = result;
 
