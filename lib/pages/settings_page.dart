@@ -24,8 +24,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 20;
-      _learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
+      _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 5;
+      _learningLimit = prefs.getInt(_learningLimitKey) ?? 5;
     });
   }
 
