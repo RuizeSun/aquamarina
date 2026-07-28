@@ -50,6 +50,10 @@ class _LearningPageState extends State<LearningPage> {
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
 
+  int get _totalSteps => _words.length * 3;
+
+  int get _currentStep => _currentPhase * _words.length + _globalIndex + 1;
+
   String get _currentWord {
     if (_globalIndex >= _words.length) return '';
     return _words[_globalIndex];
@@ -273,41 +277,54 @@ class _LearningPageState extends State<LearningPage> {
 
     return PopScope(
       canPop: true,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('学习 ${_globalIndex + 1}/${_words.length}'),
-          actions: [
-            if (_currentPhase == 2)
-              IconButton(
-                icon: const Icon(Icons.check_circle_outline),
-                tooltip: '标记为已掌握',
-                onPressed: _showingAnswer ? null : _markAsMastered,
+      child: Column(
+        children: [
+          LinearProgressIndicator(
+            value:
+                (_currentPhase * _words.length + _globalIndex + 1) /
+                (_words.length * 3),
+          ),
+          Expanded(
+            child: Scaffold(
+              appBar: AppBar(
+                title: Text('${_globalIndex + 1}/${_words.length}'),
+                actions: [
+                  if (_currentPhase == 2)
+                    IconButton(
+                      icon: const Icon(Icons.check_circle_outline),
+                      tooltip: '标记为已掌握',
+                      onPressed: _showingAnswer ? null : _markAsMastered,
+                    ),
+                ],
               ),
-          ],
-        ),
-        body: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    children: [
-                      Expanded(child: _buildCurrentPhase(theme, colorScheme)),
-                      WordLearningBottomBar(
-                        currentPhase: _currentPhase,
-                        globalIndex: _globalIndex,
-                        totalWords: _words.length,
-                        quizAnswered: _quizAnswered,
-                        showingAnswer: _showingAnswer,
-                        onLearnNext: _onLearnNext,
-                        onQuizConfirm: _onQuizConfirm,
-                        onRecallFirstChoice: _onRecallFirstChoice,
-                        onRecallSecondChoice: _onRecallSecondChoice,
+              body: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : SafeArea(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: _buildCurrentPhase(theme, colorScheme),
+                            ),
+                            WordLearningBottomBar(
+                              currentPhase: _currentPhase,
+                              globalIndex: _globalIndex,
+                              totalWords: _words.length,
+                              quizAnswered: _quizAnswered,
+                              showingAnswer: _showingAnswer,
+                              onLearnNext: _onLearnNext,
+                              onQuizConfirm: _onQuizConfirm,
+                              onRecallFirstChoice: _onRecallFirstChoice,
+                              onRecallSecondChoice: _onRecallSecondChoice,
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
-                ),
-              ),
+                    ),
+            ),
+          ),
+        ],
       ),
     );
   }

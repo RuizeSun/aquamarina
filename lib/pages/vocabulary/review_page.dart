@@ -61,6 +61,10 @@ class _ReviewPageState extends State<ReviewPage>
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
 
+  int get _totalSteps => _words.length * 3;
+
+  int get _currentStep => _currentPhase * _words.length + _globalIndex + 1;
+
   String get _currentWord {
     if (_globalIndex >= _words.length) return '';
     return _words[_globalIndex];
@@ -316,48 +320,59 @@ class _ReviewPageState extends State<ReviewPage>
 
     return PopScope(
       canPop: true,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text('${_globalIndex + 1}/${_words.length}'),
-          leading: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => Navigator.of(context).pop(),
+      child: Column(
+        children: [
+          LinearProgressIndicator(
+            value:
+                (_currentPhase * _words.length + _globalIndex + 1) /
+                (_words.length * 3),
           ),
-          actions: [
-            if (_currentPhase == 2)
-              IconButton(
-                icon: const Icon(Icons.check_circle_outline),
-                tooltip: '标记为已掌握',
-                onPressed: _showingAnswer ? null : _markAsMastered,
+          Expanded(
+            child: Scaffold(
+              appBar: AppBar(
+                title: Text('${_globalIndex + 1}/${_words.length}'),
+                leading: IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+                actions: [
+                  if (_currentPhase == 2)
+                    IconButton(
+                      icon: const Icon(Icons.check_circle_outline),
+                      tooltip: '标记为已掌握',
+                      onPressed: _showingAnswer ? null : _markAsMastered,
+                    ),
+                ],
               ),
-          ],
-        ),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                Expanded(
-                  child: FadeTransition(
-                    opacity: _fadeAnimation,
-                    child: _buildCurrentPhase(theme, colorScheme),
+              body: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: FadeTransition(
+                          opacity: _fadeAnimation,
+                          child: _buildCurrentPhase(theme, colorScheme),
+                        ),
+                      ),
+                      WordLearningBottomBar(
+                        currentPhase: _currentPhase,
+                        globalIndex: _globalIndex,
+                        totalWords: _words.length,
+                        quizAnswered: _quizAnswered,
+                        showingAnswer: _showingAnswer,
+                        onLearnNext: _onBrowseNext,
+                        onQuizConfirm: _onQuizConfirm,
+                        onRecallFirstChoice: _onRecallFirstChoice,
+                        onRecallSecondChoice: _onRecallSecondChoice,
+                      ),
+                    ],
                   ),
                 ),
-                WordLearningBottomBar(
-                  currentPhase: _currentPhase,
-                  globalIndex: _globalIndex,
-                  totalWords: _words.length,
-                  quizAnswered: _quizAnswered,
-                  showingAnswer: _showingAnswer,
-                  onLearnNext: _onBrowseNext,
-                  onQuizConfirm: _onQuizConfirm,
-                  onRecallFirstChoice: _onRecallFirstChoice,
-                  onRecallSecondChoice: _onRecallSecondChoice,
-                ),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }

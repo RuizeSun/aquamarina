@@ -39,16 +39,6 @@ class WordLearningBottomBar extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: LinearProgressIndicator(value: (globalIndex + 1) / totalWords),
-        ),
-        Text(
-          '已完成 ${globalIndex + 1}/$totalWords',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
         const SizedBox(height: 16),
 
         if (currentPhase == 0)
