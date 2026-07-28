@@ -38,6 +38,12 @@ class AiService {
       if (profile.reasoningEffort != null) {
         body['reasoning_effort'] = profile.reasoningEffort;
       }
+    } else if (profile.isDeepSeek && !profile.enableThinking) {
+      // 显式关闭思考模式，避免服务端默认启用
+      body['thinking'] = {'type': 'disabled'};
+      if (profile.temperature != null) {
+        body['temperature'] = profile.temperature;
+      }
     } else if (profile.temperature != null) {
       body['temperature'] = profile.temperature;
     }
@@ -49,6 +55,7 @@ class AiService {
   Future<String> chat({
     required List<Map<String, String>> messages,
     AiProfile? profile,
+    CancelToken? cancelToken,
   }) async {
     final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
@@ -62,6 +69,7 @@ class AiService {
         url,
         options: Options(headers: headers),
         data: _buildBody(profile: cfg, messages: messages, stream: false),
+        cancelToken: cancelToken,
       );
 
       if (response.statusCode == 200) {
