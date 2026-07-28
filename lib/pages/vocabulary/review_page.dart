@@ -322,10 +322,17 @@ class _ReviewPageState extends State<ReviewPage>
       canPop: true,
       child: Column(
         children: [
-          LinearProgressIndicator(
-            value:
-                (_currentPhase * _words.length + _globalIndex + 1) /
-                (_words.length * 3),
+          TweenAnimationBuilder<double>(
+            tween: Tween(
+              begin: 0,
+              end:
+                  (_currentPhase * _words.length + _globalIndex + 1) /
+                  (_words.length * 3),
+            ),
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            builder: (context, value, _) =>
+                LinearProgressIndicator(value: value),
           ),
           Expanded(
             child: Scaffold(

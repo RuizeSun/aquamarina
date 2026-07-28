@@ -18,7 +18,8 @@ class LearningPage extends StatefulWidget {
   State<LearningPage> createState() => _LearningPageState();
 }
 
-class _LearningPageState extends State<LearningPage> {
+class _LearningPageState extends State<LearningPage>
+    with SingleTickerProviderStateMixin {
   static const int _batchSize = 3;
 
   // Phase: 0=学习, 1=选择题, 2=回忆
@@ -46,6 +47,9 @@ class _LearningPageState extends State<LearningPage> {
   // 学习结果收集（word → easy/hard/forgot/mastered）
   final Map<String, String> _results = {};
 
+  late AnimationController _animController;
+  late Animation<double> _fadeAnimation;
+
   List<String> get _words => widget.words;
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
@@ -66,7 +70,22 @@ class _LearningPageState extends State<LearningPage> {
   @override
   void initState() {
     super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeInOut,
+    );
+    _animController.forward();
     _loadAllEntries();
+  }
+
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAllEntries() async {
@@ -94,11 +113,13 @@ class _LearningPageState extends State<LearningPage> {
         _currentPhase = 1;
         _currentIndexInBatch = 0;
       });
+      _animController.forward(from: 0);
       _generateQuizOptions();
     } else {
       setState(() {
         _currentIndexInBatch++;
       });
+      _animController.forward(from: 0);
     }
   }
 
@@ -147,6 +168,7 @@ class _LearningPageState extends State<LearningPage> {
       _selectedQuizOption = null;
       _quizAnswered = false;
     });
+    _animController.forward(from: 0);
   }
 
   void _onQuizSelect(int optionIndex) {
@@ -165,12 +187,14 @@ class _LearningPageState extends State<LearningPage> {
         _showingAnswer = false;
         _firstChoice = null;
       });
+      _animController.forward(from: 0);
     } else {
       setState(() {
         _currentIndexInBatch++;
         _showingAnswer = false;
         _firstChoice = null;
       });
+      _animController.forward(from: 0);
       _generateQuizOptions();
     }
   }
@@ -182,9 +206,11 @@ class _LearningPageState extends State<LearningPage> {
       _firstChoice = remembered;
       _showingAnswer = true;
     });
+    _animController.forward(from: 0);
   }
 
   void _onRecallSecondChoice(bool correct) {
+    _animController.forward(from: 0);
     final word = _currentWord.trim().toLowerCase();
 
     String result;
@@ -208,6 +234,7 @@ class _LearningPageState extends State<LearningPage> {
           _showingAnswer = false;
           _firstChoice = null;
         });
+        _animController.forward(from: 0);
       }
     } else {
       setState(() {
@@ -215,6 +242,7 @@ class _LearningPageState extends State<LearningPage> {
         _showingAnswer = false;
         _firstChoice = null;
       });
+      _animController.forward(from: 0);
     }
   }
 
@@ -236,6 +264,7 @@ class _LearningPageState extends State<LearningPage> {
           _showingAnswer = false;
           _firstChoice = null;
         });
+        _animController.forward(from: 0);
       }
     } else {
       setState(() {
@@ -243,6 +272,7 @@ class _LearningPageState extends State<LearningPage> {
         _showingAnswer = false;
         _firstChoice = null;
       });
+      _animController.forward(from: 0);
     }
   }
 
@@ -279,10 +309,17 @@ class _LearningPageState extends State<LearningPage> {
       canPop: true,
       child: Column(
         children: [
-          LinearProgressIndicator(
-            value:
-                (_currentPhase * _words.length + _globalIndex + 1) /
-                (_words.length * 3),
+          TweenAnimationBuilder<double>(
+            tween: Tween(
+              begin: 0,
+              end:
+                  (_currentPhase * _words.length + _globalIndex + 1) /
+                  (_words.length * 3),
+            ),
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+            builder: (context, value, _) =>
+                LinearProgressIndicator(value: value),
           ),
           Expanded(
             child: Scaffold(
@@ -305,7 +342,10 @@ class _LearningPageState extends State<LearningPage> {
                         child: Column(
                           children: [
                             Expanded(
-                              child: _buildCurrentPhase(theme, colorScheme),
+                              child: FadeTransition(
+                                opacity: _fadeAnimation,
+                                child: _buildCurrentPhase(theme, colorScheme),
+                              ),
                             ),
                             WordLearningBottomBar(
                               currentPhase: _currentPhase,
