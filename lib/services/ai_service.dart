@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:dio/dio.dart';
-import '../models/ai_config.dart';
-import 'ai_config_service.dart';
+import '../models/ai_profile.dart';
 
 /// OpenAI 兼容 API 聊天请求的封装
 class AiService {
@@ -11,38 +10,49 @@ class AiService {
   AiService({Dio? dio}) : _dio = dio ?? Dio();
 
   /// 构建请求头和 URL
-  (Map<String, String>, String) _buildRequest(AiConfig config) {
-    final baseUrl = config.baseUrl.replaceAll(RegExp(r'/+$'), '');
+  (Map<String, String>, String) _buildRequest(AiProfile profile) {
+    final baseUrl = profile.baseUrl.replaceAll(RegExp(r'/+$'), '');
     final headers = {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer ${config.apiKey}',
+      'Authorization': 'Bearer ${profile.apiKey}',
     };
     return (headers, '$baseUrl/chat/completions');
   }
 
-  /// 构建请求 body
+  /// 构建请求 body（根据 profile 类型调整参数）
   Map<String, dynamic> _buildBody({
-    required AiConfig config,
+    required AiProfile profile,
     required List<Map<String, String>> messages,
     required bool stream,
   }) {
-    return {
-      'model': config.model,
+    final body = <String, dynamic>{
+      'model': profile.model,
       'messages': messages,
-      'temperature': config.temperature,
-      'max_tokens': config.maxTokens,
+      'max_tokens': profile.maxTokens,
       'stream': stream,
     };
+
+    // DeepSeek 思考模式：不支持 temperature、top_p 等参数
+    if (profile.isDeepSeek && profile.enableThinking) {
+      body['thinking'] = {'type': 'enabled'};
+      if (profile.reasoningEffort != null) {
+        body['reasoning_effort'] = profile.reasoningEffort;
+      }
+    } else if (profile.temperature != null) {
+      body['temperature'] = profile.temperature;
+    }
+
+    return body;
   }
 
   /// 非流式聊天请求
   Future<String> chat({
     required List<Map<String, String>> messages,
-    AiConfig? config,
+    AiProfile? profile,
   }) async {
-    final cfg = config ?? _currentConfig;
+    final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
-      throw AiConfigException('请先在设置中配置 API Key');
+      throw AiServiceException('请先在设置中配置 API Key');
     }
 
     final (headers, url) = _buildRequest(cfg);
@@ -51,7 +61,7 @@ class AiService {
       final response = await _dio.post(
         url,
         options: Options(headers: headers),
-        data: _buildBody(config: cfg, messages: messages, stream: false),
+        data: _buildBody(profile: cfg, messages: messages, stream: false),
       );
 
       if (response.statusCode == 200) {
@@ -69,18 +79,19 @@ class AiService {
       if (e.response != null) {
         throw _mapError(e.response?.statusCode, e.response?.data);
       }
-      throw AiConfigException('网络请求失败：${e.message}');
+      throw AiServiceException('网络请求失败：${e.message}');
     }
   }
 
   /// 流式聊天请求，返回字符串流
+  /// 对于 DeepSeek 思考模式，会自动提取 reasoning_content 中的思维链内容
   Stream<String> chatStream({
     required List<Map<String, String>> messages,
-    AiConfig? config,
+    AiProfile? profile,
   }) {
-    final cfg = config ?? _currentConfig;
+    final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
-      throw AiConfigException('请先在设置中配置 API Key');
+      throw AiServiceException('请先在设置中配置 API Key');
     }
 
     final (headers, url) = _buildRequest(cfg);
@@ -92,7 +103,7 @@ class AiService {
         .post(
           url,
           options: Options(headers: headers, responseType: ResponseType.stream),
-          data: _buildBody(config: cfg, messages: messages, stream: true),
+          data: _buildBody(profile: cfg, messages: messages, stream: true),
         )
         .then((response) async {
           final responseStream = response.data as ResponseBody;
@@ -121,9 +132,19 @@ class AiService {
                   final choices = data['choices'] as List<dynamic>?;
                   if (choices != null && choices.isNotEmpty) {
                     final delta = choices[0]['delta'] as Map<String, dynamic>?;
-                    final content = delta?['content'] as String?;
-                    if (content != null && content.isNotEmpty) {
-                      controller.add(content);
+                    if (delta != null) {
+                      // 提取 content
+                      final content = delta['content'] as String?;
+                      if (content != null && content.isNotEmpty) {
+                        controller.add(content);
+                      }
+                      // 提取 DeepSeek reasoning_content（思维链）
+                      final reasoningContent =
+                          delta['reasoning_content'] as String?;
+                      if (reasoningContent != null &&
+                          reasoningContent.isNotEmpty) {
+                        controller.add(reasoningContent);
+                      }
                     }
                   }
                 } catch (_) {
@@ -145,7 +166,7 @@ class AiService {
                 _mapError(error.response?.statusCode, error.response?.data),
               );
             } else {
-              controller.addError(AiConfigException('请求失败：$error'));
+              controller.addError(AiServiceException('请求失败：$error'));
             }
             controller.close();
           }
@@ -154,35 +175,43 @@ class AiService {
     return controller.stream;
   }
 
-  AiConfig? _currentConfig;
+  AiProfile? _currentProfile;
 
-  /// 设置当前使用的配置（可选，不传则从 AiConfigService 读取）
-  void setCurrentConfig(AiConfig config) {
-    _currentConfig = config;
+  /// 设置当前使用的配置文件
+  void setCurrentProfile(AiProfile profile) {
+    _currentProfile = profile;
   }
 
-  AiConfigException _mapError(int? statusCode, dynamic data) {
+  AiServiceException _mapError(int? statusCode, dynamic data) {
     String? message;
     if (data is Map<String, dynamic>) {
       message = data['error']?['message'] as String?;
     }
     if (statusCode == null) {
-      return AiConfigException(message ?? '请求失败');
+      return AiServiceException(message ?? '请求失败');
     }
     switch (statusCode) {
       case 401:
       case 403:
-        return AiConfigException('API Key 无效，请检查后重试');
+        return AiServiceException('API Key 无效，请检查后重试');
       case 429:
-        return AiConfigException(
+        return AiServiceException(
           '请求过于频繁，请稍后重试${message != null ? '：$message' : ''}',
         );
       case 404:
-        return AiConfigException('接口地址不存在，请检查 Base URL');
+        return AiServiceException('接口地址不存在，请检查 Base URL');
       case >= 500:
-        return AiConfigException('服务端错误（HTTP $statusCode），请检查 Base URL');
+        return AiServiceException('服务端错误（HTTP $statusCode），请检查 Base URL');
       default:
-        return AiConfigException(message ?? '请求失败（HTTP $statusCode）');
+        return AiServiceException(message ?? '请求失败（HTTP $statusCode）');
     }
   }
+}
+
+class AiServiceException implements Exception {
+  final String message;
+  AiServiceException(this.message);
+
+  @override
+  String toString() => message;
 }

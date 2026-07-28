@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../services/ai_config_service.dart';
+import '../services/ai_profile_service.dart';
 import '../services/ai_service.dart';
 
 class AiPracticePage extends StatefulWidget {
@@ -11,7 +11,7 @@ class AiPracticePage extends StatefulWidget {
 }
 
 class _AiPracticePageState extends State<AiPracticePage> {
-  final AiConfigService _configService = AiConfigService();
+  final AiProfileService _profileService = AiProfileService();
   final AiService _aiService = AiService();
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -33,29 +33,34 @@ class _AiPracticePageState extends State<AiPracticePage> {
     _streamSub?.cancel();
     _inputController.dispose();
     _scrollController.dispose();
+    _profileService.removeListener(_onConfigChanged);
     super.dispose();
   }
 
   Future<void> _initConfig() async {
-    await _configService.load();
+    await _profileService.load();
     if (mounted) {
-      final cfg = _configService.config;
+      final profile = _profileService.defaultProfile;
       setState(() {
-        _configReady = cfg.apiKey.isNotEmpty;
+        _configReady = profile != null && profile.apiKey.isNotEmpty;
       });
-      _aiService.setCurrentConfig(cfg);
+      if (profile != null) {
+        _aiService.setCurrentProfile(profile);
+      }
       // 监听配置变化
-      _configService.addListener(_onConfigChanged);
+      _profileService.addListener(_onConfigChanged);
     }
   }
 
   void _onConfigChanged() {
     if (mounted) {
-      final cfg = _configService.config;
+      final profile = _profileService.defaultProfile;
       setState(() {
-        _configReady = cfg.apiKey.isNotEmpty;
+        _configReady = profile != null && profile.apiKey.isNotEmpty;
       });
-      _aiService.setCurrentConfig(cfg);
+      if (profile != null) {
+        _aiService.setCurrentProfile(profile);
+      }
     }
   }
 
@@ -225,7 +230,7 @@ class _AiPracticePageState extends State<AiPracticePage> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
           child: Text(
-            '模型：${_configService.config.model}',
+            '模型：${_profileService.defaultProfile?.model ?? "未配置"}',
             style: theme.textTheme.labelSmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
