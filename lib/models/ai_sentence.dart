@@ -91,3 +91,75 @@ class PracticeRecord {
     required this.mode,
   });
 }
+
+/// 错题本记录
+class WrongSentenceRecord {
+  final String id;
+  final String sentenceId;
+  final String setId;
+  final String english;
+  final String chinese;
+  final int score;
+  final String userAnswer;
+  final PracticeMode mode;
+  final DateTime createdAt;
+
+  WrongSentenceRecord({
+    required this.id,
+    required this.sentenceId,
+    required this.setId,
+    required this.english,
+    required this.chinese,
+    required this.score,
+    required this.userAnswer,
+    required this.mode,
+    required this.createdAt,
+  });
+
+  factory WrongSentenceRecord.fromJson(Map<String, dynamic> json) {
+    return WrongSentenceRecord(
+      id: json['id'] as String,
+      sentenceId: json['sentence_id'] as String,
+      setId: json['set_id'] as String,
+      english: json['english'] as String,
+      chinese: json['chinese'] as String,
+      score: (json['score'] as num).toInt(),
+      userAnswer: json['user_answer'] as String,
+      mode: (json['mode'] as int) == 0
+          ? PracticeMode.beginner
+          : PracticeMode.advanced,
+      createdAt: DateTime.parse(json['created_at'] as String),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'sentence_id': sentenceId,
+    'set_id': setId,
+    'english': english,
+    'chinese': chinese,
+    'score': score,
+    'user_answer': userAnswer,
+    'mode': mode == PracticeMode.beginner ? 0 : 1,
+    'created_at': createdAt.toIso8601String(),
+  };
+
+  WrongSentenceRecord copyWith({
+    String? id,
+    int? score,
+    String? userAnswer,
+    DateTime? createdAt,
+  }) {
+    return WrongSentenceRecord(
+      id: id ?? this.id,
+      sentenceId: sentenceId,
+      setId: setId,
+      english: english,
+      chinese: chinese,
+      score: score ?? this.score,
+      userAnswer: userAnswer ?? this.userAnswer,
+      mode: mode,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+}

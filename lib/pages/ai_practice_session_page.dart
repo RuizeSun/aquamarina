@@ -28,12 +28,24 @@ class AiPracticeSessionPage extends StatefulWidget {
   final int extraWordCount;
   final int sentenceLimit;
 
+  /// 错题本练习：直接使用这些句子
+  final List<Sentence>? wrongBookSentences;
+
+  /// 是否为错题本练习模式
+  final bool isWrongBookPractice;
+
+  /// 句式集练习：使用这些已过滤的句子（跳过重复）
+  final List<Sentence>? preFilteredSentences;
+
   const AiPracticeSessionPage({
     super.key,
     required this.selectedSet,
     required this.practiceMode,
     required this.extraWordCount,
     required this.sentenceLimit,
+    this.wrongBookSentences,
+    this.isWrongBookPractice = false,
+    this.preFilteredSentences,
   });
 
   @override
@@ -101,15 +113,26 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
 
   // ===== 开始练习 =====
   Future<void> _startPractice() async {
-    final sentences = await _setService.getSentences(widget.selectedSet.id!);
-    if (sentences.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('该句式集没有句子，请先添加')));
-        Navigator.of(context).pop();
+    List<Sentence> sentences;
+
+    if (widget.isWrongBookPractice && widget.wrongBookSentences != null) {
+      // 错题本练习：直接使用传入的错题句子
+      sentences = List<Sentence>.from(widget.wrongBookSentences!);
+    } else if (widget.preFilteredSentences != null) {
+      // 句式集练习：使用已过滤的句子
+      sentences = List<Sentence>.from(widget.preFilteredSentences!);
+    } else {
+      // 传统方式：从句式集加载
+      sentences = await _setService.getSentences(widget.selectedSet.id!);
+      if (sentences.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('该句式集没有句子，请先添加')));
+          Navigator.of(context).pop();
+        }
+        return;
       }
-      return;
     }
 
     // 随机打乱并截取
@@ -257,6 +280,40 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     }
   }
 
+  // ===== 处理完成的一个句子（加入错题本 / 标记已练习） =====
+  Future<void> _handleCompletedSentence(PracticeRecord record) async {
+    final threshold = await _sentenceService.getWrongScoreThreshold();
+
+    if (record.result.score <= threshold) {
+      // 得分 ≤ 阈值：加入错题本
+      await _sentenceService.addWrongSentence(
+        WrongSentenceRecord(
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+          sentenceId: record.sentence.id ?? '',
+          setId: record.sentence.setId,
+          english: record.sentence.english,
+          chinese: record.sentence.chinese,
+          score: record.result.score,
+          userAnswer: record.userAnswer,
+          mode: record.mode,
+          createdAt: DateTime.now(),
+        ),
+      );
+    } else {
+      // 得分 > 阈值：如果是在错题本练习中，从错题本移除（已掌握）
+      if (widget.isWrongBookPractice) {
+        await _sentenceService.removeWrongSentence(record.sentence.id ?? '');
+      }
+      // 如果是句式集练习且得分高，标记为已练习（用于"不重复练习"）
+      if (!widget.isWrongBookPractice) {
+        await _sentenceService.markSentencePracticed(
+          record.sentence.setId,
+          record.sentence.id ?? '',
+        );
+      }
+    }
+  }
+
   // ===== 下一题 / 完成 =====
   void _nextSentence() {
     final nextIndex = _currentSentenceIndex + 1;
@@ -278,10 +335,16 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     }
   }
 
-  void _exitPractice() {
+  void _exitPractice() async {
+    // 处理每条练习记录（加入错题本/移除错题本/标记已练习）
+    for (final record in _completedRecords) {
+      await _handleCompletedSentence(record);
+    }
     // 取消未完成的 AI 请求
     _cancelToken.cancel();
-    Navigator.of(context).pop(_completedRecords);
+    if (mounted) {
+      Navigator.of(context).pop(_completedRecords);
+    }
   }
 
   // ===== UI 构建 =====
@@ -883,8 +946,8 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
                             ),
                             const SizedBox(height: 12),
                             _buildStatRow(
-                              '句式集',
-                              widget.selectedSet.name,
+                              '练习类型',
+                              widget.isWrongBookPractice ? '错题本练习' : '句式集练习',
                               colorScheme,
                             ),
                           ],

@@ -147,7 +147,7 @@ class _MainShellState extends State<MainShell> {
           NavigationDestination(
             icon: Icon(Icons.smart_toy_outlined),
             selectedIcon: Icon(Icons.smart_toy_rounded),
-            label: 'AI 练习',
+            label: '句型练习',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

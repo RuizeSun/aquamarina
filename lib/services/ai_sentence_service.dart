@@ -11,6 +11,13 @@ class AiSentenceService {
   static const String _prefsExtraWordCountKey = 'beginner_extra_word_count';
   static const String _prefsPracticeModeKey = 'practice_mode';
 
+  // 错题本相关
+  static const String _prefsWrongSentencesKey = 'wrong_sentences_list';
+  static const String _prefsWrongScoreThresholdKey = 'wrong_score_threshold';
+  static const String _prefsSkipRepeatedKey = 'skip_repeated_sentences';
+  static const String _prefsPracticedSentencesPrefix =
+      'practiced_sentences_set_';
+
   final AiProfileService _profileService;
   final AiService _aiService;
 
@@ -51,6 +58,107 @@ class AiSentenceService {
       _prefsPracticeModeKey,
       mode == PracticeMode.beginner ? 0 : 1,
     );
+  }
+
+  // ===== 错题本设置 =====
+
+  /// 错题本阈值：得分 <= 该值的句子加入错题本（默认 8）
+  Future<int> getWrongScoreThreshold() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_prefsWrongScoreThresholdKey) ?? 8;
+  }
+
+  Future<void> setWrongScoreThreshold(int threshold) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_prefsWrongScoreThresholdKey, threshold.clamp(1, 10));
+  }
+
+  /// 是否不再练习重复句子（默认 true）
+  Future<bool> getSkipRepeated() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_prefsSkipRepeatedKey) ?? true;
+  }
+
+  Future<void> setSkipRepeated(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefsSkipRepeatedKey, value);
+  }
+
+  // ===== 已练习句子追踪（用于"不再重复"功能） =====
+
+  /// 获取某个句式集中已练习过的句子 ID 列表
+  Future<Set<String>> getPracticedSentenceIds(String setId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(_prefsPracticedSentencesPrefix + setId);
+    if (jsonStr == null) return {};
+    try {
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list.map((e) => e as String).toSet();
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// 标记某个句子为已练习
+  Future<void> markSentencePracticed(String setId, String sentenceId) async {
+    final ids = await getPracticedSentenceIds(setId);
+    ids.add(sentenceId);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _prefsPracticedSentencesPrefix + setId,
+      jsonEncode(ids.toList()),
+    );
+  }
+
+  // ===== 错题本 CRUD =====
+
+  /// 获取所有错题
+  Future<List<WrongSentenceRecord>> getWrongSentences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonStr = prefs.getString(_prefsWrongSentencesKey);
+    if (jsonStr == null) return [];
+    try {
+      final list = jsonDecode(jsonStr) as List<dynamic>;
+      return list
+          .map((e) => WrongSentenceRecord.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /// 获取错题数量
+  Future<int> getWrongSentenceCount() async {
+    final list = await getWrongSentences();
+    return list.length;
+  }
+
+  /// 添加错题（如果已存在相同 sentenceId 则跳过）
+  Future<void> addWrongSentence(WrongSentenceRecord record) async {
+    final list = await getWrongSentences();
+    // 如果已存在该句子的错题记录，跳过
+    if (list.any((r) => r.sentenceId == record.sentenceId)) return;
+    list.add(record);
+    await _saveWrongSentences(list);
+  }
+
+  /// 从错题本中移除
+  Future<void> removeWrongSentence(String sentenceId) async {
+    final list = await getWrongSentences();
+    list.removeWhere((r) => r.sentenceId == sentenceId);
+    await _saveWrongSentences(list);
+  }
+
+  /// 清空错题本
+  Future<void> clearWrongSentences() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefsWrongSentencesKey);
+  }
+
+  Future<void> _saveWrongSentences(List<WrongSentenceRecord> records) async {
+    final prefs = await SharedPreferences.getInstance();
+    final jsonList = records.map((r) => r.toJson()).toList();
+    await prefs.setString(_prefsWrongSentencesKey, jsonEncode(jsonList));
   }
 
   // ===== 评测 =====

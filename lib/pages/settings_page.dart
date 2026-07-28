@@ -598,6 +598,10 @@ class _AiSentenceSettingsTileState extends State<_AiSentenceSettingsTile> {
   PracticeMode _practiceMode = PracticeMode.beginner;
   bool _isLoading = true;
 
+  // 错题本设置
+  int _wrongScoreThreshold = 8;
+  bool _skipRepeated = true;
+
   @override
   void initState() {
     super.initState();
@@ -608,11 +612,15 @@ class _AiSentenceSettingsTileState extends State<_AiSentenceSettingsTile> {
     final limit = await _sentenceService.getSentenceLimit();
     final extra = await _sentenceService.getExtraWordCount();
     final mode = await _sentenceService.getPracticeMode();
+    final threshold = await _sentenceService.getWrongScoreThreshold();
+    final skip = await _sentenceService.getSkipRepeated();
     if (mounted) {
       setState(() {
         _sentenceLimit = limit;
         _extraWordCount = extra;
         _practiceMode = mode;
+        _wrongScoreThreshold = threshold;
+        _skipRepeated = skip;
         _isLoading = false;
       });
     }
@@ -746,6 +754,72 @@ class _AiSentenceSettingsTileState extends State<_AiSentenceSettingsTile> {
     );
   }
 
+  void _showWrongScoreThresholdPicker() {
+    int temp = _wrongScoreThreshold;
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('错题本阈值'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('得分 ≤ 该值的句子自动加入错题本'),
+                  const SizedBox(height: 16),
+                  Text('当前值: $temp'),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.remove_circle_outline),
+                          onPressed: temp > 1
+                              ? () => setDialogState(() => temp--)
+                              : null,
+                        ),
+                        const SizedBox(width: 16),
+                        Text(
+                          '$temp',
+                          style: Theme.of(context).textTheme.headlineMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(width: 16),
+                        IconButton(
+                          icon: const Icon(Icons.add_circle_outline),
+                          onPressed: temp < 10
+                              ? () => setDialogState(() => temp++)
+                              : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    _sentenceService.setWrongScoreThreshold(temp);
+                    setState(() => _wrongScoreThreshold = temp);
+                    Navigator.of(context).pop();
+                  },
+                  child: const Text('确认'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -813,6 +887,34 @@ class _AiSentenceSettingsTileState extends State<_AiSentenceSettingsTile> {
             ),
             onTap: _showExtraWordCountPicker,
           ),
+        const Divider(),
+        // 错题本设置
+        ListTile(
+          leading: Icon(Icons.error_outline, color: colorScheme.primary),
+          title: const Text('错题本阈值'),
+          subtitle: Text('得分 ≤ $_wrongScoreThreshold 分时加入错题本'),
+          trailing: Text(
+            '$_wrongScoreThreshold',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.bold,
+              color: colorScheme.primary,
+            ),
+          ),
+          onTap: _showWrongScoreThresholdPicker,
+        ),
+        SwitchListTile(
+          secondary: Icon(
+            Icons.replay_circle_filled,
+            color: colorScheme.primary,
+          ),
+          title: const Text('不重复练习'),
+          subtitle: const Text('已练习正确的句子不再出现'),
+          value: _skipRepeated,
+          onChanged: (value) {
+            _sentenceService.setSkipRepeated(value);
+            setState(() => _skipRepeated = value);
+          },
+        ),
       ],
     );
   }
