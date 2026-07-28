@@ -66,8 +66,8 @@ class LearningService {
     final reviewedCount =
         Sqflite.firstIntValue(
           await db.rawQuery(
-            "SELECT COUNT(*) FROM user_word_records WHERE last_reviewed_at >= ? || 'T00:00:00'",
-            [today],
+            "SELECT COUNT(*) FROM user_word_records WHERE last_reviewed_at >= ? || 'T00:00:00' AND created_at < ? || 'T00:00:00'",
+            [today, today],
           ),
         ) ??
         0;
@@ -158,53 +158,89 @@ class LearningService {
     await db.delete('wrong_words', where: 'word = ?', whereArgs: [cleaned]);
   }
 
-  // ─── 批量保存学习结果 ──────────────────────────
+  // ─── 批量保存学习/复习结果 ─────────────────────
 
-  /// 批量保存学习结果（新学习流程：全部完成后一次性写入）
+  /// 批量保存学习结果（学习/复习完成后一次性写入）
   /// results: word → result ("easy" | "hard" | "forgot" | "mastered")
+  ///
+  /// 区分新增（学习）和更新（复习）：
+  /// - 已存在的记录（复习）：使用 UPDATE，保留 created_at，递增 review_count
+  /// - 不存在的记录（学习）：使用 INSERT，创建完整新行
   static Future<void> saveLearningBatchResults(
     Map<String, String> results,
   ) async {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
-    final batch = db.batch();
 
-    for (final entry in results.entries) {
-      final word = entry.key.trim().toLowerCase();
-      final result = entry.value;
+    await db.transaction((txn) async {
+      for (final entry in results.entries) {
+        final word = entry.key.trim().toLowerCase();
+        final result = entry.value;
 
-      if (result == 'mastered') {
-        batch.update(
-          'user_word_records',
-          {'is_mastered': 1, 'last_reviewed_at': now},
-          where: 'word = ?',
-          whereArgs: [word],
-        );
-        batch.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
-      } else if (result == 'forgot') {
-        batch.delete('user_word_records', where: 'word = ?', whereArgs: [word]);
-        batch.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
-      } else {
-        final isWeak = result == 'hard' ? 1 : 0;
-        final nextDate = UserWordRecord(
-          word: word,
-          stage: 0,
-        ).computeNextReviewDate();
+        if (result == 'mastered') {
+          await txn.update(
+            'user_word_records',
+            {'is_mastered': 1, 'last_reviewed_at': now},
+            where: 'word = ?',
+            whereArgs: [word],
+          );
+          await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+        } else if (result == 'forgot') {
+          await txn.delete(
+            'user_word_records',
+            where: 'word = ?',
+            whereArgs: [word],
+          );
+          await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+        } else {
+          final isWeak = result == 'hard' ? 1 : 0;
+          final nextDate = UserWordRecord(
+            word: word,
+            stage: 0,
+          ).computeNextReviewDate();
 
-        batch.insert('user_word_records', {
-          'word': word,
-          'stage': 0,
-          'is_weak': isWeak,
-          'is_mastered': 0,
-          'next_review_date': nextDate,
-          'last_reviewed_at': now,
-          'review_count': 0,
-          'created_at': now,
-        }, conflictAlgorithm: ConflictAlgorithm.replace);
+          // 查询是否已存在记录（区分新增学习 vs 复习）
+          final existing = await txn.query(
+            'user_word_records',
+            columns: ['review_count', 'created_at'],
+            where: 'word = ?',
+            whereArgs: [word],
+          );
+
+          if (existing.isNotEmpty) {
+            // 已有记录 → 复习场景：更新而非替换，保留 created_at
+            final old = existing.first;
+            final oldReviewCount = (old['review_count'] as int?) ?? 0;
+
+            await txn.update(
+              'user_word_records',
+              {
+                'stage': 0,
+                'is_weak': isWeak,
+                'is_mastered': 0,
+                'next_review_date': nextDate,
+                'last_reviewed_at': now,
+                'review_count': oldReviewCount + 1,
+              },
+              where: 'word = ?',
+              whereArgs: [word],
+            );
+          } else {
+            // 新记录 → 学习场景：插入完整新行
+            await txn.insert('user_word_records', {
+              'word': word,
+              'stage': 0,
+              'is_weak': isWeak,
+              'is_mastered': 0,
+              'next_review_date': nextDate,
+              'last_reviewed_at': now,
+              'review_count': 0,
+              'created_at': now,
+            });
+          }
+        }
       }
-    }
-
-    await batch.commit(noResult: true);
+    });
   }
 
   // ─── 第一遍学习流程 ──────────────────────────────
