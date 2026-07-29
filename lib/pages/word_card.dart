@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
+import '../services/tts_service.dart';
 
 /// 将数据库中的字面 \n 替换为真正的换行符
 String _normalizeNewlines(String? text) {
@@ -47,6 +48,15 @@ class WordCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                const Spacer(),
+                // 朗读按钮
+                IconButton(
+                  icon: Icon(Icons.volume_up, color: colorScheme.primary),
+                  tooltip: '朗读',
+                  onPressed: () {
+                    TtsService.instance.speak(entry.word);
+                  },
+                ),
               ],
             ),
 

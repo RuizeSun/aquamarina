@@ -7,6 +7,7 @@ import 'pages/settings_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database_service.dart';
+import 'services/tts_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -107,6 +108,13 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   final GlobalKey<VocabularyPageState> _vocabularyKey = GlobalKey();
+
+  @override
+  void initState() {
+    super.initState();
+    // 初始化 TTS 服务
+    TtsService.instance.init();
+  }
 
   void _onTabSelected(int index) {
     setState(() {

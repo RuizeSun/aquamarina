@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../models/word_entry.dart';
 import '../../services/learning_service.dart';
+import '../../services/tts_service.dart';
 import 'shared/bottom_bar_widget.dart';
 import 'shared/data_loader.dart';
 import 'shared/quiz_widget.dart';
@@ -100,6 +101,8 @@ class _LearningPageState extends State<LearningPage>
       if (_currentPhase == 1) {
         _generateQuizOptions();
       }
+      // 首次加载后自动朗读
+      _autoReadCurrentWord();
     }
   }
 
@@ -123,6 +126,14 @@ class _LearningPageState extends State<LearningPage>
     return _words.sublist(batchStart, end);
   }
 
+  /// 自动朗读当前单词（学习/浏览阶段）
+  void _autoReadCurrentWord() {
+    final settings = TtsService.instance.settings;
+    if (settings.autoReadBrowse && _currentWord.isNotEmpty) {
+      TtsService.instance.speak(_currentWord);
+    }
+  }
+
   // ─── 学习阶段 ────────────────────────────────
 
   void _onLearnNext() {
@@ -138,6 +149,7 @@ class _LearningPageState extends State<LearningPage>
         _currentIndexInBatch++;
       });
       _animController.forward(from: 0);
+      _autoReadCurrentWord();
     }
   }
 
@@ -473,7 +485,11 @@ class _LearningPageState extends State<LearningPage>
     final entry = _entryCache[_globalIndex];
 
     if (!_showingAnswer) {
-      return RecallPhase1View(word: word, hintText: '请回忆这个词的含义：');
+      return RecallPhase1View(
+        word: word,
+        hintText: '请回忆这个词的含义：',
+        autoRead: TtsService.instance.settings.autoReadRecall,
+      );
     } else {
       final hasDefinition =
           entry?.translation != null && entry!.translation!.isNotEmpty;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
+import '../services/tts_service.dart';
 import 'word_card.dart';
 
 /// 将数据库中的字面 \n 替换为真正的换行符
@@ -30,6 +31,13 @@ class WordDetailPage extends StatelessWidget {
           ),
         ),
         centerTitle: false,
+        actions: [
+          IconButton(
+            icon: Icon(Icons.volume_up, color: colorScheme.primary),
+            tooltip: '朗读',
+            onPressed: () => TtsService.instance.speak(word),
+          ),
+        ],
       ),
       body: _buildContent(context),
     );

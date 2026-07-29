@@ -1,17 +1,35 @@
 import 'package:flutter/material.dart';
 import '../../../models/word_entry.dart';
+import '../../../services/tts_service.dart';
 import 'word_utils.dart';
 
 /// 回忆阶段1：显示单词，提示用户回忆含义
-class RecallPhase1View extends StatelessWidget {
+class RecallPhase1View extends StatefulWidget {
   final String word;
   final String hintText;
+  final bool autoRead;
 
   const RecallPhase1View({
     super.key,
     required this.word,
     this.hintText = '请回忆这个词的含义：',
+    this.autoRead = false,
   });
+
+  @override
+  State<RecallPhase1View> createState() => _RecallPhase1ViewState();
+}
+
+class _RecallPhase1ViewState extends State<RecallPhase1View> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoRead && widget.word.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        TtsService.instance.speak(widget.word);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +42,7 @@ class RecallPhase1View extends StatelessWidget {
         const Spacer(flex: 2),
 
         Text(
-          hintText,
+          widget.hintText,
           style: theme.textTheme.bodyLarge?.copyWith(
             color: colorScheme.onSurfaceVariant,
           ),
@@ -32,7 +50,7 @@ class RecallPhase1View extends StatelessWidget {
         const SizedBox(height: 32),
 
         Text(
-          word,
+          widget.word,
           style: theme.textTheme.displayLarge?.copyWith(
             fontWeight: FontWeight.bold,
             color: colorScheme.primary,
