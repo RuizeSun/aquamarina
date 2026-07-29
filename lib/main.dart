@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
@@ -7,6 +8,7 @@ import 'pages/settings_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database_service.dart';
+import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
 import 'services/ai_profile_service.dart';
 import 'models/ai_profile.dart';
@@ -29,6 +31,10 @@ void main() async {
   } catch (_) {
     // 静默处理初始化异常
   }
+
+  // 预热词典数据库（在后台解压 + 打开，避免首次搜词时阻塞）
+  unawaited(DictionaryService.enDb);
+  unawaited(DictionaryService.cnDb);
 
   // 注册开源许可证
   LicenseRegistry.addLicense(() async* {

@@ -18,8 +18,18 @@ class CombinedResult {
 }
 
 class DictionaryService {
+  // ─── 数据库实例与并发锁 ────────────────────────────────
   static Database? _enDb; // ECDict (英英/英汉)
   static Database? _cnDb; // CEDict (汉英)
+
+  /// 初始化 Future，防止 enDb 的并发重复初始化
+  static Future<void>? _enDbInitFuture;
+
+  /// 初始化 Future，防止 cnDb 的并发重复初始化
+  static Future<void>? _cnDbInitFuture;
+
+  /// 解压 Future，防止 databases.zip 的并发重复解压
+  static Future<void>? _extractFuture;
 
   // ─── 初始化 ──────────────────────────────────────────
 
@@ -33,49 +43,63 @@ class DictionaryService {
     }
   }
 
-  /// 从 assets 中的 databases.zip 解压出所需的数据库文件
-  static Future<String> _getDbPath(String dbName) async {
+  /// 从 assets 中的 databases.zip 解压出所有数据库文件（仅执行一次）
+  static Future<void> _ensureExtracted() async {
+    _extractFuture ??= _doExtract();
+    return _extractFuture!;
+  }
+
+  static Future<void> _doExtract() async {
     final dir = await getApplicationSupportDirectory();
-    final filePath = p.join(dir.path, dbName);
-    final file = File(filePath);
-    if (!await file.exists()) {
-      final byteData = await rootBundle.load('assets/databases.zip');
-      final bytes = byteData.buffer.asUint8List(
-        byteData.offsetInBytes,
-        byteData.lengthInBytes,
-      );
-      final archive = ZipDecoder().decodeBytes(bytes);
-      for (final entry in archive) {
-        if (entry.isFile) {
-          final entryPath = p.join(dir.path, entry.name);
-          await File(entryPath).writeAsBytes(entry.content as List<int>);
-        }
+    // 如果文件都已存在，无需重复解压
+    final ecPath = p.join(dir.path, 'ec_dict.db');
+    final cePath = p.join(dir.path, 'ce_dict.db');
+    if (await File(ecPath).exists() && await File(cePath).exists()) {
+      return;
+    }
+    final byteData = await rootBundle.load('assets/databases.zip');
+    final bytes = byteData.buffer.asUint8List(
+      byteData.offsetInBytes,
+      byteData.lengthInBytes,
+    );
+    final archive = ZipDecoder().decodeBytes(bytes);
+    for (final entry in archive) {
+      if (entry.isFile) {
+        final entryPath = p.join(dir.path, entry.name);
+        await File(entryPath).writeAsBytes(entry.content as List<int>);
       }
     }
-    return filePath;
   }
 
   static Future<Database> _openEnDb() async {
     await _initFfi();
-    final path = await _getDbPath('ec_dict.db');
+    await _ensureExtracted();
+    final dir = await getApplicationSupportDirectory();
+    final path = p.join(dir.path, 'ec_dict.db');
     return await openDatabase(path, readOnly: true);
   }
 
   static Future<Database> _openCnDb() async {
     await _initFfi();
-    final path = await _getDbPath('ce_dict.db');
+    await _ensureExtracted();
+    final dir = await getApplicationSupportDirectory();
+    final path = p.join(dir.path, 'ce_dict.db');
     return await openDatabase(path, readOnly: true);
   }
 
+  /// 获取英英/英汉词典数据库（线程安全，防并发重复初始化）
   static Future<Database> get enDb async {
     if (_enDb != null) return _enDb!;
-    _enDb = await _openEnDb();
+    _enDbInitFuture ??= _openEnDb().then((db) => _enDb = db);
+    await _enDbInitFuture;
     return _enDb!;
   }
 
+  /// 获取汉英词典数据库（线程安全，防并发重复初始化）
   static Future<Database> get cnDb async {
     if (_cnDb != null) return _cnDb!;
-    _cnDb = await _openCnDb();
+    _cnDbInitFuture ??= _openCnDb().then((db) => _cnDb = db);
+    await _cnDbInitFuture;
     return _cnDb!;
   }
 
