@@ -7,6 +7,9 @@ import '../models/ai_profile.dart';
 class AiService {
   final Dio _dio;
 
+  /// Aquamarina 服务的内置公共 API Key
+  static const String _aquamarinaApiKey = 'aquamarinapublicapi';
+
   AiService({Dio? dio}) : _dio = dio ?? Dio();
 
   /// 构建请求头和 URL
@@ -49,6 +52,60 @@ class AiService {
     }
 
     return body;
+  }
+
+  /// 调用 Aquamarina 官方 API（非标准 OpenAI 兼容）
+  /// 返回从 data.content 中提取的原始 JSON 字符串
+  Future<String> callAquamarinaSentence({
+    required String mode,
+    required Map<String, String> sentence,
+    required String userAnswer,
+    List<String>? shuffledWords,
+    String? baseUrl,
+    CancelToken? cancelToken,
+  }) async {
+    final url = '${baseUrl?.replaceAll(RegExp(r'/+$'), '')}/chat';
+
+    try {
+      final body = <String, dynamic>{
+        'mode': mode,
+        'sentence': sentence,
+        'userAnswer': userAnswer,
+      };
+      if (shuffledWords != null && shuffledWords.isNotEmpty) {
+        body['shuffledWords'] = shuffledWords;
+      }
+
+      final response = await _dio.post(
+        url,
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $_aquamarinaApiKey',
+          },
+          sendTimeout: const Duration(seconds: 30),
+          receiveTimeout: const Duration(seconds: 60),
+        ),
+        data: body,
+        cancelToken: cancelToken,
+      );
+
+      if (response.statusCode == 200) {
+        final data = response.data as Map<String, dynamic>;
+        if (data['success'] == true && data['data'] != null) {
+          final innerData = data['data'] as Map<String, dynamic>;
+          return innerData['content'] as String? ?? '';
+        }
+        throw AiServiceException('服务端返回失败：${data['error'] ?? '未知错误'}');
+      } else {
+        throw _mapError(response.statusCode, response.data);
+      }
+    } on DioException catch (e) {
+      if (e.response != null) {
+        throw _mapError(e.response?.statusCode, e.response?.data);
+      }
+      throw AiServiceException('网络请求失败：${e.message}');
+    }
   }
 
   /// 非流式聊天请求
@@ -193,7 +250,12 @@ class AiService {
   AiServiceException _mapError(int? statusCode, dynamic data) {
     String? message;
     if (data is Map<String, dynamic>) {
-      message = data['error']?['message'] as String?;
+      final error = data['error'];
+      if (error is String) {
+        message = error;
+      } else if (error is Map<String, dynamic>) {
+        message = error['message'] as String?;
+      }
     }
     if (statusCode == null) {
       return AiServiceException(message ?? '请求失败');
@@ -205,6 +267,7 @@ class AiService {
       case 429:
         return AiServiceException(
           '请求过于频繁，请稍后重试${message != null ? '：$message' : ''}',
+          type: 'rateLimit',
         );
       case 404:
         return AiServiceException('接口地址不存在，请检查 Base URL');
@@ -218,7 +281,11 @@ class AiService {
 
 class AiServiceException implements Exception {
   final String message;
-  AiServiceException(this.message);
+  final String? type;
+
+  AiServiceException(this.message, {this.type});
+
+  bool get isRateLimit => type == 'rateLimit';
 
   @override
   String toString() => message;

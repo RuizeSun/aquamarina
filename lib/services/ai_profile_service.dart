@@ -206,11 +206,39 @@ class AiProfileService extends ChangeNotifier {
 
   /// 测试连接
   Future<String> testConnection(AiProfile profile) async {
+    final baseUrl = profile.baseUrl.replaceAll(RegExp(r'/+$'), '');
+
+    // Aquamarina 类型：调用 /health 端点
+    if (profile.isAquamarina) {
+      try {
+        final response = await _dio.get(
+          '$baseUrl/health',
+          options: Options(
+            sendTimeout: const Duration(seconds: 10),
+            receiveTimeout: const Duration(seconds: 10),
+          ),
+        );
+        if (response.statusCode == 200) {
+          return '✅ Aquamarina 服务连接成功';
+        } else {
+          throw _mapHttpError(response.statusCode, null);
+        }
+      } on DioException catch (e) {
+        if (e.response != null) {
+          throw _mapHttpError(e.response?.statusCode, e.message);
+        }
+        if (e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.receiveTimeout) {
+          throw AiConfigException('连接超时，请检查网络或 Base URL');
+        }
+        throw AiConfigException('网络连接失败：${e.message}');
+      }
+    }
+
     if (profile.apiKey.isEmpty) {
       throw AiConfigException('API Key 未设置');
     }
 
-    final baseUrl = profile.baseUrl.replaceAll(RegExp(r'/+$'), '');
     try {
       // 构建请求体
       final body = <String, dynamic>{

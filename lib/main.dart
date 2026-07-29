@@ -8,11 +8,27 @@ import 'pages/settings_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database_service.dart';
 import 'services/tts_service.dart';
+import 'services/ai_profile_service.dart';
+import 'models/ai_profile.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DatabaseService.database; // 初始化业务数据库
   await SharedPreferences.getInstance(); // 预热 SharedPreferences
+
+  // 自动创建 Aquamarina 官方 AI 配置（首次启动时）
+  try {
+    final profileService = AiProfileService();
+    await profileService.load();
+    if (profileService.profiles.isEmpty) {
+      final defaultProfile = createProfileFromTemplate(
+        AiProfileTemplate.aquamarinaOfficial,
+      ).copyWith(isDefault: true);
+      await profileService.addProfile(defaultProfile);
+    }
+  } catch (_) {
+    // 静默处理初始化异常
+  }
 
   // 注册开源许可证
   LicenseRegistry.addLicense(() async* {

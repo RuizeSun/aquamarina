@@ -7,10 +7,18 @@ enum AiProfileType {
 
   /// DeepSeek（基于 OpenAI 兼容协议 + 自定义接口）
   deepseek,
+
+  /// Aquamarina 官方（非标准 API，专用端点 /api/v1/chat）
+  aquamarina,
 }
 
 /// 预设配置模板
-enum AiProfileTemplate { openaiOfficial, deepseekOfficial, custom }
+enum AiProfileTemplate {
+  openaiOfficial,
+  deepseekOfficial,
+  aquamarinaOfficial,
+  custom,
+}
 
 /// 根据模板创建预设配置
 AiProfile createProfileFromTemplate(AiProfileTemplate template) {
@@ -36,6 +44,17 @@ AiProfile createProfileFromTemplate(AiProfileTemplate template) {
         temperature: null,
         enableThinking: true,
         reasoningEffort: 'high',
+      );
+    case AiProfileTemplate.aquamarinaOfficial:
+      return AiProfile(
+        id: const Uuid().v4(),
+        name: 'Aquamarina 官方',
+        type: AiProfileType.aquamarina,
+        baseUrl: 'https://aquamarina.78go.work/api/v1',
+        apiKey: 'aquamarinapublicapi',
+        model: 'default',
+        maxTokens: 4096,
+        temperature: null,
       );
     case AiProfileTemplate.custom:
       return AiProfile(
@@ -129,6 +148,9 @@ class AiProfile {
 
   /// 是否为标准 OpenAI 类型
   bool get isOpenAI => type == AiProfileType.openai;
+
+  /// 是否为 Aquamarina 官方类型
+  bool get isAquamarina => type == AiProfileType.aquamarina;
 
   /// 非敏感配置序列化（API Key 单独存储）
   Map<String, dynamic> toJson() => {

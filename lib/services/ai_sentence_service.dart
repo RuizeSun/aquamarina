@@ -195,29 +195,68 @@ class AiSentenceService {
     // 获取默认配置
     await _profileService.load();
     final profile = _profileService.defaultProfile;
-    if (profile == null || profile.apiKey.isEmpty) {
+    if (profile == null) {
       throw AiServiceException('请先在设置中配置 AI 服务');
     }
     _aiService.setCurrentProfile(profile);
 
-    // 构建 messages
-    final systemPrompt = _buildSystemPrompt(mode);
-    final userPrompt = _buildUserPrompt(
-      sentence: sentence,
-      userAnswer: userAnswer,
-      mode: mode,
-      shuffledWords: shuffledWords,
-    );
+    String response;
 
-    final messages = [
-      {'role': 'system', 'content': systemPrompt},
-      {'role': 'user', 'content': userPrompt},
-    ];
+    try {
+      if (profile.isAquamarina) {
+        // Aquamarina 官方 API：使用专用端点
+        final modeStr = mode == PracticeMode.beginner
+            ? 'beginner'
+            : 'high_level';
+        response = await _aiService.callAquamarinaSentence(
+          mode: modeStr,
+          sentence: {'chinese': sentence.chinese, 'english': sentence.english},
+          userAnswer: userAnswer,
+          shuffledWords: shuffledWords,
+          baseUrl: profile.baseUrl,
+          cancelToken: cancelToken,
+        );
+      } else {
+        // 标准 OpenAI 兼容协议（OpenAI / DeepSeek）
+        if (profile.apiKey.isEmpty) {
+          throw AiServiceException('请先在设置中配置 API Key');
+        }
 
-    final response = await _aiService.chat(
-      messages: messages,
-      cancelToken: cancelToken,
-    );
+        // 构建 messages
+        final systemPrompt = _buildSystemPrompt(mode);
+        final userPrompt = _buildUserPrompt(
+          sentence: sentence,
+          userAnswer: userAnswer,
+          mode: mode,
+          shuffledWords: shuffledWords,
+        );
+
+        final messages = [
+          {'role': 'system', 'content': systemPrompt},
+          {'role': 'user', 'content': userPrompt},
+        ];
+
+        response = await _aiService.chat(
+          messages: messages,
+          cancelToken: cancelToken,
+        );
+      }
+    } on AiServiceException catch (e) {
+      if (e.isRateLimit) {
+        if (profile.isAquamarina) {
+          throw AiServiceException(
+            'Aquamarina 服务器有每分钟请求数和每天请求数的限制，请稍后再试。',
+            type: 'rateLimit',
+          );
+        } else {
+          throw AiServiceException(
+            '请求过于频繁，请稍后重试（此为 API 服务端的限制，并非软件问题）。',
+            type: 'rateLimit',
+          );
+        }
+      }
+      rethrow;
+    }
 
     // 解析 JSON - 处理可能因推理模式带来的额外文本
     final jsonStr = _extractJson(response);

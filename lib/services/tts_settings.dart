@@ -25,13 +25,13 @@ class TtsSettings {
 
   const TtsSettings({
     this.enabled = true,
-    this.provider = TtsProvider.system,
+    this.provider = TtsProvider.edge,
     this.volume = 1.0,
     this.rate = 1.0,
     this.pitch = 1.0,
     this.voiceName,
-    this.autoReadBrowse = false,
-    this.autoReadRecall = false,
+    this.autoReadBrowse = true,
+    this.autoReadRecall = true,
   });
 
   TtsSettings copyWith({
@@ -60,13 +60,13 @@ class TtsSettings {
     final prefs = await SharedPreferences.getInstance();
     return TtsSettings(
       enabled: prefs.getBool(_keyEnabled) ?? true,
-      provider: TtsProvider.values[prefs.getInt(_keyProvider) ?? 0],
+      provider: TtsProvider.values[prefs.getInt(_keyProvider) ?? 1],
       volume: prefs.getDouble(_keyVolume) ?? 1.0,
       rate: prefs.getDouble(_keyRate) ?? 1.0,
       pitch: prefs.getDouble(_keyPitch) ?? 1.0,
       voiceName: prefs.getString(_keyVoice),
-      autoReadBrowse: prefs.getBool(_keyAutoReadBrowse) ?? false,
-      autoReadRecall: prefs.getBool(_keyAutoReadRecall) ?? false,
+      autoReadBrowse: prefs.getBool(_keyAutoReadBrowse) ?? true,
+      autoReadRecall: prefs.getBool(_keyAutoReadRecall) ?? true,
     );
   }
 

@@ -351,6 +351,8 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isAquamarina = _type == AiProfileType.aquamarina;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditing ? '编辑配置' : '新建配置'),
@@ -378,7 +380,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
               controller: _nameController,
               decoration: const InputDecoration(
                 labelText: '配置名称',
-                hintText: '例如：OpenAI 官方',
+                hintText: '例如：Aquamarina 官方',
                 border: OutlineInputBorder(),
                 prefixIcon: Icon(Icons.label),
               ),
@@ -404,6 +406,10 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                   value: AiProfileType.deepseek,
                   child: Text('DeepSeek'),
                 ),
+                DropdownMenuItem(
+                  value: AiProfileType.aquamarina,
+                  child: Text('Aquamarina 官方'),
+                ),
               ],
               onChanged: (v) {
                 if (v == null) return;
@@ -413,16 +419,33 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                     _baseUrlController.text = 'https://api.deepseek.com';
                     _temperature = null;
                     _temperatureController.text = '';
+                    _enableThinking = true;
+                    _reasoningEffort = 'high';
+                    _apiKeyController.text = '';
+                  } else if (v == AiProfileType.aquamarina) {
+                    _baseUrlController.text =
+                        'https://aquamarina.78go.work/api/v1';
+                    _apiKeyController.text = 'aquamarinapublicapi';
+                    _modelController.text = 'default';
+                    _maxTokensController.text = '4096';
+                    _temperature = null;
+                    _temperatureController.text = '';
+                    _enableThinking = false;
+                    _reasoningEffort = null;
+                    _balanceThreshold = null;
+                    _balanceThresholdController.text = '';
                   } else {
                     _baseUrlController.text = 'https://api.openai.com/v1';
                     _temperature = 0.7;
                     _temperatureController.text = '0.7';
                     _enableThinking = false;
                     _reasoningEffort = null;
+                    _apiKeyController.text = '';
                   }
                   _availableModels = null;
                 });
-                if (_apiKeyController.text.trim().isNotEmpty) {
+                if (_apiKeyController.text.trim().isNotEmpty &&
+                    v != AiProfileType.aquamarina) {
                   _fetchModels();
                 }
               },
@@ -432,11 +455,14 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
             // ---- Base URL ----
             TextFormField(
               controller: _baseUrlController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Base URL',
-                hintText: 'https://api.openai.com/v1',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.link),
+                hintText: isAquamarina
+                    ? 'https://aquamarina.78go.work/api/v1'
+                    : 'https://api.openai.com/v1',
+                border: const OutlineInputBorder(),
+                prefixIcon: const Icon(Icons.link),
+                helperText: isAquamarina ? '内置公共 API，无需额外配置' : null,
               ),
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return '请输入 Base URL';
@@ -451,103 +477,158 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
             const SizedBox(height: 16),
 
             // ---- API Key ----
-            TextFormField(
-              controller: _apiKeyController,
-              obscureText: _obscureApiKey,
-              decoration: InputDecoration(
-                labelText: 'API Key',
-                hintText: 'sk-...',
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.vpn_key),
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        _obscureApiKey
-                            ? Icons.visibility_off
-                            : Icons.visibility,
-                      ),
-                      onPressed: () =>
-                          setState(() => _obscureApiKey = !_obscureApiKey),
-                    ),
-                    if (_type == AiProfileType.deepseek)
-                      IconButton(
-                        icon: const Icon(Icons.account_balance_wallet),
-                        tooltip: '查询余额',
-                        onPressed: _checkBalance,
-                      ),
-                  ],
+            if (isAquamarina)
+              TextFormField(
+                controller: _apiKeyController,
+                readOnly: true,
+                decoration: const InputDecoration(
+                  labelText: 'API Key',
+                  hintText: '内置公共密钥',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.vpn_key),
+                  helperText: 'Aquamarina 使用内置公共密钥，无需手动配置',
+                  helperMaxLines: 2,
                 ),
+              )
+            else
+              TextFormField(
+                controller: _apiKeyController,
+                obscureText: _obscureApiKey,
+                decoration: InputDecoration(
+                  labelText: 'API Key',
+                  hintText: 'sk-...',
+                  border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.vpn_key),
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _obscureApiKey
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                        onPressed: () =>
+                            setState(() => _obscureApiKey = !_obscureApiKey),
+                      ),
+                      if (_type == AiProfileType.deepseek)
+                        IconButton(
+                          icon: const Icon(Icons.account_balance_wallet),
+                          tooltip: '查询余额',
+                          onPressed: _checkBalance,
+                        ),
+                    ],
+                  ),
+                ),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? '请输入 API Key' : null,
               ),
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty) ? '请输入 API Key' : null,
-            ),
             const SizedBox(height: 16),
 
             // ---- 模型 ----
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: _buildModelField()),
-                const SizedBox(width: 8),
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: IconButton(
-                    onPressed: _apiKeyController.text.trim().isEmpty
-                        ? null
-                        : _fetchModels,
-                    icon: _isLoadingModels
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.refresh),
-                    tooltip: '刷新模型列表',
+            if (!isAquamarina) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _buildModelField()),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: IconButton(
+                      onPressed: _apiKeyController.text.trim().isEmpty
+                          ? null
+                          : _fetchModels,
+                      icon: _isLoadingModels
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.refresh),
+                      tooltip: '刷新模型列表',
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            // ---- Max Tokens ----
-            TextFormField(
-              controller: _maxTokensController,
-              decoration: const InputDecoration(
-                labelText: 'Max Tokens',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.data_usage),
+                ],
               ),
-              keyboardType: TextInputType.number,
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return '请输入 Max Tokens';
-                final n = int.tryParse(v.trim());
-                if (n == null || n < 1) return '请输入有效的正整数';
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ] else
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.teal.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.teal.withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.teal.shade700),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '模型',
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '由 Aquamarina 服务端自动路由模型',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
-            // ---- Temperature（非 DeepSeek 思考模式时才显示） ----
-            if (!(_type == AiProfileType.deepseek && _enableThinking)) ...[
+            if (!isAquamarina) ...[
+              const SizedBox(height: 16),
+
+              // ---- Max Tokens ----
               TextFormField(
-                controller: _temperatureController,
+                controller: _maxTokensController,
                 decoration: const InputDecoration(
-                  labelText: 'Temperature',
-                  hintText: '0.0 - 2.0',
+                  labelText: 'Max Tokens',
                   border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.thermostat),
+                  prefixIcon: Icon(Icons.data_usage),
                 ),
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                onChanged: (v) {
-                  final parsed = double.tryParse(v.trim());
-                  _temperature = parsed;
+                keyboardType: TextInputType.number,
+                validator: (v) {
+                  if (v == null || v.trim().isEmpty) return '请输入 Max Tokens';
+                  final n = int.tryParse(v.trim());
+                  if (n == null || n < 1) return '请输入有效的正整数';
+                  return null;
                 },
               ),
               const SizedBox(height: 16),
+
+              // ---- Temperature（非 DeepSeek 思考模式时才显示） ----
+              if (!(_type == AiProfileType.deepseek && _enableThinking)) ...[
+                TextFormField(
+                  controller: _temperatureController,
+                  decoration: const InputDecoration(
+                    labelText: 'Temperature',
+                    hintText: '0.0 - 2.0',
+                    border: OutlineInputBorder(),
+                    prefixIcon: Icon(Icons.thermostat),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  onChanged: (v) {
+                    final parsed = double.tryParse(v.trim());
+                    _temperature = parsed;
+                  },
+                ),
+                const SizedBox(height: 16),
+              ],
             ],
 
             // ---- DeepSeek 专属设置 ----

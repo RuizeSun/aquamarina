@@ -186,6 +186,14 @@ class _SettingsPageState extends State<SettingsPage> {
                 ).pop(AiProfileTemplate.deepseekOfficial),
               ),
               ListTile(
+                leading: const Icon(Icons.water_drop, color: Colors.teal),
+                title: const Text('Aquamarina 官方'),
+                subtitle: const Text('默认 · aquamarina.78go.work'),
+                onTap: () => Navigator.of(
+                  context,
+                ).pop(AiProfileTemplate.aquamarinaOfficial),
+              ),
+              ListTile(
                 leading: const Icon(Icons.add_circle_outline),
                 title: const Text('自定义配置'),
                 subtitle: const Text('手动输入所有参数'),

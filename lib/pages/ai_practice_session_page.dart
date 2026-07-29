@@ -5,6 +5,7 @@ import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
+import '../services/ai_service.dart';
 
 /// 练习阶段
 enum _PracticePhase {
@@ -268,6 +269,17 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
         _phase = _PracticePhase.result;
       });
       _animController.forward(from: 0);
+    } on AiServiceException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isEvaluating = false;
+        _phase = _PracticePhase.answering;
+      });
+      // 频率限制错误：直接显示 API 端的提示，避免"批改失败"前缀误导用户
+      final message = e.isRateLimit ? e.message : '批改失败：$e';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() {
