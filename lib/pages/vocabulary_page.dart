@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'vocabulary/word_book_list_page.dart';
 import 'vocabulary/learning_page.dart';
 import 'vocabulary/review_page.dart';
+import 'vocabulary/review_plan_page.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -18,6 +19,7 @@ class VocabularyPage extends StatefulWidget {
 class VocabularyPageState extends State<VocabularyPage> {
   WordBook? _currentBook;
   DailyStats? _stats;
+  int _streak = 0;
   bool _isLoading = true;
   Timer? _refreshTimer;
 
@@ -67,6 +69,8 @@ class VocabularyPageState extends State<VocabularyPage> {
 
       // 获取今日统计
       _stats = await LearningService.getDailyStats();
+      // 获取连续打卡
+      _streak = await LearningService.getStreak();
     } catch (e) {
       // ignore errors during loading
     }
@@ -87,7 +91,7 @@ class VocabularyPageState extends State<VocabularyPage> {
     if (_currentBook == null) return;
 
     final prefs = await SharedPreferences.getInstance();
-    final reviewLimit = prefs.getInt(_reviewLimitKey) ?? 20;
+    final reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
 
     var dueWords = await LearningService.getAllDueWords();
 
@@ -243,6 +247,29 @@ class VocabularyPageState extends State<VocabularyPage> {
             _buildBookCard(theme, colorScheme),
             const SizedBox(height: 24),
 
+            // 🔥 连续打卡
+            if (_streak > 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.local_fire_department,
+                      color: Colors.orange,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '连续打卡 $_streak 天',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: Colors.orange,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             // 今日统计
             Text('今日概览', style: theme.textTheme.titleMedium),
             const SizedBox(height: 12),
@@ -329,7 +356,26 @@ class VocabularyPageState extends State<VocabularyPage> {
                 ],
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 16),
+
+            // 复习计划按钮
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const ReviewPlanPage()),
+                  );
+                  _loadData();
+                },
+                icon: const Icon(Icons.event_note),
+                label: const Text('查看复习计划'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
 
             // 操作按钮
             Row(

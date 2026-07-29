@@ -27,6 +27,9 @@ class _SettingsPageState extends State<SettingsPage> {
       _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
       _learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
     });
+    // 持久化默认值，确保背单词页面读取时与显示一致
+    await prefs.setInt(_reviewLimitKey, _reviewLimit);
+    await prefs.setInt(_learningLimitKey, _learningLimit);
   }
 
   Future<void> _setReviewLimit(int value) async {

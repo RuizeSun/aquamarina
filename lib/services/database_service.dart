@@ -29,7 +29,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 1,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE IF NOT EXISTS word_books (
@@ -80,6 +80,17 @@ class DatabaseService {
           )
         ''');
 
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS daily_activity (
+            date TEXT PRIMARY KEY,
+            words_learned INTEGER DEFAULT 0,
+            words_reviewed INTEGER DEFAULT 0,
+            correct_count INTEGER DEFAULT 0,
+            wrong_count INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 0
+          )
+        ''');
+
         // 索引
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_book_entries_book_id ON word_book_entries(book_id)',
@@ -93,6 +104,20 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_words_scheduled ON wrong_words(scheduled_date)',
         );
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS daily_activity (
+              date TEXT PRIMARY KEY,
+              words_learned INTEGER DEFAULT 0,
+              words_reviewed INTEGER DEFAULT 0,
+              correct_count INTEGER DEFAULT 0,
+              wrong_count INTEGER DEFAULT 0,
+              completed INTEGER DEFAULT 0
+            )
+          ''');
+        }
       },
     );
   }

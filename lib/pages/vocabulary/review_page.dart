@@ -56,6 +56,9 @@ class _ReviewPageState extends State<ReviewPage>
 
   final Map<int, WordEntry?> _entryCache = {};
 
+  // 全局干扰项池（词→释义）
+  final Map<String, String> _distractorPool = {};
+
   List<String> get _words => widget.words;
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
@@ -102,6 +105,30 @@ class _ReviewPageState extends State<ReviewPage>
     final results = await Future.wait(futures);
     for (final r in results) {
       _entryCache[r.key] = r.value;
+    }
+
+    // 加载全局干扰项池（从已学单词中随机取10个）
+    try {
+      final distractors = await LearningService.getRandomDistractors(
+        excludeWords: _words,
+        count: 10,
+      );
+      // 异步加载干扰项的释义
+      final distractorFutures = distractors.keys.map((w) async {
+        final entry = await DictionaryService.searchEnExact(w);
+        if (entry?.translation != null && entry!.translation!.isNotEmpty) {
+          return MapEntry(w, entry.translation!);
+        }
+        return MapEntry(w, '');
+      });
+      final distractorResults = await Future.wait(distractorFutures);
+      for (final r in distractorResults) {
+        if (r.value.isNotEmpty) {
+          _distractorPool[r.key] = r.value;
+        }
+      }
+    } catch (_) {
+      // 加载失败不影响正常复习
     }
 
     if (mounted) {
@@ -152,7 +179,21 @@ class _ReviewPageState extends State<ReviewPage>
     allOtherMeanings.shuffle(Random());
     final distractors = allOtherMeanings.take(3).toList();
 
-    // 如果干扰项不足3个，用占位填充
+    // 如果干扰项不足3个，从全局干扰项池补充
+    if (distractors.length < 3) {
+      final poolEntries = _distractorPool.values.toList()..shuffle(Random());
+      for (final m in poolEntries) {
+        if (distractors.length >= 3) break;
+        final extracted = _extractFirstMeaning(m);
+        if (extracted.isNotEmpty &&
+            extracted != correctMeaning &&
+            !distractors.contains(extracted)) {
+          distractors.add(extracted);
+        }
+      }
+    }
+
+    // 如果仍不足3个，用占位填充
     while (distractors.length < 3) {
       distractors.add('（无干扰项）');
     }
