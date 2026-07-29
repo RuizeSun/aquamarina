@@ -29,8 +29,9 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 3,
+      version: 1,
       onCreate: (db, version) async {
+        // ── 词库相关 ──
         await db.execute('''
           CREATE TABLE IF NOT EXISTS word_books (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +92,40 @@ class DatabaseService {
           )
         ''');
 
+        // ── 句型练习相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS sentences (
+            id TEXT PRIMARY KEY,
+            set_id TEXT NOT NULL,
+            english TEXT NOT NULL,
+            chinese TEXT NOT NULL,
+            extra_words TEXT,
+            created_at TEXT
+          )
+        ''');
+
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS wrong_sentences (
+            id TEXT PRIMARY KEY,
+            sentence_id TEXT NOT NULL,
+            set_id TEXT NOT NULL,
+            english TEXT NOT NULL,
+            chinese TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            user_answer TEXT NOT NULL,
+            mode INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+          )
+        ''');
+
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS practiced_sentence_ids (
+            set_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            PRIMARY KEY (set_id, sentence_id)
+          )
+        ''');
+
         // 索引
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_book_entries_book_id ON word_book_entries(book_id)',
@@ -104,20 +139,12 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_words_scheduled ON wrong_words(scheduled_date)',
         );
-      },
-      onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 3) {
-          await db.execute('''
-            CREATE TABLE IF NOT EXISTS daily_activity (
-              date TEXT PRIMARY KEY,
-              words_learned INTEGER DEFAULT 0,
-              words_reviewed INTEGER DEFAULT 0,
-              correct_count INTEGER DEFAULT 0,
-              wrong_count INTEGER DEFAULT 0,
-              completed INTEGER DEFAULT 0
-            )
-          ''');
-        }
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_sentences_set_id ON sentences(set_id)',
+        );
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_wrong_sentences_set_id ON wrong_sentences(set_id)',
+        );
       },
     );
   }

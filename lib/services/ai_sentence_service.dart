@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
 import '../models/ai_sentence.dart';
 import '../services/ai_profile_service.dart';
 import '../services/ai_service.dart';
+import 'database_service.dart';
 
 /// AI 句子评测服务
 class AiSentenceService {
@@ -11,12 +13,9 @@ class AiSentenceService {
   static const String _prefsExtraWordCountKey = 'beginner_extra_word_count';
   static const String _prefsPracticeModeKey = 'practice_mode';
 
-  // 错题本相关
-  static const String _prefsWrongSentencesKey = 'wrong_sentences_list';
+  // 错题本相关（SQLite，这些 key 只作为默认值）
   static const String _prefsWrongScoreThresholdKey = 'wrong_score_threshold';
   static const String _prefsSkipRepeatedKey = 'skip_repeated_sentences';
-  static const String _prefsPracticedSentencesPrefix =
-      'practiced_sentences_set_';
 
   final AiProfileService _profileService;
   final AiService _aiService;
@@ -25,7 +24,7 @@ class AiSentenceService {
     : _profileService = profileService ?? AiProfileService(),
       _aiService = aiService ?? AiService();
 
-  // ===== 设置项 =====
+  // ===== 设置项（SharedPreferences 保留） =====
   Future<int> getSentenceLimit() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_prefsSentenceLimitKey) ?? 10;
@@ -84,81 +83,105 @@ class AiSentenceService {
     await prefs.setBool(_prefsSkipRepeatedKey, value);
   }
 
-  // ===== 已练习句子追踪（用于"不再重复"功能） =====
+  // ===== 已练习句子追踪（SQLite） =====
 
   /// 获取某个句式集中已练习过的句子 ID 列表
   Future<Set<String>> getPracticedSentenceIds(String setId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_prefsPracticedSentencesPrefix + setId);
-    if (jsonStr == null) return {};
-    try {
-      final list = jsonDecode(jsonStr) as List<dynamic>;
-      return list.map((e) => e as String).toSet();
-    } catch (_) {
-      return {};
-    }
+    final db = await DatabaseService.database;
+    final maps = await db.query(
+      'practiced_sentence_ids',
+      columns: ['sentence_id'],
+      where: 'set_id = ?',
+      whereArgs: [setId],
+    );
+    return maps.map((m) => m['sentence_id'] as String).toSet();
   }
 
   /// 标记某个句子为已练习
   Future<void> markSentencePracticed(String setId, String sentenceId) async {
-    final ids = await getPracticedSentenceIds(setId);
-    ids.add(sentenceId);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _prefsPracticedSentencesPrefix + setId,
-      jsonEncode(ids.toList()),
-    );
+    final db = await DatabaseService.database;
+    await db.insert('practiced_sentence_ids', {
+      'set_id': setId,
+      'sentence_id': sentenceId,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
-  // ===== 错题本 CRUD =====
+  // ===== 错题本 CRUD（SQLite） =====
 
-  /// 获取所有错题
+  /// 获取所有错题（按时间倒序）
   Future<List<WrongSentenceRecord>> getWrongSentences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_prefsWrongSentencesKey);
-    if (jsonStr == null) return [];
-    try {
-      final list = jsonDecode(jsonStr) as List<dynamic>;
-      return list
-          .map((e) => WrongSentenceRecord.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    final db = await DatabaseService.database;
+    final maps = await db.query('wrong_sentences', orderBy: 'created_at DESC');
+    return maps.map((m) => _rowToWrongSentence(m)).toList();
   }
 
   /// 获取错题数量
   Future<int> getWrongSentenceCount() async {
-    final list = await getWrongSentences();
-    return list.length;
+    final db = await DatabaseService.database;
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM wrong_sentences'),
+        ) ??
+        0;
+    return count;
   }
 
   /// 添加错题（如果已存在相同 sentenceId 则跳过）
   Future<void> addWrongSentence(WrongSentenceRecord record) async {
-    final list = await getWrongSentences();
-    // 如果已存在该句子的错题记录，跳过
-    if (list.any((r) => r.sentenceId == record.sentenceId)) return;
-    list.add(record);
-    await _saveWrongSentences(list);
+    final db = await DatabaseService.database;
+    await db.insert(
+      'wrong_sentences',
+      _wrongSentenceToRow(record),
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
   }
 
   /// 从错题本中移除
   Future<void> removeWrongSentence(String sentenceId) async {
-    final list = await getWrongSentences();
-    list.removeWhere((r) => r.sentenceId == sentenceId);
-    await _saveWrongSentences(list);
+    final db = await DatabaseService.database;
+    await db.delete(
+      'wrong_sentences',
+      where: 'sentence_id = ?',
+      whereArgs: [sentenceId],
+    );
   }
 
   /// 清空错题本
   Future<void> clearWrongSentences() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefsWrongSentencesKey);
+    final db = await DatabaseService.database;
+    await db.delete('wrong_sentences');
   }
 
-  Future<void> _saveWrongSentences(List<WrongSentenceRecord> records) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonList = records.map((r) => r.toJson()).toList();
-    await prefs.setString(_prefsWrongSentencesKey, jsonEncode(jsonList));
+  // ===== 内部方法 =====
+
+  static WrongSentenceRecord _rowToWrongSentence(Map<String, dynamic> row) {
+    return WrongSentenceRecord(
+      id: row['id'] as String,
+      sentenceId: row['sentence_id'] as String,
+      setId: row['set_id'] as String,
+      english: row['english'] as String,
+      chinese: row['chinese'] as String,
+      score: (row['score'] as num).toInt(),
+      userAnswer: row['user_answer'] as String,
+      mode: (row['mode'] as int) == 0
+          ? PracticeMode.beginner
+          : PracticeMode.advanced,
+      createdAt: DateTime.parse(row['created_at'] as String),
+    );
+  }
+
+  static Map<String, dynamic> _wrongSentenceToRow(WrongSentenceRecord r) {
+    return {
+      'id': r.id,
+      'sentence_id': r.sentenceId,
+      'set_id': r.setId,
+      'english': r.english,
+      'chinese': r.chinese,
+      'score': r.score,
+      'user_answer': r.userAnswer,
+      'mode': r.mode == PracticeMode.beginner ? 0 : 1,
+      'created_at': r.createdAt.toIso8601String(),
+    };
   }
 
   // ===== 评测 =====

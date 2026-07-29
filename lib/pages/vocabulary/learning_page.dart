@@ -28,7 +28,7 @@ class _LearningPageState extends State<LearningPage>
   int _currentIndexInBatch = 0;
   bool _isLoading = true;
 
-  // 所有词的释义缓存
+  // 所有词的释义缓存（懒加载，按 batch 逐步填充）
   final Map<int, WordEntry?> _entryCache = {};
 
   // 全局干扰项池（词→释义）
@@ -54,10 +54,6 @@ class _LearningPageState extends State<LearningPage>
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
 
-  int get _totalSteps => _words.length * 3;
-
-  int get _currentStep => _currentPhase * _words.length + _globalIndex + 1;
-
   String get _currentWord {
     if (_globalIndex >= _words.length) return '';
     return _words[_globalIndex];
@@ -79,7 +75,7 @@ class _LearningPageState extends State<LearningPage>
       curve: Curves.easeInOut,
     );
     _animController.forward();
-    _loadAllEntries();
+    _loadInitialData();
   }
 
   @override
@@ -88,13 +84,15 @@ class _LearningPageState extends State<LearningPage>
     super.dispose();
   }
 
-  Future<void> _loadAllEntries() async {
+  /// 初始只加载第一批词的释义 + 全局干扰项池
+  Future<void> _loadInitialData() async {
     setState(() => _isLoading = true);
 
-    // 并行加载所有词的释义
-    _entryCache.addAll(await loadEntries(words: _words));
+    // 只加载当前 batch 的释义
+    final batchWords = _getBatchWords(0);
+    _entryCache.addAll(await loadEntries(words: batchWords));
 
-    // 加载全局干扰项池
+    // 加载全局干扰项池（只加载一次，全量只有 10 个词）
     _distractorPool.addAll(await loadDistractorPool(excludeWords: _words));
 
     if (mounted) {
@@ -103,6 +101,26 @@ class _LearningPageState extends State<LearningPage>
         _generateQuizOptions();
       }
     }
+  }
+
+  /// 加载后续 batch 的释义（在切换 batch 时调用）
+  Future<void> _loadBatchEntries(int batchStart) async {
+    final batchWords = _getBatchWords(batchStart);
+    final newEntries = await loadEntries(words: batchWords);
+    if (mounted) {
+      setState(() {
+        _entryCache.addAll(newEntries);
+      });
+    }
+  }
+
+  /// 获取某个 batch 包含的单词列表
+  List<String> _getBatchWords(int batchStart) {
+    final end = batchStart + _batchSize;
+    if (end >= _words.length) {
+      return _words.sublist(batchStart);
+    }
+    return _words.sublist(batchStart, end);
   }
 
   // ─── 学习阶段 ────────────────────────────────
@@ -227,8 +245,11 @@ class _LearningPageState extends State<LearningPage>
       if (_currentBatchStart + _batchSize >= _words.length) {
         _finishAndSave();
       } else {
+        final nextBatchStart = _currentBatchStart + _batchSize;
+        // 先加载下一批的释义再切换
+        _loadBatchEntries(nextBatchStart);
         setState(() {
-          _currentBatchStart += _batchSize;
+          _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
           _currentIndexInBatch = 0;
           _showingAnswer = false;
@@ -257,8 +278,10 @@ class _LearningPageState extends State<LearningPage>
       if (_currentBatchStart + _batchSize >= _words.length) {
         _finishAndSave();
       } else {
+        final nextBatchStart = _currentBatchStart + _batchSize;
+        _loadBatchEntries(nextBatchStart);
         setState(() {
-          _currentBatchStart += _batchSize;
+          _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
           _currentIndexInBatch = 0;
           _showingAnswer = false;

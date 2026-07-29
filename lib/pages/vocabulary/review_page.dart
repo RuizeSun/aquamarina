@@ -52,6 +52,7 @@ class _ReviewPageState extends State<ReviewPage>
   late AnimationController _animController;
   late Animation<double> _fadeAnimation;
 
+  // 释义缓存（懒加载，按 batch 逐步填充）
   final Map<int, WordEntry?> _entryCache = {};
 
   // 全局干扰项池（词→释义）
@@ -60,10 +61,6 @@ class _ReviewPageState extends State<ReviewPage>
   List<String> get _words => widget.words;
 
   int get _globalIndex => _currentBatchStart + _currentIndexInBatch;
-
-  int get _totalSteps => _words.length * 3;
-
-  int get _currentStep => _currentPhase * _words.length + _globalIndex + 1;
 
   String get _currentWord {
     if (_globalIndex >= _words.length) return '';
@@ -87,7 +84,7 @@ class _ReviewPageState extends State<ReviewPage>
     );
     _animController.forward();
 
-    _loadAllEntries();
+    _loadInitialData();
   }
 
   @override
@@ -96,9 +93,11 @@ class _ReviewPageState extends State<ReviewPage>
     super.dispose();
   }
 
-  Future<void> _loadAllEntries() async {
-    // 并行加载所有词的释义
-    _entryCache.addAll(await loadEntries(words: _words));
+  /// 初始只加载第一批词的释义 + 全局干扰项池
+  Future<void> _loadInitialData() async {
+    // 只加载当前 batch 的释义
+    final batchWords = _getBatchWords(0);
+    _entryCache.addAll(await loadEntries(words: batchWords));
 
     // 加载全局干扰项池
     _distractorPool.addAll(await loadDistractorPool(excludeWords: _words));
@@ -109,6 +108,26 @@ class _ReviewPageState extends State<ReviewPage>
         _generateQuizOptions();
       }
     }
+  }
+
+  /// 加载后续 batch 的释义（在切换 batch 时调用）
+  Future<void> _loadBatchEntries(int batchStart) async {
+    final batchWords = _getBatchWords(batchStart);
+    final newEntries = await loadEntries(words: batchWords);
+    if (mounted) {
+      setState(() {
+        _entryCache.addAll(newEntries);
+      });
+    }
+  }
+
+  /// 获取某个 batch 包含的单词列表
+  List<String> _getBatchWords(int batchStart) {
+    final end = batchStart + _batchSize;
+    if (end >= _words.length) {
+      return _words.sublist(batchStart);
+    }
+    return _words.sublist(batchStart, end);
   }
 
   // ─── 浏览阶段 ────────────────────────────────
@@ -237,8 +256,10 @@ class _ReviewPageState extends State<ReviewPage>
       if (_currentBatchStart + _batchSize >= _words.length) {
         _finishAndSave();
       } else {
+        final nextBatchStart = _currentBatchStart + _batchSize;
+        _loadBatchEntries(nextBatchStart);
         setState(() {
-          _currentBatchStart += _batchSize;
+          _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
           _currentIndexInBatch = 0;
           _showingAnswer = false;
@@ -268,8 +289,10 @@ class _ReviewPageState extends State<ReviewPage>
       if (_currentBatchStart + _batchSize >= _words.length) {
         _finishAndSave();
       } else {
+        final nextBatchStart = _currentBatchStart + _batchSize;
+        _loadBatchEntries(nextBatchStart);
         setState(() {
-          _currentBatchStart += _batchSize;
+          _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
           _currentIndexInBatch = 0;
           _showingAnswer = false;

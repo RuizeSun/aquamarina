@@ -1,14 +1,15 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
+import 'database_service.dart';
 
 /// 句式集管理服务
 class SentenceSetService extends ChangeNotifier {
   static const String _prefsSetsKey = 'sentence_sets_v1';
-  static const String _prefsSentencesPrefix = 'sentences_set_';
 
   List<SentenceSet> _sets = [];
   bool _loaded = false;
@@ -514,6 +515,32 @@ class SentenceSetService extends ChangeNotifier {
     );
   }
 
+  // ===== 初始化内置句式 =====
+  /// 检查数据库中是否已有内置句式集的句子，若无则插入
+  static Future<void> _initBuiltInSentences() async {
+    final db = await DatabaseService.database;
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM sentences WHERE set_id = ?', [
+            builtInSetId,
+          ]),
+        ) ??
+        0;
+    if (count == 0) {
+      final now = DateTime.now().toIso8601String();
+      for (final s in _builtInSentences()) {
+        await db.insert('sentences', {
+          'id': s.id,
+          'set_id': s.setId,
+          'english': s.english,
+          'chinese': s.chinese,
+          'extra_words': jsonEncode(s.extraWords),
+          'created_at': now,
+        });
+      }
+    }
+  }
+
   // ===== 加载 =====
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -537,12 +564,8 @@ class SentenceSetService extends ChangeNotifier {
       await _saveSets();
     }
 
-    // 确保内置句式集的句子已保存
-    final builtInSentencesKey = _prefsSentencesPrefix + builtInSetId;
-    final existingStr = prefs.getString(builtInSentencesKey);
-    if (existingStr == null || existingStr.isEmpty) {
-      await _saveSentences(builtInSetId, _builtInSentences());
-    }
+    // 初始化内置句式句子到 SQLite
+    await _initBuiltInSentences();
 
     _loaded = true;
     notifyListeners();
@@ -553,8 +576,6 @@ class SentenceSetService extends ChangeNotifier {
     final s = set.copyWith(id: const Uuid().v4(), createdAt: DateTime.now());
     _sets.add(s);
     await _saveSets();
-    // 初始化空的句子列表
-    await _saveSentences(s.id!, []);
     notifyListeners();
   }
 
@@ -570,8 +591,9 @@ class SentenceSetService extends ChangeNotifier {
     if (id == builtInSetId) return; // 不可删除内置集
     _sets.removeWhere((s) => s.id == id);
     await _saveSets();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefsSentencesPrefix + id);
+    // 同时删除该句式集下的所有句子
+    final db = await DatabaseService.database;
+    await db.delete('sentences', where: 'set_id = ?', whereArgs: [id]);
     notifyListeners();
   }
 
@@ -585,56 +607,68 @@ class SentenceSetService extends ChangeNotifier {
 
   // ===== 句子 CRUD =====
   Future<List<Sentence>> getSentences(String setId) async {
-    if (setId == builtInSetId) {
-      return _builtInSentences();
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-    final jsonStr = prefs.getString(_prefsSentencesPrefix + setId);
-    if (jsonStr == null) return [];
-    try {
-      final list = jsonDecode(jsonStr) as List<dynamic>;
-      return list
-          .map((e) => Sentence.fromJson(e as Map<String, dynamic>))
-          .toList();
-    } catch (_) {
-      return [];
-    }
+    final db = await DatabaseService.database;
+    final maps = await db.query(
+      'sentences',
+      where: 'set_id = ?',
+      whereArgs: [setId],
+      orderBy: 'id ASC',
+    );
+    return maps.map((m) => _rowToSentence(m)).toList();
   }
 
   Future<void> addSentence(Sentence sentence) async {
+    final db = await DatabaseService.database;
     final id = const Uuid().v4();
-    final s = sentence.copyWith(id: id);
-    final sentences = await getSentences(s.setId);
-    sentences.add(s);
-    await _saveSentences(s.setId, sentences);
-    await _updateSentenceCount(s.setId);
+    await db.insert('sentences', {
+      'id': id,
+      'set_id': sentence.setId,
+      'english': sentence.english,
+      'chinese': sentence.chinese,
+      'extra_words': jsonEncode(sentence.extraWords),
+      'created_at': DateTime.now().toIso8601String(),
+    });
+    await _updateSentenceCount(sentence.setId);
     notifyListeners();
   }
 
   Future<void> updateSentence(Sentence sentence) async {
-    final sentences = await getSentences(sentence.setId);
-    final index = sentences.indexWhere((s) => s.id == sentence.id);
-    if (index == -1) throw Exception('句子不存在');
-    sentences[index] = sentence;
-    await _saveSentences(sentence.setId, sentences);
+    final db = await DatabaseService.database;
+    await db.update(
+      'sentences',
+      {
+        'english': sentence.english,
+        'chinese': sentence.chinese,
+        'extra_words': jsonEncode(sentence.extraWords),
+      },
+      where: 'id = ?',
+      whereArgs: [sentence.id],
+    );
     notifyListeners();
   }
 
   Future<void> deleteSentence(String setId, String sentenceId) async {
-    final sentences = await getSentences(setId);
-    sentences.removeWhere((s) => s.id == sentenceId);
-    await _saveSentences(setId, sentences);
+    final db = await DatabaseService.database;
+    await db.delete('sentences', where: 'id = ?', whereArgs: [sentenceId]);
     await _updateSentenceCount(setId);
     notifyListeners();
   }
 
   Future<void> addSentences(String setId, List<Sentence> newSentences) async {
-    final sentences = await getSentences(setId);
+    final db = await DatabaseService.database;
+    final now = DateTime.now().toIso8601String();
+    final batch = db.batch();
     for (final s in newSentences) {
-      sentences.add(s.copyWith(id: const Uuid().v4()));
+      batch.insert('sentences', {
+        'id': const Uuid().v4(),
+        'set_id': setId,
+        'english': s.english,
+        'chinese': s.chinese,
+        'extra_words': jsonEncode(s.extraWords),
+        'created_at': now,
+      });
     }
-    await _saveSentences(setId, sentences);
+    await batch.commit(noResult: true);
     await _updateSentenceCount(setId);
     notifyListeners();
   }
@@ -646,18 +680,34 @@ class SentenceSetService extends ChangeNotifier {
     await prefs.setString(_prefsSetsKey, jsonEncode(jsonList));
   }
 
-  Future<void> _saveSentences(String setId, List<Sentence> sentences) async {
-    final prefs = await SharedPreferences.getInstance();
-    final jsonList = sentences.map((s) => s.toJson()).toList();
-    await prefs.setString(_prefsSentencesPrefix + setId, jsonEncode(jsonList));
-  }
-
   Future<void> _updateSentenceCount(String setId) async {
-    final sentences = await getSentences(setId);
+    final db = await DatabaseService.database;
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM sentences WHERE set_id = ?', [
+            setId,
+          ]),
+        ) ??
+        0;
     final index = _sets.indexWhere((s) => s.id == setId);
     if (index != -1) {
-      _sets[index] = _sets[index].copyWith(sentenceCount: sentences.length);
+      _sets[index] = _sets[index].copyWith(sentenceCount: count);
       await _saveSets();
     }
+  }
+
+  static Sentence _rowToSentence(Map<String, dynamic> row) {
+    return Sentence(
+      id: row['id'] as String,
+      setId: row['set_id'] as String,
+      english: row['english'] as String,
+      chinese: row['chinese'] as String,
+      extraWords:
+          row['extra_words'] == null || (row['extra_words'] as String).isEmpty
+          ? []
+          : (jsonDecode(row['extra_words'] as String) as List<dynamic>)
+                .map((e) => e as String)
+                .toList(),
+    );
   }
 }
