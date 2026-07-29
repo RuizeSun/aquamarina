@@ -45,6 +45,9 @@ class _LearningPageState extends State<LearningPage>
   int? _selectedQuizOption;
   bool _quizAnswered = false;
 
+  // 累计完成的"词×阶段"步数，用于进度条（只增不减）
+  int _completedSteps = 0;
+
   // 学习结果收集（word → easy/hard/forgot/mastered）
   final Map<String, String> _results = {};
 
@@ -110,9 +113,13 @@ class _LearningPageState extends State<LearningPage>
   Future<void> _loadBatchEntries(int batchStart) async {
     final batchWords = _getBatchWords(batchStart);
     final newEntries = await loadEntries(words: batchWords);
+    // loadEntries 返回的 key 相对于子列表（0,1,2...），需要加上 batchStart 偏移
+    final offsetEntries = newEntries.map(
+      (key, value) => MapEntry(key + batchStart, value),
+    );
     if (mounted) {
       setState(() {
-        _entryCache.addAll(newEntries);
+        _entryCache.addAll(offsetEntries);
       });
     }
   }
@@ -137,6 +144,7 @@ class _LearningPageState extends State<LearningPage>
   // ─── 学习阶段 ────────────────────────────────
 
   void _onLearnNext() {
+    _completedSteps++;
     if (_isLastWordInBatch) {
       setState(() {
         _currentPhase = 1;
@@ -210,6 +218,7 @@ class _LearningPageState extends State<LearningPage>
   }
 
   void _onQuizConfirm() {
+    _completedSteps++;
     if (_isLastWordInBatch) {
       setState(() {
         _currentPhase = 2;
@@ -239,7 +248,8 @@ class _LearningPageState extends State<LearningPage>
     _animController.forward(from: 0);
   }
 
-  void _onRecallSecondChoice(bool correct) {
+  Future<void> _onRecallSecondChoice(bool correct) async {
+    _completedSteps++;
     _animController.forward(from: 0);
     final word = _currentWord.trim().toLowerCase();
 
@@ -259,7 +269,7 @@ class _LearningPageState extends State<LearningPage>
       } else {
         final nextBatchStart = _currentBatchStart + _batchSize;
         // 先加载下一批的释义再切换
-        _loadBatchEntries(nextBatchStart);
+        await _loadBatchEntries(nextBatchStart);
         setState(() {
           _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
@@ -279,19 +289,20 @@ class _LearningPageState extends State<LearningPage>
     }
   }
 
-  void _markAsMastered() {
+  Future<void> _markAsMastered() async {
+    _completedSteps++;
     final word = _currentWord.trim().toLowerCase();
     _results[word] = 'mastered';
-    _advanceAfterResult();
+    await _advanceAfterResult();
   }
 
-  void _advanceAfterResult() {
+  Future<void> _advanceAfterResult() async {
     if (_isLastWordInBatch) {
       if (_currentBatchStart + _batchSize >= _words.length) {
         _finishAndSave();
       } else {
         final nextBatchStart = _currentBatchStart + _batchSize;
-        _loadBatchEntries(nextBatchStart);
+        await _loadBatchEntries(nextBatchStart);
         setState(() {
           _currentBatchStart = nextBatchStart;
           _currentPhase = 0;
@@ -345,12 +356,7 @@ class _LearningPageState extends State<LearningPage>
       child: Column(
         children: [
           TweenAnimationBuilder<double>(
-            tween: Tween(
-              begin: 0,
-              end:
-                  (_currentPhase * _words.length + _globalIndex + 1) /
-                  (_words.length * 3),
-            ),
+            tween: Tween(begin: 0, end: _completedSteps / (_words.length * 3)),
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
             builder: (context, value, _) =>
