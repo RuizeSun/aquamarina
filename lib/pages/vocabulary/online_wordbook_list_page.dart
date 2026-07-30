@@ -173,8 +173,10 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
         return;
       }
 
-      // 3. 创建词书
-      final bookName = _selectedBook!.titleZh;
+      // 3. 创建词书（名称冲突时自动加序号，类似 Windows 重命名）
+      final bookName = await WordBookService.generateUniqueBookTitle(
+        _selectedBook!.titleZh,
+      );
       final book = WordBook(
         title: bookName,
         description: _selectedBook!.titleEn,
@@ -185,9 +187,13 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
       // 4. 添加单词
       await WordBookService.addWordsToBook(bookId, wordsToImport);
 
+      // 提示信息中展示实际使用的名称（可能与原标题不同）
+      final displayName = bookName;
       if (mounted) {
         final skipped = _words.length - wordsToImport.length;
-        final parts = <String>['已导入词书 "$bookName"（${wordsToImport.length} 词'];
+        final parts = <String>[
+          '已导入词书 "$displayName"（${wordsToImport.length} 词',
+        ];
         if (skipped > 0) {
           parts.add('，$skipped 个已跳过');
         }

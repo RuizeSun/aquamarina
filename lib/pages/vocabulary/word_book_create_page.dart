@@ -89,10 +89,14 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
     }
 
     if (_isEditing) {
-      // 编辑模式：更新元数据
+      // 编辑模式：更新元数据（标题冲突时自动加序号，排除自身）
+      final uniqueTitle = await WordBookService.generateUniqueBookTitle(
+        title,
+        excludeId: widget.existingBook!.id,
+      );
       await WordBookService.updateBook(
         widget.existingBook!.copyWith(
-          title: title,
+          title: uniqueTitle,
           description: _descriptionController.text.trim(),
           author: _authorController.text.trim(),
           coverColor: _coverColor,
@@ -227,9 +231,11 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
       return;
     }
 
+    // 名称冲突时自动加序号（类似 Windows 重命名）
+    final uniqueTitle = await WordBookService.generateUniqueBookTitle(title);
     final bookId = await WordBookService.createBook(
       WordBook(
-        title: title,
+        title: uniqueTitle,
         description: _descriptionController.text.trim(),
         author: _authorController.text.trim(),
         coverColor: _coverColor,
@@ -240,7 +246,9 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
 
     if (mounted) {
       final skipped = words.length - wordsToImport.length;
-      final parts = <String>['成功创建词书 "$title"，共 ${wordsToImport.length} 个词'];
+      final parts = <String>[
+        '成功创建词书 "$uniqueTitle"，共 ${wordsToImport.length} 个词',
+      ];
       if (skipped > 0) {
         parts.add('（$skipped 个已学单词已跳过）');
       }

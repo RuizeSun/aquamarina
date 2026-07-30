@@ -19,6 +19,41 @@ class WordBookService {
     return WordBook.fromMap(maps.first);
   }
 
+  /// 获取所有词书标题
+  static Future<List<String>> getAllBookTitles() async {
+    final db = await DatabaseService.database;
+    final maps = await db.query('word_books', columns: ['title']);
+    return maps.map((m) => m['title'] as String).toList();
+  }
+
+  /// 生成不重复的词书标题（类似 Windows 重命名行为）
+  /// 例如：如果 "四级词汇" 已存在，则生成 "四级词汇 (2)"
+  ///       如果 "四级词汇 (2)" 也已存在，则生成 "四级词汇 (3)"
+  /// [excludeId] 可选，排除当前编辑的词书（避免自己的标题被当作冲突）
+  static Future<String> generateUniqueBookTitle(
+    String desiredTitle, {
+    int? excludeId,
+  }) async {
+    final allBooks = await getAllBooks();
+    final titleSet = allBooks
+        .where((b) => b.id != excludeId)
+        .map((b) => b.title)
+        .toSet();
+
+    if (!titleSet.contains(desiredTitle)) {
+      return desiredTitle;
+    }
+
+    int suffix = 2;
+    String candidate;
+    do {
+      candidate = '$desiredTitle ($suffix)';
+      suffix++;
+    } while (titleSet.contains(candidate));
+
+    return candidate;
+  }
+
   /// 创建词书
   static Future<int> createBook(WordBook book) async {
     final db = await DatabaseService.database;
