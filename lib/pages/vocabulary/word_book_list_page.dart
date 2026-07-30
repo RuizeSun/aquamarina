@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
 import '../../services/word_book_service.dart';
 import 'word_book_create_page.dart';
+import 'online_wordbook_list_page.dart';
 
 class WordBookListPage extends StatefulWidget {
   final int? currentBookId;
@@ -83,14 +84,33 @@ class _WordBookListPageState extends State<WordBookListPage> {
           : _books.isEmpty
           ? _buildEmptyState(theme, colorScheme)
           : _buildBookList(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final result = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(builder: (_) => const WordBookCreatePage()),
-          );
-          if (result == true) _loadBooks();
-        },
-        child: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'online',
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(
+                  builder: (_) => const OnlineWordbookListPage(),
+                ),
+              );
+              if (result == true) _loadBooks();
+            },
+            child: const Icon(Icons.cloud_download_outlined),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'create',
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(builder: (_) => const WordBookCreatePage()),
+              );
+              if (result == true) _loadBooks();
+            },
+            child: const Icon(Icons.add),
+          ),
+        ],
       ),
     );
   }
@@ -116,36 +136,9 @@ class _WordBookListPageState extends State<WordBookListPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              '点击右下角 "+" 按钮创建你的第一本词书',
+              '点击右下角 "+" 创建或从在线资源库中添加',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // 内置词书预留占位
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    Icons.construction_rounded,
-                    color: colorScheme.onSurfaceVariant,
-                    size: 20,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '内置词书即将推出',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
               ),
             ),
           ],
@@ -159,49 +152,8 @@ class _WordBookListPageState extends State<WordBookListPage> {
       onRefresh: _loadBooks,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 80),
-        itemCount: _books.length + 1, // +1 for built-in placeholder
-        itemBuilder: (context, index) {
-          if (index == _books.length) {
-            return _buildBuiltinPlaceholder();
-          }
-          return _buildBookCard(_books[index]);
-        },
-      ),
-    );
-  }
-
-  Widget _buildBuiltinPlaceholder() {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    return Card(
-      margin: const EdgeInsets.only(top: 12),
-      child: ListTile(
-        leading: Container(
-          width: 56,
-          height: 56,
-          decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Icon(
-            Icons.construction_rounded,
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-        title: Text(
-          '内置词书（即将推出）',
-          style: theme.textTheme.bodyMedium?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-        subtitle: Text(
-          '敬请期待',
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-        enabled: false,
+        itemCount: _books.length,
+        itemBuilder: (context, index) => _buildBookCard(_books[index]),
       ),
     );
   }

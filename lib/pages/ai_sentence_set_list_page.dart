@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/ai_sentence_set.dart';
 import '../services/ai_sentence_set_service.dart';
 import 'ai_sentence_set_edit_page.dart';
+import 'online_corpus_list_page.dart';
 
 class SentenceSetListPage extends StatefulWidget {
   final String? currentSetId;
@@ -36,13 +37,6 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
   }
 
   Future<void> _deleteSet(SentenceSet set) async {
-    if (set.isBuiltin) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('内置句式集不可删除')));
-      return;
-    }
-
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -91,14 +85,31 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
           : _sets.isEmpty
           ? _buildEmptyState(theme, colorScheme)
           : _buildSetList(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final result = await Navigator.of(context).push<bool>(
-            MaterialPageRoute(builder: (_) => const SentenceSetEditPage()),
-          );
-          if (result == true) _loadSets();
-        },
-        child: const Icon(Icons.add),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'online',
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(builder: (_) => const OnlineCorpusListPage()),
+              );
+              if (result == true) _loadSets();
+            },
+            child: const Icon(Icons.cloud_download_outlined),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton(
+            heroTag: 'create',
+            onPressed: () async {
+              final result = await Navigator.of(context).push<bool>(
+                MaterialPageRoute(builder: (_) => const SentenceSetEditPage()),
+              );
+              if (result == true) _loadSets();
+            },
+            child: const Icon(Icons.add),
+          ),
+        ],
       ),
     );
   }
@@ -124,7 +135,7 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
             ),
             const SizedBox(height: 8),
             Text(
-              '点击右下角 "+" 按钮创建你的第一个句式集',
+              '点击右下角 "+" 创建或从在线资源库中添加',
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -171,15 +182,10 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
                 width: 56,
                 height: 56,
                 decoration: BoxDecoration(
-                  color: set.isBuiltin
-                      ? colorScheme.primary
-                      : Color(set.hashCode).withValues(alpha: 0.8),
+                  color: Color(set.hashCode).withValues(alpha: 0.8),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(
-                  set.isBuiltin ? Icons.auto_awesome : Icons.format_quote,
-                  color: Colors.white,
-                ),
+                child: const Icon(Icons.format_quote, color: Colors.white),
               ),
               const SizedBox(width: 16),
 
@@ -188,35 +194,11 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Text(
-                          set.name,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        if (set.isBuiltin) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '内置',
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: colorScheme.onPrimaryContainer,
-                                fontSize: 10,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
+                    Text(
+                      set.name,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     if (set.description != null && set.description!.isNotEmpty)
                       Padding(
@@ -265,21 +247,20 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
                 ),
 
               // 编辑按钮
-              if (!set.isBuiltin)
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  onPressed: () async {
-                    final result = await Navigator.of(context).push<bool>(
-                      MaterialPageRoute(
-                        builder: (_) => SentenceSetEditPage(
-                          existingSet: set,
-                          setService: _setService,
-                        ),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined),
+                onPressed: () async {
+                  final result = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
+                      builder: (_) => SentenceSetEditPage(
+                        existingSet: set,
+                        setService: _setService,
                       ),
-                    );
-                    if (result == true) _loadSets();
-                  },
-                ),
+                    ),
+                  );
+                  if (result == true) _loadSets();
+                },
+              ),
             ],
           ),
         ),

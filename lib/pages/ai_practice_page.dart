@@ -229,7 +229,50 @@ class _AiPracticePageState extends State<AiPracticePage> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (_selectedSet == null) {
+      return _buildNoSetState(theme, colorScheme);
+    }
+
     return _buildDashboard(theme, colorScheme);
+  }
+
+  Widget _buildNoSetState(ThemeData theme, ColorScheme colorScheme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.format_quote_rounded,
+              size: 80,
+              color: colorScheme.primary.withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '还没有句型集',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '请先创建或从在线资源库中添加一个句型集',
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _openSetSelector,
+              icon: const Icon(Icons.add),
+              label: const Text('添加句型集'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ===== 仪表盘 =====
@@ -257,18 +300,12 @@ class _AiPracticePageState extends State<AiPracticePage> {
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          color: _selectedSet?.isBuiltin == true
-                              ? colorScheme.primary
-                              : colorScheme.secondaryContainer,
+                          color: colorScheme.secondaryContainer,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
-                          _selectedSet?.isBuiltin == true
-                              ? Icons.auto_awesome
-                              : Icons.format_quote,
-                          color: _selectedSet?.isBuiltin == true
-                              ? Colors.white
-                              : colorScheme.onSecondaryContainer,
+                          Icons.format_quote,
+                          color: colorScheme.onSecondaryContainer,
                         ),
                       ),
                       const SizedBox(width: 12),
