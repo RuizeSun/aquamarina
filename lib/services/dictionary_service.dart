@@ -206,6 +206,27 @@ class DictionaryService {
     return results;
   }
 
+  /// 批量精确查询英英/英汉词典
+  /// 使用 WHERE word IN (...) 一次查询多个单词，替代逐词循环
+  static Future<Map<String, WordEntry>> searchEnExactBatch(
+    List<String> words,
+  ) async {
+    if (words.isEmpty) return {};
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toSet().toList();
+    final db = await enDb;
+    final placeholders = cleaned.map((_) => '?').join(',');
+    final maps = await db.rawQuery(
+      'SELECT * FROM dictionary WHERE word IN ($placeholders) COLLATE NOCASE',
+      cleaned,
+    );
+    final result = <String, WordEntry>{};
+    for (final m in maps) {
+      final entry = WordEntry.fromMap(m);
+      result[entry.word.toLowerCase()] = entry;
+    }
+    return result;
+  }
+
   /// 统一精确搜索（同时查询两个词典）
   static Future<CombinedResult> searchAllExact(String word) async {
     final trimmed = word.trim();

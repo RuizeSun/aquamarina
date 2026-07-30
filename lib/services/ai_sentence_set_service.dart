@@ -17,6 +17,31 @@ class SentenceSetService extends ChangeNotifier {
   List<SentenceSet> get sets => List.unmodifiable(_sets);
   bool get loaded => _loaded;
 
+  /// 获取所有句式集名称
+  List<String> getAllSetNames() {
+    return _sets.map((s) => s.name).toList();
+  }
+
+  /// 生成不重复的句式集名称（类似 Windows 重命名行为）
+  /// 例如：如果 "日常句型" 已存在，则生成 "日常句型 (2)"
+  ///       如果 "日常句型 (2)" 也已存在，则生成 "日常句型 (3)"
+  String generateUniqueSetName(String desiredName) {
+    final nameSet = _sets.map((s) => s.name).toSet();
+
+    if (!nameSet.contains(desiredName)) {
+      return desiredName;
+    }
+
+    int suffix = 2;
+    String candidate;
+    do {
+      candidate = '$desiredName ($suffix)';
+      suffix++;
+    } while (nameSet.contains(candidate));
+
+    return candidate;
+  }
+
   // ===== 加载 =====
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();

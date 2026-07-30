@@ -72,9 +72,11 @@ class _SentenceSetEditPageState extends State<SentenceSetEditPage> {
     }
 
     if (_isEditing) {
+      // 编辑模式：标题冲突时排除自身
+      final uniqueName = _setService.generateUniqueSetName(name);
       await _setService.updateSet(
         widget.existingSet!.copyWith(
-          name: name,
+          name: uniqueName,
           description: _descriptionController.text.trim(),
         ),
       );
@@ -85,9 +87,11 @@ class _SentenceSetEditPageState extends State<SentenceSetEditPage> {
         Navigator.of(context).pop(true);
       }
     } else {
+      // 创建模式：名称冲突时自动加序号
+      final uniqueName = _setService.generateUniqueSetName(name);
       await _setService.addSet(
         SentenceSet(
-          name: name,
+          name: uniqueName,
           description: _descriptionController.text.trim(),
         ),
       );
@@ -128,10 +132,11 @@ class _SentenceSetEditPageState extends State<SentenceSetEditPage> {
         return;
       }
       setId = const Uuid().v4();
+      final uniqueName = _setService.generateUniqueSetName(tempName);
       await _setService.addSet(
         SentenceSet(
           id: setId,
-          name: tempName,
+          name: uniqueName,
           description: _descriptionController.text.trim(),
         ),
       );

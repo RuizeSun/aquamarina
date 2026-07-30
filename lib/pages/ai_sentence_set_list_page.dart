@@ -261,6 +261,11 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
                   if (result == true) _loadSets();
                 },
               ),
+              // 删除按钮
+              IconButton(
+                icon: Icon(Icons.delete_outline, color: colorScheme.error),
+                onPressed: () => _deleteSet(set),
+              ),
             ],
           ),
         ),
