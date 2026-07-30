@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
 import '../../services/online_assets_service.dart';
 import '../../services/word_book_service.dart';
+import '../../services/dictionary_service.dart';
 
 class OnlineWordbookListPage extends StatefulWidget {
   const OnlineWordbookListPage({super.key});
@@ -112,7 +113,27 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
     setState(() => _isImporting = true);
 
     try {
-      // 1. 创建词书
+      // 1. 过滤掉词典查不到的单词
+      final validWords = <String>[];
+      for (final word in _words) {
+        final entry = await DictionaryService.searchEnExact(
+          word.trim().toLowerCase(),
+        );
+        if (entry != null) {
+          validWords.add(word.trim().toLowerCase());
+        }
+      }
+
+      if (validWords.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('该词书中所有单词本地词典均无法识别，导入取消')),
+          );
+        }
+        return;
+      }
+
+      // 2. 创建词书
       final bookName = _selectedBook!.titleZh;
       final book = WordBook(
         title: bookName,
@@ -121,15 +142,17 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
       );
       final bookId = await WordBookService.createBook(book);
 
-      // 2. 添加单词
-      if (_words.isNotEmpty) {
-        await WordBookService.addWordsToBook(bookId, _words);
-      }
+      // 3. 添加有效单词
+      await WordBookService.addWordsToBook(bookId, validWords);
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已成功导入词书 "$bookName"（${_words.length} 词）')),
-        );
+        final skipped = _words.length - validWords.length;
+        final msg = skipped > 0
+            ? '已导入词书 "$bookName"（${validWords.length} 词，$skipped 个生僻词已跳过）'
+            : '已成功导入词书 "$bookName"（${validWords.length} 词）';
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
         Navigator.of(context).pop(true);
       }
     } catch (e) {
