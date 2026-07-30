@@ -1,115 +1,119 @@
 name: Flutter Build (Android + Windows)
 
 on:
-  push:
-    branches: [ main, master ]
-    tags:
-      - '*'    
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+    push:
+        branches: [main, master]
+        tags:
+            - "*"
+    pull_request:
+        branches: [main, master]
+    workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: android
-          - os: windows-latest
-            platform: windows
-      fail-fast: false
+    build:
+        runs-on: ${{ matrix.os }}
+        # ----- 新增条件：只对包含 (build-request) 的 commit/PR 或 tag 触发 -----
+        if: |
+            (github.event_name == 'push' && contains(github.event.head_commit.message, '(build-request)')) ||
+            (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '(build-request)')) ||
+            github.event_name == 'workflow_dispatch' ||
+            startsWith(github.ref, 'refs/tags/')
+        strategy:
+            matrix:
+                include:
+                    - os: ubuntu-latest
+                      platform: android
+                    - os: windows-latest
+                      platform: windows
+            fail-fast: false
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
 
-      - name: Cache Pub packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pub-
+            - name: Cache Pub packages
+              uses: actions/cache@v4
+              with:
+                  path: ~/.pub-cache
+                  key: ${{ runner.os }}-pub-${{ hashFiles('**/pubspec.yaml') }}
+                  restore-keys: |
+                      ${{ runner.os }}-pub-
+            - name: Set up JDK 17
+              if: matrix.platform == 'android'
+              uses: actions/setup-java@v4
+              with:
+                  distribution: "temurin"
+                  java-version: "17"
 
-      - name: Set up JDK 17
-        if: matrix.platform == 'android'
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+            - name: Set up Flutter
+              uses: subosito/flutter-action@v2
+              with:
+                  flutter-version: "3.44.8"
+                  channel: "stable"
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.44.8'
-          channel: 'stable'
+            - name: Enable Windows desktop support
+              if: matrix.platform == 'windows'
+              run: flutter config --enable-windows-desktop
 
-      - name: Enable Windows desktop support
-        if: matrix.platform == 'windows'
-        run: flutter config --enable-windows-desktop
+            - name: Install dependencies
+              run: flutter pub get
 
-      - name: Install dependencies
-        run: flutter pub get
+            # ========== Android 构建（分架构） ==========
+            - name: Build Android APK (split per ABI)
+              if: matrix.platform == 'android'
+              run: flutter build apk --release --split-per-abi
 
-      # ========== Android 构建（分架构） ==========
-      - name: Build Android APK (split per ABI)
-        if: matrix.platform == 'android'
-        run: flutter build apk --release --split-per-abi
+            - name: Sign Android APKs
+              if: matrix.platform == 'android'
+              uses: r0adkll/sign-android-release@v1.0.4
+              with:
+                  releaseDirectory: build/app/outputs/apk/release
+                  signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
+                  alias: ${{ secrets.KEY_ALIAS }}
+                  keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+                  keyPassword: ${{ secrets.KEY_PASSWORD }}
+              env:
+                  BUILD_TOOLS_VERSION: "34.0.0"
 
-      - name: Sign Android APKs
-        if: matrix.platform == 'android'
-        uses: r0adkll/sign-android-release@v1.0.4
-        with:
-          releaseDirectory: build/app/outputs/apk/release
-          signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
-          alias: ${{ secrets.KEY_ALIAS }}
-          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
-        env:
-          BUILD_TOOLS_VERSION: "34.0.0"
+            - name: Upload signed APKs (as artifact)
+              if: matrix.platform == 'android'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: android-apk-signed
+                  path: build/app/outputs/apk/release/*.apk
 
-      - name: Upload signed APKs (as artifact)
-        if: matrix.platform == 'android'
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-apk-signed
-          path: build/app/outputs/apk/release/*.apk
+            # ========== Windows 构建 ==========
+            - name: Build Windows executable
+              if: matrix.platform == 'windows'
+              run: flutter build windows --release
 
-      # ========== Windows 构建 ==========
-      - name: Build Windows executable
-        if: matrix.platform == 'windows'
-        run: flutter build windows --release
+            - name: Upload Windows executable (as artifact)
+              if: matrix.platform == 'windows'
+              uses: actions/upload-artifact@v4
+              with:
+                  name: windows-app
+                  path: build/windows/x64/runner/Release/
 
-      - name: Upload Windows executable (as artifact)
-        if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-app
-          path: build/windows/x64/runner/Release/
+    # ========== 发布到 GitHub Release ==========
+    release:
+        needs: build
+        runs-on: ubuntu-latest
+        # 保持原样：只有 tag 才创建 Release（且 build 必须成功）
+        if: startsWith(github.ref, 'refs/tags/')
+        steps:
+            - name: Download all artifacts
+              uses: actions/download-artifact@v4
+              with:
+                  path: release-artifacts
 
-  # ========== 发布到 GitHub Release ==========
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
+            - name: Zip Windows app
+              run: zip -r windows-app.zip release-artifacts/windows-app
 
-      # ===== 打包 Windows 文件夹为 zip =====
-      - name: Zip Windows app
-        run: zip -r windows-app.zip release-artifacts/windows-app
-
-      # ===== 上传到 Release =====
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release-artifacts/android-apk-signed/*.apk
-            windows-app.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Upload to Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: |
+                      release-artifacts/android-apk-signed/*.apk
+                      windows-app.zip
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
