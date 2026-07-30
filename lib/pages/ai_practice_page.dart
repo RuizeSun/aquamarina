@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
+import '../services/ai_profile_service.dart';
 import 'ai_sentence_set_list_page.dart';
 import 'ai_practice_session_page.dart';
 
@@ -108,10 +110,91 @@ class _AiPracticePageState extends State<AiPracticePage> {
     }
   }
 
+  // ===== 隐私政策检查（仅对 Aquamarina 官方配置） =====
+  static const String _privacyPolicyKeyPrefix = 'privacy_policy_accepted_';
+  static const String _aquamarinaOfficialHost = 'aquamarina.78go.work';
+
+  /// 检查是否需要弹出隐私政策
+  /// 返回 true 表示已同意或无需检查，false 表示用户不同意已退出
+  Future<bool> _checkPrivacyPolicy() async {
+    final profileService = AiProfileService();
+    await profileService.load();
+    final profile = profileService.defaultProfile;
+
+    // 非 Aquamarina 官方配置，无需检查隐私政策
+    if (profile == null ||
+        !profile.isAquamarina ||
+        !profile.baseUrl.contains(_aquamarinaOfficialHost)) {
+      return true;
+    }
+
+    // 检查是否已同意
+    final prefs = await SharedPreferences.getInstance();
+    final accepted =
+        prefs.getBool('$_privacyPolicyKeyPrefix${profile.id}') ?? false;
+    if (accepted) return true;
+
+    // 未同意，弹出对话框
+    if (!mounted) return false;
+    final agreed = await _showPrivacyPolicyDialog();
+    if (agreed) {
+      await prefs.setBool('$_privacyPolicyKeyPrefix${profile.id}', true);
+      return true;
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已退出句型练习')));
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _showPrivacyPolicyDialog() async {
+    final result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('隐私政策'),
+          content: SingleChildScrollView(
+            child: Text('''
+本 App 内置的句型练习功能，需要将您提交的英文译文与系统内置的标准答案进行智能比对。在此过程中，您的设备会向我们的服务器传输与 App 功能相关的必要数据。
+
+为实现更精准的语义理解和纠错反馈，我们采用第三方大语言模型 API 进行辅助判断，所有发往该模型的请求均由我们的服务器统一拼接生成标准化提示词，您的译文本身不会作为独立语料被直接传输或暴露给第三方模型用于训练或其他任何目的。我们所中转调用的所有大语言模型均已按照国家相关规定完成算法备案，模型服务提供方均为合法备案的合规服务商；相关请求经由部署于中华人民共和国香港特别行政区的服务器进行技术中转处理，全程不会将任何数据转递至未备案或未经合规审查的境外模型服务。
+
+为保障服务质量、进行必要的故障排查以及在发生争议或合规审查时能够提供有效证据，我们会记录每次请求所涉及的英文原句、中文释义、您提交的译文以及模型返回的比对结果，上述记录采取加密存储方式，仅用于内部审计与纠纷核查，不会用于任何其他商业目的或主动向第三方披露。我们同时记录发起请求的IP地址、请求时间及API调用状态码，该IP信息仅用于频率限制和异常流量识别，不会与您的译文内容进行任何形式的关联分析或用于用户画像。
+
+上述全部记录仅在有权机关依法出具正式法律文书要求配合时，经核实对方身份与文书真实性后依法提供；在未收到上述法定要求前，我们不会主动调取或查阅任何用户的译文内容记录。本功能传输的所有练习内容均不包含您的用户ID、设备指纹或其他可定位至您个人身份的信息，因此上述记录本身亦不具有个人识别性。记录的保留期限为三十日，超出期限后系统将自动执行不可逆的删除操作。
+
+如您不同意上述数据处理方式，我们提供替代方案供您选择：您可以选择在本地部署开源大语言模型以实现完全离线比对，亦可选择使用您自行注册的国内合规平台接口进行配置，此时您的请求将直接发往您所指定的平台，不再经由我们的服务器中转，我们亦不会记录任何相关数据。
+
+您随时可以在设置中撤销隐私政策的授权。撤回同意不影响撤回前已合法进行的处理活动。'''),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('不同意'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('同意并继续'),
+            ),
+          ],
+        );
+      },
+    );
+    return result ?? false;
+  }
+
   // ===== 开始句式集练习 =====
   Future<void> _startPractice({required bool isWrongBook}) async {
     // 重新加载最新设置（确保设置页的修改已生效）
     await _loadSettings();
+
+    // 隐私政策检查（Aquamarina 官方配置首次使用时）
+    final canProceed = await _checkPrivacyPolicy();
+    if (!canProceed) return;
 
     if (isWrongBook) {
       final wrongSentences = await _sentenceService.getWrongSentences();
