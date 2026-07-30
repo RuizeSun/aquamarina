@@ -125,6 +125,32 @@ class WordBookService {
     );
   }
 
+  /// 过滤已学单词：查询 user_word_records 表，区分已学与未学
+  /// 返回 { learnedWords, newWords }
+  static Future<({List<String> learnedWords, List<String> newWords})>
+  filterLearnedWords(List<String> words) async {
+    final db = await DatabaseService.database;
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toList();
+
+    final placeholders = cleaned.map((_) => '?').join(',');
+    final maps = await db.rawQuery(
+      'SELECT word FROM user_word_records WHERE word IN ($placeholders)',
+      cleaned,
+    );
+    final learnedSet = maps.map((m) => m['word'] as String).toSet();
+
+    final learnedWords = <String>[];
+    final newWords = <String>[];
+    for (final w in cleaned) {
+      if (learnedSet.contains(w)) {
+        learnedWords.add(w);
+      } else {
+        newWords.add(w);
+      }
+    }
+    return (learnedWords: learnedWords, newWords: newWords);
+  }
+
   /// 导入词汇：解析文本（一行一词），查本地词典，返回结果
   static Future<ImportResult> importWords(String text) async {
     final lines = text

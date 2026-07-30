@@ -133,7 +133,48 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
         return;
       }
 
-      // 2. 创建词书
+      // 2. 检测已学单词，让用户选择是否过滤
+      final filtered = await WordBookService.filterLearnedWords(validWords);
+      List<String> wordsToImport;
+      if (filtered.learnedWords.isNotEmpty) {
+        if (!mounted) return;
+        final shouldFilter = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('发现已学单词'),
+            content: Text(
+              '该词书中有 ${filtered.learnedWords.length} 个单词已学过'
+              '（${filtered.newWords.isEmpty ? "全部已学" : "其中 ${filtered.newWords.length} 个未学"}），'
+              '是否过滤掉已学单词？',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('不过滤'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('过滤'),
+              ),
+            ],
+          ),
+        );
+        if (shouldFilter == null) return;
+        wordsToImport = shouldFilter ? filtered.newWords : validWords;
+      } else {
+        wordsToImport = validWords;
+      }
+
+      if (wordsToImport.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('所有有效单词都已学过，无需导入')));
+        }
+        return;
+      }
+
+      // 3. 创建词书
       final bookName = _selectedBook!.titleZh;
       final book = WordBook(
         title: bookName,
@@ -142,17 +183,19 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
       );
       final bookId = await WordBookService.createBook(book);
 
-      // 3. 添加有效单词
-      await WordBookService.addWordsToBook(bookId, validWords);
+      // 4. 添加单词
+      await WordBookService.addWordsToBook(bookId, wordsToImport);
 
       if (mounted) {
-        final skipped = _words.length - validWords.length;
-        final msg = skipped > 0
-            ? '已导入词书 "$bookName"（${validWords.length} 词，$skipped 个生僻词已跳过）'
-            : '已成功导入词书 "$bookName"（${validWords.length} 词）';
+        final skipped = _words.length - wordsToImport.length;
+        final parts = <String>['已导入词书 "$bookName"（${wordsToImport.length} 词'];
+        if (skipped > 0) {
+          parts.add('，$skipped 个已跳过');
+        }
+        parts.add('）');
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
+        ).showSnackBar(SnackBar(content: Text(parts.join())));
         Navigator.of(context).pop(true);
       }
     } catch (e) {
