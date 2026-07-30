@@ -58,13 +58,15 @@ jobs:
 
       - name: Sign Android APKs
         if: matrix.platform == 'android'
-        uses: r0adkll/sign-android-release@v1
+        uses: r0adkll/sign-android-release@v1.0.4  # 使用较新版本
         with:
           releaseDirectory: build/app/outputs/apk/release
           signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
           alias: ${{ secrets.KEY_ALIAS }}
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"  # 关键修复：指定当前可用的 build-tools 版本
 
       - name: Upload signed APKs
         if: matrix.platform == 'android'
@@ -73,7 +75,7 @@ jobs:
           name: android-apk-signed
           path: build/app/outputs/apk/release/*.apk
 
-      # ========== Windows 构建（不变） ==========
+      # ========== Windows 构建 ==========
       - name: Build Windows executable
         if: matrix.platform == 'windows'
         run: flutter build windows --release
