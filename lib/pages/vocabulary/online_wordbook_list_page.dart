@@ -113,14 +113,13 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
     setState(() => _isImporting = true);
 
     try {
-      // 1. 过滤掉词典查不到的单词
+      // 1. 批量查询词典，只保留在词典中找到的单词
+      final foundMap = await DictionaryService.searchEnExactBatch(_words);
       final validWords = <String>[];
       for (final word in _words) {
-        final entry = await DictionaryService.searchEnExact(
-          word.trim().toLowerCase(),
-        );
-        if (entry != null) {
-          validWords.add(word.trim().toLowerCase());
+        final cleaned = word.trim().toLowerCase();
+        if (foundMap.containsKey(cleaned)) {
+          validWords.add(cleaned);
         }
       }
 

@@ -62,24 +62,26 @@ class WordBookService {
     return maps.map((m) => m['word'] as String).toList();
   }
 
-  /// 批量添加单词到词书（去重）
+  /// 批量添加单词到词书（去重，使用事务加速）
   static Future<int> addWordsToBook(int bookId, List<String> words) async {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
     int added = 0;
 
-    for (final word in words) {
-      try {
-        await db.insert('word_book_entries', {
-          'book_id': bookId,
-          'word': word.trim().toLowerCase(),
-          'added_at': now,
-        });
-        added++;
-      } catch (e) {
-        // UNIQUE 约束冲突，跳过
+    await db.transaction((txn) async {
+      for (final word in words) {
+        try {
+          await txn.insert('word_book_entries', {
+            'book_id': bookId,
+            'word': word.trim().toLowerCase(),
+            'added_at': now,
+          });
+          added++;
+        } catch (e) {
+          // UNIQUE 约束冲突，跳过
+        }
       }
-    }
+    });
 
     // 更新词书词数
     final count =
@@ -151,7 +153,7 @@ class WordBookService {
     return (learnedWords: learnedWords, newWords: newWords);
   }
 
-  /// 导入词汇：解析文本（一行一词），查本地词典，返回结果
+  /// 导入词汇：解析文本（一行一词），批量查本地词典，返回结果
   static Future<ImportResult> importWords(String text) async {
     final lines = text
         .split('\n')
@@ -159,13 +161,14 @@ class WordBookService {
         .where((l) => l.isNotEmpty)
         .toList();
 
-    final found = <String>{};
-    final missing = <String>[];
+    // 批量查询词典，一次 SQL 查出所有匹配的单词
+    final foundMap = await DictionaryService.searchEnExactBatch(lines);
 
+    final found = <String>[];
+    final missing = <String>[];
     for (final word in lines) {
       final cleaned = word.toLowerCase().trim();
-      final entry = await DictionaryService.searchEnExact(cleaned);
-      if (entry != null) {
+      if (foundMap.containsKey(cleaned)) {
         found.add(cleaned);
       } else {
         missing.add(cleaned);
