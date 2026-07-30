@@ -58,7 +58,7 @@ jobs:
 
       - name: Sign Android APKs
         if: matrix.platform == 'android'
-        uses: r0adkll/sign-android-release@v1.0.4  # 使用较新版本
+        uses: r0adkll/sign-android-release@v1.0.4
         with:
           releaseDirectory: build/app/outputs/apk/release
           signingKeyBase64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -66,9 +66,9 @@ jobs:
           keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
           keyPassword: ${{ secrets.KEY_PASSWORD }}
         env:
-          BUILD_TOOLS_VERSION: "34.0.0"  # 关键修复：指定当前可用的 build-tools 版本
+          BUILD_TOOLS_VERSION: "34.0.0"
 
-      - name: Upload signed APKs
+      - name: Upload signed APKs (as artifact)
         if: matrix.platform == 'android'
         uses: actions/upload-artifact@v4
         with:
@@ -80,9 +80,34 @@ jobs:
         if: matrix.platform == 'windows'
         run: flutter build windows --release
 
-      - name: Upload Windows executable
+      - name: Upload Windows executable (as artifact)
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: windows-app
           path: build/windows/x64/runner/Release/
+
+  # ========== 发布到 GitHub Release ==========
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      # ===== 打包 Windows 文件夹为 zip =====
+      - name: Zip Windows app
+        run: zip -r windows-app.zip release-artifacts/windows-app
+
+      # ===== 上传到 Release =====
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/android-apk-signed/*.apk
+            windows-app.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
