@@ -89,10 +89,14 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
     }
 
     if (_isEditing) {
-      // 编辑模式：更新元数据
+      // 编辑模式：更新元数据（标题冲突时自动加序号，排除自身）
+      final uniqueTitle = await WordBookService.generateUniqueBookTitle(
+        title,
+        excludeId: widget.existingBook!.id,
+      );
       await WordBookService.updateBook(
         widget.existingBook!.copyWith(
-          title: title,
+          title: uniqueTitle,
           description: _descriptionController.text.trim(),
           author: _authorController.text.trim(),
           coverColor: _coverColor,
@@ -103,6 +107,7 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
       if (importText.isNotEmpty) {
         final result = await WordBookService.importWords(importText);
 
+        List<String> wordsToAdd;
         if (mounted && result.missingWords.isNotEmpty) {
           final finalWords = await showDialog<List<String>>(
             context: context,
@@ -113,17 +118,22 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
             ),
           );
 
-          if (finalWords != null && widget.existingBook!.id != null) {
+          if (finalWords == null) return;
+          wordsToAdd = finalWords;
+        } else {
+          wordsToAdd = result.foundWords;
+        }
+
+        // 过滤已学单词（带用户确认）
+        if (widget.existingBook!.id != null) {
+          final filtered = await _filterLearnedWordsWithDialog(wordsToAdd);
+          if (filtered == null) return;
+          if (filtered.isNotEmpty) {
             await WordBookService.addWordsToBook(
               widget.existingBook!.id!,
-              finalWords,
+              filtered,
             );
           }
-        } else if (widget.existingBook!.id != null) {
-          await WordBookService.addWordsToBook(
-            widget.existingBook!.id!,
-            result.foundWords,
-          );
         }
       }
 
@@ -173,22 +183,78 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
     }
   }
 
+  /// 弹窗让用户选择是否过滤已学单词，返回用户确认后的单词列表
+  Future<List<String>?> _filterLearnedWordsWithDialog(
+    List<String> words,
+  ) async {
+    if (words.isEmpty) return words;
+    final filtered = await WordBookService.filterLearnedWords(words);
+    if (filtered.learnedWords.isEmpty) return words;
+
+    if (!mounted) return null;
+    final shouldFilter = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('发现已学单词'),
+        content: Text(
+          '待导入的词汇中有 ${filtered.learnedWords.length} 个单词已学过'
+          '（${filtered.newWords.isEmpty ? "全部已学" : "其中 ${filtered.newWords.length} 个未学"}），'
+          '是否过滤掉已学单词？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('不过滤'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('过滤'),
+          ),
+        ],
+      ),
+    );
+    if (shouldFilter == null) return null;
+    return shouldFilter ? filtered.newWords : words;
+  }
+
   Future<void> _createBookAndImport(String title, List<String> words) async {
+    // 过滤已学单词（带用户确认）
+    final wordsToImport = await _filterLearnedWordsWithDialog(words);
+    if (wordsToImport == null) return;
+    if (wordsToImport.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('所有有效单词都已学过，无需创建词书')));
+        Navigator.of(context).pop(true);
+      }
+      return;
+    }
+
+    // 名称冲突时自动加序号（类似 Windows 重命名）
+    final uniqueTitle = await WordBookService.generateUniqueBookTitle(title);
     final bookId = await WordBookService.createBook(
       WordBook(
-        title: title,
+        title: uniqueTitle,
         description: _descriptionController.text.trim(),
         author: _authorController.text.trim(),
         coverColor: _coverColor,
       ),
     );
 
-    await WordBookService.addWordsToBook(bookId, words);
+    await WordBookService.addWordsToBook(bookId, wordsToImport);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('成功创建词书 "$title"，共 ${words.length} 个词')),
-      );
+      final skipped = words.length - wordsToImport.length;
+      final parts = <String>[
+        '成功创建词书 "$uniqueTitle"，共 ${wordsToImport.length} 个词',
+      ];
+      if (skipped > 0) {
+        parts.add('（$skipped 个已学单词已跳过）');
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(parts.join())));
       Navigator.of(context).pop(true);
     }
   }

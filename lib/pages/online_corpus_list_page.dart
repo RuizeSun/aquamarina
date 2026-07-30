@@ -115,8 +115,8 @@ class _OnlineCorpusListPageState extends State<OnlineCorpusListPage> {
     setState(() => _isImporting = true);
 
     try {
-      // 1. 创建句式集
-      final setName = _selectedSet!.titleZh;
+      // 1. 创建句式集（名称冲突时自动加序号，类似 Windows 重命名）
+      final setName = _setService.generateUniqueSetName(_selectedSet!.titleZh);
       final newSet = SentenceSet(
         name: setName,
         description: _selectedSet!.titleEn,

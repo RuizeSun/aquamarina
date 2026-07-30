@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
 import '../../services/online_assets_service.dart';
 import '../../services/word_book_service.dart';
+import '../../services/dictionary_service.dart';
 
 class OnlineWordbookListPage extends StatefulWidget {
   const OnlineWordbookListPage({super.key});
@@ -112,8 +113,70 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
     setState(() => _isImporting = true);
 
     try {
-      // 1. 创建词书
-      final bookName = _selectedBook!.titleZh;
+      // 1. 批量查询词典，只保留在词典中找到的单词
+      final foundMap = await DictionaryService.searchEnExactBatch(_words);
+      final validWords = <String>[];
+      for (final word in _words) {
+        final cleaned = word.trim().toLowerCase();
+        if (foundMap.containsKey(cleaned)) {
+          validWords.add(cleaned);
+        }
+      }
+
+      if (validWords.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('该词书中所有单词本地词典均无法识别，导入取消')),
+          );
+        }
+        return;
+      }
+
+      // 2. 检测已学单词，让用户选择是否过滤
+      final filtered = await WordBookService.filterLearnedWords(validWords);
+      List<String> wordsToImport;
+      if (filtered.learnedWords.isNotEmpty) {
+        if (!mounted) return;
+        final shouldFilter = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('发现已学单词'),
+            content: Text(
+              '该词书中有 ${filtered.learnedWords.length} 个单词已学过'
+              '（${filtered.newWords.isEmpty ? "全部已学" : "其中 ${filtered.newWords.length} 个未学"}），'
+              '是否过滤掉已学单词？',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('不过滤'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('过滤'),
+              ),
+            ],
+          ),
+        );
+        if (shouldFilter == null) return;
+        wordsToImport = shouldFilter ? filtered.newWords : validWords;
+      } else {
+        wordsToImport = validWords;
+      }
+
+      if (wordsToImport.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('所有有效单词都已学过，无需导入')));
+        }
+        return;
+      }
+
+      // 3. 创建词书（名称冲突时自动加序号，类似 Windows 重命名）
+      final bookName = await WordBookService.generateUniqueBookTitle(
+        _selectedBook!.titleZh,
+      );
       final book = WordBook(
         title: bookName,
         description: _selectedBook!.titleEn,
@@ -121,15 +184,23 @@ class _OnlineWordbookListPageState extends State<OnlineWordbookListPage> {
       );
       final bookId = await WordBookService.createBook(book);
 
-      // 2. 添加单词
-      if (_words.isNotEmpty) {
-        await WordBookService.addWordsToBook(bookId, _words);
-      }
+      // 4. 添加单词
+      await WordBookService.addWordsToBook(bookId, wordsToImport);
 
+      // 提示信息中展示实际使用的名称（可能与原标题不同）
+      final displayName = bookName;
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已成功导入词书 "$bookName"（${_words.length} 词）')),
-        );
+        final skipped = _words.length - wordsToImport.length;
+        final parts = <String>[
+          '已导入词书 "$displayName"（${wordsToImport.length} 词',
+        ];
+        if (skipped > 0) {
+          parts.add('，$skipped 个已跳过');
+        }
+        parts.add('）');
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(parts.join())));
         Navigator.of(context).pop(true);
       }
     } catch (e) {

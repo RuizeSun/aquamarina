@@ -275,6 +275,11 @@ class _WordBookListPageState extends State<WordBookListPage> {
                   if (result == true) _loadBooks();
                 },
               ),
+              // 删除按钮
+              IconButton(
+                icon: Icon(Icons.delete_outline, color: colorScheme.error),
+                onPressed: () => _deleteBook(book),
+              ),
             ],
           ),
         ),

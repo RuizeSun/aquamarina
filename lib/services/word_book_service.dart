@@ -19,6 +19,41 @@ class WordBookService {
     return WordBook.fromMap(maps.first);
   }
 
+  /// 获取所有词书标题
+  static Future<List<String>> getAllBookTitles() async {
+    final db = await DatabaseService.database;
+    final maps = await db.query('word_books', columns: ['title']);
+    return maps.map((m) => m['title'] as String).toList();
+  }
+
+  /// 生成不重复的词书标题（类似 Windows 重命名行为）
+  /// 例如：如果 "四级词汇" 已存在，则生成 "四级词汇 (2)"
+  ///       如果 "四级词汇 (2)" 也已存在，则生成 "四级词汇 (3)"
+  /// [excludeId] 可选，排除当前编辑的词书（避免自己的标题被当作冲突）
+  static Future<String> generateUniqueBookTitle(
+    String desiredTitle, {
+    int? excludeId,
+  }) async {
+    final allBooks = await getAllBooks();
+    final titleSet = allBooks
+        .where((b) => b.id != excludeId)
+        .map((b) => b.title)
+        .toSet();
+
+    if (!titleSet.contains(desiredTitle)) {
+      return desiredTitle;
+    }
+
+    int suffix = 2;
+    String candidate;
+    do {
+      candidate = '$desiredTitle ($suffix)';
+      suffix++;
+    } while (titleSet.contains(candidate));
+
+    return candidate;
+  }
+
   /// 创建词书
   static Future<int> createBook(WordBook book) async {
     final db = await DatabaseService.database;
@@ -62,24 +97,26 @@ class WordBookService {
     return maps.map((m) => m['word'] as String).toList();
   }
 
-  /// 批量添加单词到词书（去重）
+  /// 批量添加单词到词书（去重，使用事务加速）
   static Future<int> addWordsToBook(int bookId, List<String> words) async {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
     int added = 0;
 
-    for (final word in words) {
-      try {
-        await db.insert('word_book_entries', {
-          'book_id': bookId,
-          'word': word.trim().toLowerCase(),
-          'added_at': now,
-        });
-        added++;
-      } catch (e) {
-        // UNIQUE 约束冲突，跳过
+    await db.transaction((txn) async {
+      for (final word in words) {
+        try {
+          await txn.insert('word_book_entries', {
+            'book_id': bookId,
+            'word': word.trim().toLowerCase(),
+            'added_at': now,
+          });
+          added++;
+        } catch (e) {
+          // UNIQUE 约束冲突，跳过
+        }
       }
-    }
+    });
 
     // 更新词书词数
     final count =
@@ -125,7 +162,33 @@ class WordBookService {
     );
   }
 
-  /// 导入词汇：解析文本（一行一词），查本地词典，返回结果
+  /// 过滤已学单词：查询 user_word_records 表，区分已学与未学
+  /// 返回 { learnedWords, newWords }
+  static Future<({List<String> learnedWords, List<String> newWords})>
+  filterLearnedWords(List<String> words) async {
+    final db = await DatabaseService.database;
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toList();
+
+    final placeholders = cleaned.map((_) => '?').join(',');
+    final maps = await db.rawQuery(
+      'SELECT word FROM user_word_records WHERE word IN ($placeholders)',
+      cleaned,
+    );
+    final learnedSet = maps.map((m) => m['word'] as String).toSet();
+
+    final learnedWords = <String>[];
+    final newWords = <String>[];
+    for (final w in cleaned) {
+      if (learnedSet.contains(w)) {
+        learnedWords.add(w);
+      } else {
+        newWords.add(w);
+      }
+    }
+    return (learnedWords: learnedWords, newWords: newWords);
+  }
+
+  /// 导入词汇：解析文本（一行一词），批量查本地词典，返回结果
   static Future<ImportResult> importWords(String text) async {
     final lines = text
         .split('\n')
@@ -133,13 +196,14 @@ class WordBookService {
         .where((l) => l.isNotEmpty)
         .toList();
 
-    final found = <String>{};
-    final missing = <String>[];
+    // 批量查询词典，一次 SQL 查出所有匹配的单词
+    final foundMap = await DictionaryService.searchEnExactBatch(lines);
 
+    final found = <String>[];
+    final missing = <String>[];
     for (final word in lines) {
       final cleaned = word.toLowerCase().trim();
-      final entry = await DictionaryService.searchEnExact(cleaned);
-      if (entry != null) {
+      if (foundMap.containsKey(cleaned)) {
         found.add(cleaned);
       } else {
         missing.add(cleaned);
