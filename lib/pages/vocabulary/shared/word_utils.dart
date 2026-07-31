@@ -6,7 +6,7 @@ String normalizeNewlines(String? text) {
 
 /// 提取翻译字符串中的第一条含义
 String extractFirstMeaning(String? translation) {
-  if (translation == null || translation.isEmpty) return '（无释义）';
+  if (translation == null || translation.isEmpty) return '';
   // 取第一条释义：按换行、中文分号/逗号/句号分割取第一段
   // 注意：不按英文句点分割，避免把 "a. 一个" 切出孤立的 "a"
   final parts = translation.replaceAll('\\n', '\n').split(RegExp(r'[\n；;，,]'));
@@ -19,5 +19,5 @@ String extractFirstMeaning(String? translation) {
         .trim();
     if (cleaned.isNotEmpty) return cleaned;
   }
-  return translation;
+  return '';
 }

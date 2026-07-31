@@ -167,6 +167,12 @@ class _LearningPageState extends State<LearningPage>
     final entry = _entryCache[_globalIndex];
     final correctMeaning = extractFirstMeaning(entry?.translation);
 
+    // 当前词无释义时跳过选择题，直接进入下一环节
+    if (correctMeaning.isEmpty) {
+      _onQuizConfirm();
+      return;
+    }
+
     final allOtherMeanings = <String>[];
     for (int i = 0; i < _words.length; i++) {
       if (i == _globalIndex) continue;

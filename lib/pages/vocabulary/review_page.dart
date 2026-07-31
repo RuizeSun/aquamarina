@@ -117,9 +117,13 @@ class _ReviewPageState extends State<ReviewPage>
   Future<void> _loadBatchEntries(int batchStart) async {
     final batchWords = _getBatchWords(batchStart);
     final newEntries = await loadEntries(words: batchWords);
+    // loadEntries 返回的 key 相对于子列表（0,1,2...），需要加上 batchStart 偏移
+    final offsetEntries = newEntries.map(
+      (key, value) => MapEntry(key + batchStart, value),
+    );
     if (mounted) {
       setState(() {
-        _entryCache.addAll(newEntries);
+        _entryCache.addAll(offsetEntries);
       });
     }
   }
@@ -165,6 +169,12 @@ class _ReviewPageState extends State<ReviewPage>
   void _generateQuizOptions() {
     final entry = _entryCache[_globalIndex];
     final correctMeaning = extractFirstMeaning(entry?.translation);
+
+    // 当前词无释义时跳过选择题，直接进入下一环节
+    if (correctMeaning.isEmpty) {
+      _onQuizConfirm();
+      return;
+    }
 
     final allOtherMeanings = <String>[];
     for (int i = 0; i < _words.length; i++) {
