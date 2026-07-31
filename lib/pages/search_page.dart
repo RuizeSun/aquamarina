@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
@@ -34,6 +35,8 @@ class _SearchPageState extends State<SearchPage> {
     _loadSearchHistory();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
+      // 强制弹出系统软键盘（app 启动时仅执行一次）
+      SystemChannels.textInput.invokeMethod<void>('TextInput.show');
     });
   }
 
@@ -165,30 +168,33 @@ class _SearchPageState extends State<SearchPage> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: SearchBar(
-              controller: _searchController,
-              focusNode: _focusNode,
-              hintText: '输入单词/中文查询...',
-              leading: const Icon(Icons.search),
-              trailing: [
-                if (_searchController.text.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.clear),
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() {
-                        _suggestions = [];
-                        _errorMessage = null;
-                      });
-                      _focusNode.requestFocus();
-                    },
-                  ),
-              ],
-              onSubmitted: (value) {
-                if (value.trim().isNotEmpty) {
-                  _onSelectWord(value.trim());
-                }
-              },
+            child: SizedBox(
+              width: double.infinity,
+              child: SearchBar(
+                controller: _searchController,
+                focusNode: _focusNode,
+                hintText: '输入单词/中文查询...',
+                leading: const Icon(Icons.search),
+                trailing: [
+                  if (_searchController.text.isNotEmpty)
+                    IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _suggestions = [];
+                          _errorMessage = null;
+                        });
+                        _focusNode.requestFocus();
+                      },
+                    ),
+                ],
+                onSubmitted: (value) {
+                  if (value.trim().isNotEmpty) {
+                    _onSelectWord(value.trim());
+                  }
+                },
+              ),
             ),
           ),
           Expanded(child: _isIdle ? _buildHistoryContent() : _buildContent()),
