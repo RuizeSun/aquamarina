@@ -146,31 +146,83 @@ class LearningService {
   // ─── 全局随机干扰项池 ──────────────────────────
 
   /// 从已学单词（user_word_records）中随机取 count 个词作为干扰项池，
-  /// 排除 excludeWords 中的词。返回 Map<word, firstMeaning>。
-  /// 用于选择题阶段生成干扰项，保证干扰项是用户见过的词。
+  /// 排除 excludeWords 中的词。若已学词不足 count 个，则从词书条目
+  /// （word_book_entries）中随机补充缺失数量，保证首次学习时也有足够的
+  /// 真实干扰项可用。
+  /// 返回「词 → 释义」的 Map（释义由调用方后续加载）。
   static Future<Map<String, String>> getRandomDistractors({
     required List<String> excludeWords,
     int count = 10,
   }) async {
     final db = await DatabaseService.database;
-    final placeholders = excludeWords.map((_) => '?').join(',');
-    final maps = await db.rawQuery(
-      '''
-      SELECT r.word FROM user_word_records r
-      WHERE r.word NOT IN ($placeholders)
-      ORDER BY RANDOM()
-      LIMIT ?
-    ''',
-      [...excludeWords, count],
-    );
-
     final result = <String, String>{};
-    for (final m in maps) {
-      final word = m['word'] as String;
-      // 释义后续由页面异步加载，此处只返回 word 列表
-      result[word] = '';
+    if (count <= 0) return result;
+
+    // 第 1 层：从已学单词中随机取
+    if (excludeWords.isNotEmpty) {
+      final placeholders = excludeWords.map((_) => '?').join(',');
+      final maps = await db.rawQuery(
+        '''
+        SELECT r.word FROM user_word_records r
+        WHERE r.word NOT IN ($placeholders)
+        ORDER BY RANDOM()
+        LIMIT ?
+      ''',
+        [...excludeWords, count],
+      );
+      for (final m in maps) {
+        result[m['word'] as String] = '';
+      }
     }
+
+    // 第 2 层：已学词不足时，从词书条目中随机补充
+    if (result.length < count) {
+      final need = count - result.length;
+      final excluded = [...excludeWords, ...result.keys];
+      if (excluded.isNotEmpty) {
+        final placeholders = excluded.map((_) => '?').join(',');
+        final maps = await db.rawQuery(
+          '''
+          SELECT e.word FROM word_book_entries e
+          WHERE e.word NOT IN ($placeholders)
+          ORDER BY RANDOM()
+          LIMIT ?
+        ''',
+          [...excluded, need],
+        );
+        for (final m in maps) {
+          result[m['word'] as String] = '';
+        }
+      }
+    }
+
     return result;
+  }
+
+  /// 从词书条目（word_book_entries）中随机取一个词作为干扰项，
+  /// 排除 excludeWords 中的词。用于极端情况下补充干扰项池。
+  /// 返回 null 表示词书中没有其他可选词。
+  static Future<String?> getRandomDistractorWord(
+    List<String> excludeWords,
+  ) async {
+    final db = await DatabaseService.database;
+    final excluded = excludeWords.map((w) => w.trim().toLowerCase()).toSet();
+    if (excluded.isEmpty) {
+      final maps = await db.rawQuery(
+        'SELECT e.word FROM word_book_entries e ORDER BY RANDOM() LIMIT 1',
+      );
+      if (maps.isEmpty) return null;
+      return maps.first['word'] as String;
+    }
+    final placeholders = excluded.map((_) => '?').join(',');
+    final maps = await db.rawQuery('''
+      SELECT e.word FROM word_book_entries e
+      WHERE LOWER(e.word) NOT IN ($placeholders)
+      ORDER BY RANDOM()
+      LIMIT 1
+    ''', excluded.toList());
+    if (maps.isEmpty) return null;
+    return maps.first['word'] as String;
   }
 
   // ─── 打卡与统计数据 ──────────────────────────

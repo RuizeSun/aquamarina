@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../models/user_word_record.dart';
 import '../../models/word_entry.dart';
+import '../../services/dictionary_service.dart';
 import '../../services/learning_service.dart';
 import '../../services/tts_service.dart';
 import 'shared/bottom_bar_widget.dart';
@@ -168,7 +169,7 @@ class _LearningPageState extends State<LearningPage>
 
   // ─── 选择题阶段 ──────────────────────────────
 
-  void _generateQuizOptions() {
+  Future<void> _generateQuizOptions() async {
     final entry = _entryCache[_globalIndex];
     final correctMeaning = extractFirstMeaning(entry?.translation);
 
@@ -204,13 +205,23 @@ class _LearningPageState extends State<LearningPage>
       }
     }
 
-    while (distractors.length < 3) {
-      distractors.add('（无干扰项）');
+    // 仍不足 3 个时，直接从数据库随机抽取真实词补充（最多尝试 5 次）
+    var attempts = 0;
+    while (distractors.length < 3 && attempts < 5) {
+      attempts++;
+      final randomWord = await LearningService.getRandomDistractorWord(_words);
+      if (randomWord == null) break;
+      final e = await DictionaryService.searchEnExact(randomWord);
+      final m = extractFirstMeaning(e?.translation);
+      if (m.isNotEmpty && m != correctMeaning && !distractors.contains(m)) {
+        distractors.add(m);
+      }
     }
 
     final options = [correctMeaning, ...distractors];
     options.shuffle(Random());
 
+    if (!mounted) return;
     setState(() {
       _quizOptions = options;
       _correctOptionIndex = options.indexOf(correctMeaning);
