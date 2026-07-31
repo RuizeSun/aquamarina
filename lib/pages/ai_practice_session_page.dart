@@ -55,7 +55,7 @@ class AiPracticeSessionPage extends StatefulWidget {
 
 class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     with SingleTickerProviderStateMixin {
-  final SentenceSetService _setService = SentenceSetService();
+  final SentenceSetService _setService = SentenceSetService.instance;
   final AiSentenceService _sentenceService = AiSentenceService();
   final CancelToken _cancelToken = CancelToken();
 
