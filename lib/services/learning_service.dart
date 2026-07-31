@@ -353,6 +353,146 @@ class LearningService {
     await db.delete('wrong_words', where: 'word = ?', whereArgs: [cleaned]);
   }
 
+  // ─── 单词总览（按状态查询与管理） ─────────────────
+
+  /// 按状态获取单词列表
+  /// [status]: 0=等待学习, 1=已学习, 2=已掌握
+  /// [bookId] 不为 null 时按词书筛选
+  /// 返回列表，每个元素为 {word, books: List<String>}，
+  /// books 为该单词来源的所有词书名称（去重）。
+  static Future<List<Map<String, dynamic>>> getWordsByStatus({
+    int? status,
+    int? bookId,
+  }) async {
+    final db = await DatabaseService.database;
+
+    // 如果指定了词书，先取出该词书中的所有单词集合
+    Set<String>? bookWords;
+    if (bookId != null) {
+      final maps = await db.query(
+        'word_book_entries',
+        columns: ['word'],
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+      bookWords = maps.map((m) => m['word'] as String).toSet();
+    }
+
+    List<Map<String, dynamic>> wordMaps;
+    if (status == 0) {
+      // 等待学习：出现在词书中但还没有学习记录
+      wordMaps = await db.rawQuery('''
+        SELECT DISTINCT e.word FROM word_book_entries e
+        WHERE e.word NOT IN (
+          SELECT r.word FROM user_word_records r
+        )
+        ORDER BY e.word COLLATE NOCASE
+      ''');
+    } else {
+      final sql = status == 1
+          ? '''
+        SELECT DISTINCT r.word FROM user_word_records r
+        WHERE r.is_mastered = 0
+        ORDER BY r.word COLLATE NOCASE
+      '''
+          : '''
+        SELECT DISTINCT r.word FROM user_word_records r
+        WHERE r.is_mastered = 1
+        ORDER BY r.word COLLATE NOCASE
+      ''';
+      wordMaps = await db.rawQuery(sql);
+    }
+
+    // 按词书筛选（仅保留出现在该词书中的单词）
+    if (bookWords != null) {
+      final bookWordsSet = bookWords;
+      wordMaps = wordMaps
+          .where((m) => bookWordsSet.contains(m['word'] as String))
+          .toList();
+    }
+
+    // 查询所有单词的来源词书映射
+    final bookMaps = await db.rawQuery('''
+      SELECT e.word, b.title FROM word_book_entries e
+      JOIN word_books b ON b.id = e.book_id
+    ''');
+    final sourceMap = <String, Set<String>>{};
+    for (final m in bookMaps) {
+      final word = m['word'] as String;
+      final title = m['title'] as String;
+      sourceMap.putIfAbsent(word, () => <String>{}).add(title);
+    }
+
+    return wordMaps.map((m) {
+      final word = m['word'] as String;
+      return {'word': word, 'books': sourceMap[word]?.toList() ?? <String>[]};
+    }).toList();
+  }
+
+  /// 获取所有词书简要信息（用于筛选器）
+  /// 返回列表，每个元素为 {id, title}
+  static Future<List<Map<String, dynamic>>> getAllBooksBrief() async {
+    final db = await DatabaseService.database;
+    final maps = await db.query(
+      'word_books',
+      columns: ['id', 'title'],
+      orderBy: 'created_at DESC',
+    );
+    return maps;
+  }
+
+  /// 批量标记为已掌握（事务）
+  /// 对于还没有学习记录的词（等待学习），直接创建一条已掌握记录。
+  static Future<void> markAsMasteredBatch(List<String> words) async {
+    final db = await DatabaseService.database;
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toSet().toList();
+    if (cleaned.isEmpty) return;
+    final now = DateTime.now().toIso8601String();
+
+    await db.transaction((txn) async {
+      for (final word in cleaned) {
+        final updated = await txn.update(
+          'user_word_records',
+          {'is_mastered': 1, 'last_reviewed_at': now},
+          where: 'word = ?',
+          whereArgs: [word],
+        );
+        if (updated == 0) {
+          // 该词还没有学习记录，直接插入一条已掌握记录
+          await txn.insert('user_word_records', {
+            'word': word,
+            'stage': 0,
+            'is_weak': 0,
+            'is_mastered': 1,
+            'next_review_date': null,
+            'last_reviewed_at': now,
+            'review_count': 0,
+            'created_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+        await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+      }
+    });
+  }
+
+  /// 批量重置学习状态（删除学习记录，回到等待学习）
+  static Future<void> resetMasteredBatch(List<String> words) async {
+    final db = await DatabaseService.database;
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toSet().toList();
+    if (cleaned.isEmpty) return;
+
+    await db.transaction((txn) async {
+      for (final word in cleaned) {
+        await txn.delete(
+          'user_word_records',
+          where: 'word = ?',
+          whereArgs: [word],
+        );
+        await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+      }
+    });
+  }
+
   // ─── 批量保存学习/复习结果 ─────────────────────
 
   /// 批量保存学习结果（学习/复习完成后一次性写入）
