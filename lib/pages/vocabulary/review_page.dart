@@ -47,6 +47,9 @@ class _ReviewPageState extends State<ReviewPage>
   int? _selectedQuizOption;
   bool _quizAnswered = false;
 
+  // 累计完成的"词×阶段"步数，用于进度条（只增不减）
+  int _completedSteps = 0;
+
   // 收集结果（word → easy/hard/forgot/mastered）
   final Map<String, String> _results = {};
 
@@ -148,6 +151,7 @@ class _ReviewPageState extends State<ReviewPage>
   // ─── 浏览阶段 ────────────────────────────────
 
   void _onBrowseNext() {
+    _completedSteps++;
     if (_isLastWordInBatch) {
       setState(() {
         _currentPhase = 1;
@@ -227,6 +231,7 @@ class _ReviewPageState extends State<ReviewPage>
   }
 
   void _onQuizConfirm() {
+    _completedSteps++;
     if (_isLastWordInBatch) {
       setState(() {
         _currentPhase = 2;
@@ -257,6 +262,7 @@ class _ReviewPageState extends State<ReviewPage>
   }
 
   void _onRecallSecondChoice(bool correct) {
+    _completedSteps++;
     final word = _currentWord.trim().toLowerCase();
     final quizCorrect = _selectedQuizOption == _correctOptionIndex;
 
@@ -301,6 +307,7 @@ class _ReviewPageState extends State<ReviewPage>
 
   /// 标记当前词为已掌握
   void _markAsMastered() {
+    _completedSteps++;
     final word = _currentWord.trim().toLowerCase();
     _results[word] = 'mastered';
     _advanceAfterResult();
@@ -368,12 +375,7 @@ class _ReviewPageState extends State<ReviewPage>
       child: Column(
         children: [
           TweenAnimationBuilder<double>(
-            tween: Tween(
-              begin: 0,
-              end:
-                  (_currentPhase * _words.length + _globalIndex + 1) /
-                  (_words.length * 3),
-            ),
+            tween: Tween(begin: 0, end: _completedSteps / (_words.length * 3)),
             duration: const Duration(milliseconds: 300),
             curve: Curves.easeInOut,
             builder: (context, value, _) =>
