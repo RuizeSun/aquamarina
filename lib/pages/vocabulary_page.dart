@@ -8,6 +8,7 @@ import 'vocabulary/word_book_list_page.dart';
 import 'vocabulary/learning_page.dart';
 import 'vocabulary/review_page.dart';
 import 'vocabulary/review_plan_page.dart';
+import 'vocabulary/word_overview_page.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -245,6 +246,25 @@ class VocabularyPageState extends State<VocabularyPage> {
           children: [
             // 当前词书卡片
             _buildBookCard(theme, colorScheme),
+            const SizedBox(height: 16),
+
+            // 单词总览入口
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const WordOverviewPage()),
+                  );
+                  _loadData();
+                },
+                icon: const Icon(Icons.insights),
+                label: const Text('单词总览'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
+            ),
             const SizedBox(height: 24),
 
             // 🔥 连续打卡

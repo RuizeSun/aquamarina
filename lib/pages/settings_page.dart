@@ -10,6 +10,10 @@ import '../services/tts_settings.dart';
 import '../services/tts_service.dart';
 import 'ai_profile_edit_page.dart';
 
+/// 隐私政策 SharedPreferences 键前缀（与 ai_practice_page.dart 保持一致）
+const String _privacyPolicyKeyPrefix = 'privacy_policy_accepted_';
+const String _aquamarinaOfficialHost = 'aquamarina.78go.work';
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
 
@@ -532,6 +536,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       _testConnection(profile);
                     case 'setDefault':
                       _setDefaultProfile(profile.id);
+                    case 'revokePrivacy':
+                      await _revokePrivacyPolicy(profile);
                     case 'delete':
                       _deleteProfile(profile);
                   }
@@ -562,6 +568,17 @@ class _SettingsPageState extends State<SettingsPage> {
                         dense: true,
                       ),
                     ),
+                  // Aquamarina 官方配置：撤销隐私政策授权
+                  if (profile.isAquamarina &&
+                      profile.baseUrl.contains(_aquamarinaOfficialHost))
+                    PopupMenuItem(
+                      value: 'revokePrivacy',
+                      child: const ListTile(
+                        leading: Icon(Icons.privacy_tip_outlined),
+                        title: Text('撤销隐私政策授权'),
+                        dense: true,
+                      ),
+                    ),
                   const PopupMenuItem(
                     value: 'delete',
                     child: ListTile(
@@ -581,6 +598,20 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _revokePrivacyPolicy(AiProfile profile) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_privacyPolicyKeyPrefix${profile.id}';
+    await prefs.remove(key);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('已撤销隐私政策授权'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _showAbout(BuildContext context) async {
