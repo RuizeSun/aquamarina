@@ -16,6 +16,18 @@ class DailyStats {
   });
 }
 
+/// 待复习单词分组（按词书）
+class DueWordsGroup {
+  /// 词书 ID；未分类（单词不属于任何词书）时为 null
+  final int? bookId;
+  final String bookTitle;
+
+  /// 该词书中的待复习单词
+  final List<String> words;
+
+  DueWordsGroup({this.bookId, required this.bookTitle, required this.words});
+}
+
 class LearningService {
   static String _todayStr() {
     final now = DateTime.now();
@@ -143,34 +155,161 @@ class LearningService {
     return [...wrong, ...due];
   }
 
+  /// 获取全部待复习单词，并按词书分组。
+  /// 一个单词可能同时属于多本词书，此时会出现在每本词书的
+  /// 分组中；不属于任何词书的单词（如词书已删除）归入
+  /// 「未分类」分组，避免遗漏复习任务。
+  static Future<List<DueWordsGroup>> getDueWordsGroupedByBook() async {
+    final allDueWords = await getAllDueWords();
+    if (allDueWords.isEmpty) return [];
+
+    final db = await DatabaseService.database;
+
+    // 查询所有词书条目（word → 所属词书列表）
+    final maps = await db.rawQuery('''
+      SELECT e.word, e.book_id, b.title FROM word_book_entries e
+      JOIN word_books b ON b.id = e.book_id
+    ''');
+    final wordBooksMap = <String, List<Map<String, dynamic>>>{};
+    for (final m in maps) {
+      final word = m['word'] as String;
+      wordBooksMap.putIfAbsent(word, () => []).add(m);
+    }
+
+    // 按词书聚合
+    final groupMap = <int, DueWordsGroup>{};
+    final uncategorized = <String>[];
+    final seen = <String>{};
+
+    for (final word in allDueWords) {
+      final cleaned = word.trim().toLowerCase();
+      if (seen.contains(cleaned)) continue;
+      seen.add(cleaned);
+
+      final bookMaps = wordBooksMap[cleaned];
+      if (bookMaps == null || bookMaps.isEmpty) {
+        uncategorized.add(word);
+        continue;
+      }
+      for (final m in bookMaps) {
+        final bookId = m['book_id'] as int;
+        final title = m['title'] as String;
+        groupMap
+            .putIfAbsent(
+              bookId,
+              () => DueWordsGroup(bookId: bookId, bookTitle: title, words: []),
+            )
+            .words
+            .add(word);
+      }
+    }
+
+    // 按词书创建时间排序（保持稳定顺序）
+    final bookOrder = await db.query(
+      'word_books',
+      columns: ['id'],
+      orderBy: 'created_at ASC',
+    );
+    final idOrder = bookOrder.map((m) => m['id'] as int).toList();
+    final groups = <DueWordsGroup>[];
+    for (final id in idOrder) {
+      final g = groupMap[id];
+      if (g != null) groups.add(g);
+    }
+    // 补充未在 word_books 中（理论上不会发生）的分组
+    for (final g in groupMap.values) {
+      if (!groups.contains(g)) groups.add(g);
+    }
+
+    if (uncategorized.isNotEmpty) {
+      groups.add(
+        DueWordsGroup(bookId: null, bookTitle: '未分类', words: uncategorized),
+      );
+    }
+
+    return groups;
+  }
+
   // ─── 全局随机干扰项池 ──────────────────────────
 
   /// 从已学单词（user_word_records）中随机取 count 个词作为干扰项池，
-  /// 排除 excludeWords 中的词。返回 Map<word, firstMeaning>。
-  /// 用于选择题阶段生成干扰项，保证干扰项是用户见过的词。
+  /// 排除 excludeWords 中的词。若已学词不足 count 个，则从词书条目
+  /// （word_book_entries）中随机补充缺失数量，保证首次学习时也有足够的
+  /// 真实干扰项可用。
+  /// 返回「词 → 释义」的 Map（释义由调用方后续加载）。
   static Future<Map<String, String>> getRandomDistractors({
     required List<String> excludeWords,
     int count = 10,
   }) async {
     final db = await DatabaseService.database;
-    final placeholders = excludeWords.map((_) => '?').join(',');
-    final maps = await db.rawQuery(
-      '''
-      SELECT r.word FROM user_word_records r
-      WHERE r.word NOT IN ($placeholders)
-      ORDER BY RANDOM()
-      LIMIT ?
-    ''',
-      [...excludeWords, count],
-    );
-
     final result = <String, String>{};
-    for (final m in maps) {
-      final word = m['word'] as String;
-      // 释义后续由页面异步加载，此处只返回 word 列表
-      result[word] = '';
+    if (count <= 0) return result;
+
+    // 第 1 层：从已学单词中随机取
+    if (excludeWords.isNotEmpty) {
+      final placeholders = excludeWords.map((_) => '?').join(',');
+      final maps = await db.rawQuery(
+        '''
+        SELECT r.word FROM user_word_records r
+        WHERE r.word NOT IN ($placeholders)
+        ORDER BY RANDOM()
+        LIMIT ?
+      ''',
+        [...excludeWords, count],
+      );
+      for (final m in maps) {
+        result[m['word'] as String] = '';
+      }
     }
+
+    // 第 2 层：已学词不足时，从词书条目中随机补充
+    if (result.length < count) {
+      final need = count - result.length;
+      final excluded = [...excludeWords, ...result.keys];
+      if (excluded.isNotEmpty) {
+        final placeholders = excluded.map((_) => '?').join(',');
+        final maps = await db.rawQuery(
+          '''
+          SELECT e.word FROM word_book_entries e
+          WHERE e.word NOT IN ($placeholders)
+          ORDER BY RANDOM()
+          LIMIT ?
+        ''',
+          [...excluded, need],
+        );
+        for (final m in maps) {
+          result[m['word'] as String] = '';
+        }
+      }
+    }
+
     return result;
+  }
+
+  /// 从词书条目（word_book_entries）中随机取一个词作为干扰项，
+  /// 排除 excludeWords 中的词。用于极端情况下补充干扰项池。
+  /// 返回 null 表示词书中没有其他可选词。
+  static Future<String?> getRandomDistractorWord(
+    List<String> excludeWords,
+  ) async {
+    final db = await DatabaseService.database;
+    final excluded = excludeWords.map((w) => w.trim().toLowerCase()).toSet();
+    if (excluded.isEmpty) {
+      final maps = await db.rawQuery(
+        'SELECT e.word FROM word_book_entries e ORDER BY RANDOM() LIMIT 1',
+      );
+      if (maps.isEmpty) return null;
+      return maps.first['word'] as String;
+    }
+    final placeholders = excluded.map((_) => '?').join(',');
+    final maps = await db.rawQuery('''
+      SELECT e.word FROM word_book_entries e
+      WHERE LOWER(e.word) NOT IN ($placeholders)
+      ORDER BY RANDOM()
+      LIMIT 1
+    ''', excluded.toList());
+    if (maps.isEmpty) return null;
+    return maps.first['word'] as String;
   }
 
   // ─── 打卡与统计数据 ──────────────────────────

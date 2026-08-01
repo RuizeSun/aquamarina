@@ -32,7 +32,7 @@ class _SentenceSetEditPageState extends State<SentenceSetEditPage> {
   @override
   void initState() {
     super.initState();
-    _setService = widget.setService ?? SentenceSetService();
+    _setService = widget.setService ?? SentenceSetService.instance;
     if (widget.existingSet != null) {
       _nameController.text = widget.existingSet!.name;
       _descriptionController.text = widget.existingSet!.description ?? '';

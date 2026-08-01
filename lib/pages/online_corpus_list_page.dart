@@ -12,7 +12,7 @@ class OnlineCorpusListPage extends StatefulWidget {
 }
 
 class _OnlineCorpusListPageState extends State<OnlineCorpusListPage> {
-  final SentenceSetService _setService = SentenceSetService();
+  final SentenceSetService _setService = SentenceSetService.instance;
   List<OnlineCategory> _categories = [];
   bool _isLoadingCategories = true;
   String? _error;

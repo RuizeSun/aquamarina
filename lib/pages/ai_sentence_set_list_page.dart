@@ -15,7 +15,7 @@ class SentenceSetListPage extends StatefulWidget {
 }
 
 class _SentenceSetListPageState extends State<SentenceSetListPage> {
-  final SentenceSetService _setService = SentenceSetService();
+  final SentenceSetService _setService = SentenceSetService.instance;
   List<SentenceSet> _sets = [];
   bool _isLoading = true;
 

@@ -480,7 +480,26 @@ class _WordOverviewPageState extends State<WordOverviewPage>
               ),
             ),
             subtitle: books.isEmpty
-                ? null
+                // 来源词书均已删除 → 显示「已删除词书」标签
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '已删除词书',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  )
                 : Padding(
                     padding: const EdgeInsets.only(top: 4),
                     child: Wrap(

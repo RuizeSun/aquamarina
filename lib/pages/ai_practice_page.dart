@@ -7,6 +7,7 @@ import '../services/ai_sentence_service.dart';
 import '../services/ai_profile_service.dart';
 import 'ai_sentence_set_list_page.dart';
 import 'ai_practice_session_page.dart';
+import 'wrong_sentence_book_page.dart';
 
 class AiPracticePage extends StatefulWidget {
   const AiPracticePage({super.key});
@@ -16,7 +17,7 @@ class AiPracticePage extends StatefulWidget {
 }
 
 class _AiPracticePageState extends State<AiPracticePage> {
-  final SentenceSetService _setService = SentenceSetService();
+  final SentenceSetService _setService = SentenceSetService.instance;
   final AiSentenceService _sentenceService = AiSentenceService();
 
   // 仪表盘状态
@@ -54,7 +55,30 @@ class _AiPracticePageState extends State<AiPracticePage> {
   }
 
   void _onSetsChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {
+      _availableSets = _setService.sets;
+      if (_selectedSet != null) {
+        // 用最新列表中的对象替换 _selectedSet
+        // （SentenceSet 不可变，更新 sentenceCount 后必须替换引用才能拿到最新数据）
+        final updated = _availableSets
+            .where((s) => s.id == _selectedSet!.id)
+            .toList();
+        if (updated.isNotEmpty) {
+          _selectedSet = updated.first;
+        } else {
+          // 当前选中的句式集被删除了，自动切换
+          _selectedSet = _availableSets.isNotEmpty
+              ? _availableSets.first
+              : null;
+        }
+      }
+      // 原本没有选中（例如刚导入第一个句式集），自动选中第一个
+      if (_selectedSet == null && _availableSets.isNotEmpty) {
+        _selectedSet = _availableSets.first;
+      }
+    });
+    _refreshProgress();
   }
 
   Future<void> _initData() async {
@@ -89,6 +113,15 @@ class _AiPracticePageState extends State<AiPracticePage> {
   }
 
   Future<void> _refreshProgress() async {
+    // 用最新引用替换 _selectedSet，确保 sentenceCount 为最新值
+    if (_selectedSet != null) {
+      final updated = _setService.sets
+          .where((s) => s.id == _selectedSet!.id)
+          .toList();
+      if (updated.isNotEmpty) {
+        _selectedSet = updated.first;
+      }
+    }
     // 获取错题数量
     final wrongCount = await _sentenceService.getWrongSentenceCount();
     // 获取当前句式集进度
@@ -445,45 +478,50 @@ class _AiPracticePageState extends State<AiPracticePage> {
             const SizedBox(height: 8),
             Card(
               color: colorScheme.errorContainer.withValues(alpha: 0.3),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: colorScheme.error.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: _openWrongBook,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: colorScheme.error.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.format_list_numbered,
+                          color: colorScheme.error,
+                        ),
                       ),
-                      child: Icon(
-                        Icons.format_list_numbered,
-                        color: colorScheme.error,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '错题本',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w600,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '错题本',
+                              style: theme.textTheme.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                          Text(
-                            _wrongSentenceCount > 0
-                                ? '$_wrongSentenceCount 道错题待练习'
-                                : '暂无错题',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurfaceVariant,
+                            Text(
+                              _wrongSentenceCount > 0
+                                  ? '$_wrongSentenceCount 道错题待练习'
+                                  : '暂无错题',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                      const Icon(Icons.chevron_right, size: 20),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -601,7 +639,17 @@ class _AiPracticePageState extends State<AiPracticePage> {
     );
   }
 
+  /// 打开错题本查看页面
+  Future<void> _openWrongBook() async {
+    await Navigator.of(context).push<dynamic>(
+      MaterialPageRoute(builder: (_) => const WrongSentenceBookPage()),
+    );
+    // 返回后刷新错题数量（可能删除了错题或练习了错题）
+    await _refreshProgress();
+  }
+
   Future<void> _openSetSelector() async {
+    // 确保句式集列表页面使用的是同一服务实例（共享数据）
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => SentenceSetListPage(
@@ -612,17 +660,28 @@ class _AiPracticePageState extends State<AiPracticePage> {
         ),
       ),
     );
-    // 刷新可用句式集
-    final sets = _setService.sets;
+    // 从 SharedPreferences 重新加载，确保拿到导入/删除后的最新数据
+    await _setService.load();
+    if (!mounted) return;
     setState(() {
-      _availableSets = sets;
+      _availableSets = _setService.sets;
       if (_selectedSet != null) {
-        // 如果当前选中的句式集被删除了，重置
-        if (!_availableSets.any((s) => s.id == _selectedSet!.id)) {
+        // 用最新列表中的对象替换 _selectedSet
+        // （SentenceSet 不可变，更新 sentenceCount 后必须替换引用才能拿到最新数据）
+        final updated = _availableSets
+            .where((s) => s.id == _selectedSet!.id)
+            .toList();
+        if (updated.isNotEmpty) {
+          _selectedSet = updated.first;
+        } else {
+          // 当前选中的句式集被删除了，重置
           _selectedSet = _availableSets.isNotEmpty
               ? _availableSets.first
               : null;
         }
+      } else if (_availableSets.isNotEmpty) {
+        // 原本没有选中句式集（例如刚导入了第一个），自动选中第一个
+        _selectedSet = _availableSets.first;
       }
     });
     await _refreshProgress();

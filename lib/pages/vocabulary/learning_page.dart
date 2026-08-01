@@ -1,12 +1,15 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../../models/user_word_record.dart';
 import '../../models/word_entry.dart';
+import '../../services/dictionary_service.dart';
 import '../../services/learning_service.dart';
 import '../../services/tts_service.dart';
 import 'shared/bottom_bar_widget.dart';
 import 'shared/data_loader.dart';
 import 'shared/quiz_widget.dart';
 import 'shared/recall_widgets.dart';
+import 'shared/summary_widget.dart';
 import 'shared/word_utils.dart';
 
 class LearningPage extends StatefulWidget {
@@ -23,7 +26,7 @@ class _LearningPageState extends State<LearningPage>
     with SingleTickerProviderStateMixin {
   static const int _batchSize = 3;
 
-  // Phase: 0=学习, 1=选择题, 2=回忆
+  // Phase: 0=学习, 1=选择题, 2=回忆, 3=总结
   int _currentPhase = 0;
   int _currentBatchStart = 0;
   int _currentIndexInBatch = 0;
@@ -50,6 +53,9 @@ class _LearningPageState extends State<LearningPage>
 
   // 学习结果收集（word → easy/hard/forgot/mastered）
   final Map<String, String> _results = {};
+
+  // 总结阶段：每个词的复习安排信息
+  final Map<String, WordSummaryItem> _summaryItems = {};
 
   late AnimationController _animController;
   late Animation<double> _fadeAnimation;
@@ -163,7 +169,7 @@ class _LearningPageState extends State<LearningPage>
 
   // ─── 选择题阶段 ──────────────────────────────
 
-  void _generateQuizOptions() {
+  Future<void> _generateQuizOptions() async {
     final entry = _entryCache[_globalIndex];
     final correctMeaning = extractFirstMeaning(entry?.translation);
 
@@ -199,13 +205,23 @@ class _LearningPageState extends State<LearningPage>
       }
     }
 
-    while (distractors.length < 3) {
-      distractors.add('（无干扰项）');
+    // 仍不足 3 个时，直接从数据库随机抽取真实词补充（最多尝试 5 次）
+    var attempts = 0;
+    while (distractors.length < 3 && attempts < 5) {
+      attempts++;
+      final randomWord = await LearningService.getRandomDistractorWord(_words);
+      if (randomWord == null) break;
+      final e = await DictionaryService.searchEnExact(randomWord);
+      final m = extractFirstMeaning(e?.translation);
+      if (m.isNotEmpty && m != correctMeaning && !distractors.contains(m)) {
+        distractors.add(m);
+      }
     }
 
     final options = [correctMeaning, ...distractors];
     options.shuffle(Random());
 
+    if (!mounted) return;
     setState(() {
       _quizOptions = options;
       _correctOptionIndex = options.indexOf(correctMeaning);
@@ -342,12 +358,39 @@ class _LearningPageState extends State<LearningPage>
       // 保存失败也继续
     }
 
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('学习完成！')));
-      Navigator.of(context).pop(true);
+    // 逐个查询每个词的最新学习记录，构建总结数据
+    final items = <String, WordSummaryItem>{};
+    for (final word in _results.keys) {
+      UserWordRecord? record;
+      try {
+        record = await LearningService.getRecord(word);
+      } catch (e) {
+        record = null;
+      }
+
+      // 找一个包含该词的缓存索引用于显示释义
+      final index = _words.indexWhere(
+        (w) => w.trim().toLowerCase() == word.toLowerCase(),
+      );
+      final entry = index >= 0 ? _entryCache[index] : null;
+      final meaning = extractFirstMeaning(entry?.translation);
+
+      items[word] = WordSummaryItem(
+        word: word,
+        meaning: meaning.isEmpty ? '（无释义）' : meaning,
+        statusLabel: formatNextReviewLabel(record),
+      );
     }
+
+    if (!mounted) return;
+    setState(() {
+      _summaryItems
+        ..clear()
+        ..addAll(items);
+      _currentPhase = 3;
+      _isLoading = false;
+    });
+    _animController.forward(from: 0);
   }
 
   // ─── UI ──────────────────────────────────────
@@ -394,17 +437,36 @@ class _LearningPageState extends State<LearningPage>
                                 child: _buildCurrentPhase(theme, colorScheme),
                               ),
                             ),
-                            WordLearningBottomBar(
-                              currentPhase: _currentPhase,
-                              globalIndex: _globalIndex,
-                              totalWords: _words.length,
-                              quizAnswered: _quizAnswered,
-                              showingAnswer: _showingAnswer,
-                              onLearnNext: _onLearnNext,
-                              onQuizConfirm: _onQuizConfirm,
-                              onRecallFirstChoice: _onRecallFirstChoice,
-                              onRecallSecondChoice: _onRecallSecondChoice,
-                            ),
+                            if (_currentPhase == 3)
+                              SizedBox(
+                                width: double.infinity,
+                                child: FilledButton.icon(
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(true),
+                                  icon: const Icon(Icons.check),
+                                  label: const Text(
+                                    '完成',
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                  style: FilledButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 16,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              WordLearningBottomBar(
+                                currentPhase: _currentPhase,
+                                globalIndex: _globalIndex,
+                                totalWords: _words.length,
+                                quizAnswered: _quizAnswered,
+                                showingAnswer: _showingAnswer,
+                                onLearnNext: _onLearnNext,
+                                onQuizConfirm: _onQuizConfirm,
+                                onRecallFirstChoice: _onRecallFirstChoice,
+                                onRecallSecondChoice: _onRecallSecondChoice,
+                              ),
                           ],
                         ),
                       ),
@@ -432,6 +494,8 @@ class _LearningPageState extends State<LearningPage>
         );
       case 2:
         return _buildRecallPhase(theme, colorScheme);
+      case 3:
+        return _buildSummaryPhase(theme, colorScheme);
       default:
         return const SizedBox.shrink();
     }
@@ -487,6 +551,45 @@ class _LearningPageState extends State<LearningPage>
 
         const Spacer(flex: 3),
       ],
+    );
+  }
+
+  // ─── 总结阶段 UI ────────────────────────────
+
+  Widget _buildSummaryPhase(ThemeData theme, ColorScheme colorScheme) {
+    final items = _summaryItems.values.toList();
+
+    // 统计各类结果数量
+    var easyCount = 0;
+    var hardCount = 0;
+    var forgotCount = 0;
+    var masteredCount = 0;
+    for (final w in _results.keys) {
+      switch (_results[w]) {
+        case 'easy':
+          easyCount++;
+          break;
+        case 'hard':
+          hardCount++;
+          break;
+        case 'forgot':
+          forgotCount++;
+          break;
+        case 'mastered':
+          masteredCount++;
+          break;
+      }
+    }
+
+    return WordLearningSummaryView(
+      title: '学习完成！',
+      icon: Icons.emoji_events,
+      items: items,
+      learnedCount: items.length,
+      easyCount: easyCount,
+      hardCount: hardCount,
+      forgotCount: forgotCount,
+      masteredCount: masteredCount,
     );
   }
 

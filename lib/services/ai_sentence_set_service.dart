@@ -7,9 +7,14 @@ import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
 import 'database_service.dart';
 
-/// 句式集管理服务
+/// 句式集管理服务（单例，各页面共享同一数据源以确保实时同步）
 class SentenceSetService extends ChangeNotifier {
   static const String _prefsSetsKey = 'sentence_sets_v1';
+
+  /// 全局唯一实例
+  static final SentenceSetService instance = SentenceSetService._();
+
+  SentenceSetService._();
 
   List<SentenceSet> _sets = [];
   bool _loaded = false;
