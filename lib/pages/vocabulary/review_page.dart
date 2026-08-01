@@ -11,6 +11,7 @@ import 'shared/quiz_widget.dart';
 import 'shared/recall_widgets.dart';
 import 'shared/summary_widget.dart';
 import 'shared/word_utils.dart';
+import 'spelling_page.dart';
 
 /// 学习类型：新词学习（第二遍）或复习
 enum ReviewType { learning, review }
@@ -396,6 +397,35 @@ class _ReviewPageState extends State<ReviewPage>
       _summaryItems
         ..clear()
         ..addAll(items);
+    });
+
+    // 询问是否进入拼写练习
+    final enterSpelling = await showSpellingPrompt(
+      context,
+      wordCount: _results.length,
+    );
+
+    if (!mounted) return;
+
+    if (enterSpelling) {
+      // 构建词 → 中文释义映射（跳过无释义的词）
+      final spellingEntries = <String, String>{};
+      for (final item in items.values) {
+        if (item.meaning != '（无释义）') {
+          spellingEntries[item.word] = item.meaning;
+        }
+      }
+      if (spellingEntries.isNotEmpty) {
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => SpellingPage(entries: spellingEntries),
+          ),
+        );
+        if (!mounted) return;
+      }
+    }
+
+    setState(() {
       _currentPhase = 3;
     });
     _animController.forward(from: 0);
