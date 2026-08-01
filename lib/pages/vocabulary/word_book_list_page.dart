@@ -17,10 +17,12 @@ class WordBookListPage extends StatefulWidget {
 class _WordBookListPageState extends State<WordBookListPage> {
   List<WordBook> _books = [];
   bool _isLoading = true;
+  int? _currentBookId;
 
   @override
   void initState() {
     super.initState();
+    _currentBookId = widget.currentBookId;
     _loadBooks();
   }
 
@@ -59,7 +61,17 @@ class _WordBookListPageState extends State<WordBookListPage> {
 
     if (confirm == true && book.id != null) {
       await WordBookService.deleteBook(book.id!);
-      _loadBooks();
+      await _loadBooks();
+
+      // 如果删除的是当前选中词书，自动选择剩余的第一本；若没有剩余则清空
+      if (book.id == _currentBookId) {
+        if (_books.isNotEmpty) {
+          setState(() => _currentBookId = _books.first.id);
+          widget.onBookSelected?.call(_books.first);
+        } else {
+          setState(() => _currentBookId = null);
+        }
+      }
     }
   }
 
@@ -161,7 +173,7 @@ class _WordBookListPageState extends State<WordBookListPage> {
   Widget _buildBookCard(WordBook book) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final isSelected = book.id == widget.currentBookId;
+    final isSelected = book.id == _currentBookId;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
