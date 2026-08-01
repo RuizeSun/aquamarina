@@ -113,21 +113,30 @@ class _AquamarinaAppState extends State<AquamarinaApp> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: ThemeModeService.instance.mode,
-      builder: (context, themeMode, _) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        ThemeModeService.instance.mode,
+        ThemeModeService.instance.seedColor,
+      ]),
+      builder: (context, _) {
+        final themeMode = ThemeModeService.instance.mode.value;
+        final seedColor = ThemeModeService.instance.seedColor.value;
         return MaterialApp(
           title: 'Aquamarina',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             useMaterial3: true,
-            colorSchemeSeed: const Color(0xFF00BFA5),
-            brightness: Brightness.light,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seedColor,
+              brightness: Brightness.light,
+            ),
           ),
           darkTheme: ThemeData(
             useMaterial3: true,
-            colorSchemeSeed: const Color(0xFF00BFA5),
-            brightness: Brightness.dark,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: seedColor,
+              brightness: Brightness.dark,
+            ),
           ),
           themeMode: themeMode,
           home: const MainShell(),
