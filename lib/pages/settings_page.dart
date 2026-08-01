@@ -8,6 +8,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/tts_settings.dart';
 import '../services/tts_service.dart';
+import '../services/theme_mode_service.dart';
 import 'ai_profile_edit_page.dart';
 
 /// 隐私政策 SharedPreferences 键前缀（与 ai_practice_page.dart 保持一致）
@@ -340,6 +341,60 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         children: [
           const SizedBox(height: 8),
+
+          // ---- 外观设置 ----
+          _SectionHeader(title: '外观设置'),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: ThemeModeService.instance.mode,
+            builder: (context, themeMode, _) {
+              return ListTile(
+                leading: Icon(
+                  themeMode == ThemeMode.dark
+                      ? Icons.dark_mode
+                      : themeMode == ThemeMode.light
+                      ? Icons.light_mode
+                      : Icons.brightness_auto,
+                  color: colorScheme.primary,
+                ),
+                title: const Text('深色模式'),
+                subtitle: Text(
+                  themeMode == ThemeMode.dark
+                      ? '深色模式'
+                      : themeMode == ThemeMode.light
+                      ? '亮色模式'
+                      : '跟随系统',
+                ),
+                trailing: SegmentedButton<ThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text('亮色'),
+                      icon: Icon(Icons.light_mode, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text('系统'),
+                      icon: Icon(Icons.brightness_auto, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text('深色'),
+                      icon: Icon(Icons.dark_mode, size: 16),
+                    ),
+                  ],
+                  selected: {themeMode},
+                  onSelectionChanged: (selected) {
+                    ThemeModeService.instance.setMode(selected.first);
+                  },
+                  style: ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              );
+            },
+          ),
+          const Divider(),
 
           // ---- 背单词设置 ----
           _SectionHeader(title: '背单词设置'),

@@ -11,6 +11,7 @@ import 'services/database_service.dart';
 import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
 import 'services/ai_profile_service.dart';
+import 'services/theme_mode_service.dart';
 import 'models/ai_profile.dart';
 
 void main() async {
@@ -96,26 +97,42 @@ SOFTWARE.''',
   runApp(const AquamarinaApp());
 }
 
-class AquamarinaApp extends StatelessWidget {
+class AquamarinaApp extends StatefulWidget {
   const AquamarinaApp({super.key});
 
   @override
+  State<AquamarinaApp> createState() => _AquamarinaAppState();
+}
+
+class _AquamarinaAppState extends State<AquamarinaApp> {
+  @override
+  void initState() {
+    super.initState();
+    ThemeModeService.instance.load();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Aquamarina',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF00BFA5),
-        brightness: Brightness.light,
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF00BFA5),
-        brightness: Brightness.dark,
-      ),
-      themeMode: ThemeMode.system,
-      home: const MainShell(),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: ThemeModeService.instance.mode,
+      builder: (context, themeMode, _) {
+        return MaterialApp(
+          title: 'Aquamarina',
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: const Color(0xFF00BFA5),
+            brightness: Brightness.light,
+          ),
+          darkTheme: ThemeData(
+            useMaterial3: true,
+            colorSchemeSeed: const Color(0xFF00BFA5),
+            brightness: Brightness.dark,
+          ),
+          themeMode: themeMode,
+          home: const MainShell(),
+        );
+      },
     );
   }
 }
