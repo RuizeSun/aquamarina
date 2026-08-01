@@ -16,6 +16,18 @@ class DailyStats {
   });
 }
 
+/// 待复习单词分组（按词书）
+class DueWordsGroup {
+  /// 词书 ID；未分类（单词不属于任何词书）时为 null
+  final int? bookId;
+  final String bookTitle;
+
+  /// 该词书中的待复习单词
+  final List<String> words;
+
+  DueWordsGroup({this.bookId, required this.bookTitle, required this.words});
+}
+
 class LearningService {
   static String _todayStr() {
     final now = DateTime.now();
@@ -141,6 +153,81 @@ class LearningService {
     final wrong = await getTodayWrongWords();
     final due = await getDueReviews();
     return [...wrong, ...due];
+  }
+
+  /// 获取全部待复习单词，并按词书分组。
+  /// 一个单词可能同时属于多本词书，此时会出现在每本词书的
+  /// 分组中；不属于任何词书的单词（如词书已删除）归入
+  /// 「未分类」分组，避免遗漏复习任务。
+  static Future<List<DueWordsGroup>> getDueWordsGroupedByBook() async {
+    final allDueWords = await getAllDueWords();
+    if (allDueWords.isEmpty) return [];
+
+    final db = await DatabaseService.database;
+
+    // 查询所有词书条目（word → 所属词书列表）
+    final maps = await db.rawQuery('''
+      SELECT e.word, e.book_id, b.title FROM word_book_entries e
+      JOIN word_books b ON b.id = e.book_id
+    ''');
+    final wordBooksMap = <String, List<Map<String, dynamic>>>{};
+    for (final m in maps) {
+      final word = m['word'] as String;
+      wordBooksMap.putIfAbsent(word, () => []).add(m);
+    }
+
+    // 按词书聚合
+    final groupMap = <int, DueWordsGroup>{};
+    final uncategorized = <String>[];
+    final seen = <String>{};
+
+    for (final word in allDueWords) {
+      final cleaned = word.trim().toLowerCase();
+      if (seen.contains(cleaned)) continue;
+      seen.add(cleaned);
+
+      final bookMaps = wordBooksMap[cleaned];
+      if (bookMaps == null || bookMaps.isEmpty) {
+        uncategorized.add(word);
+        continue;
+      }
+      for (final m in bookMaps) {
+        final bookId = m['book_id'] as int;
+        final title = m['title'] as String;
+        groupMap
+            .putIfAbsent(
+              bookId,
+              () => DueWordsGroup(bookId: bookId, bookTitle: title, words: []),
+            )
+            .words
+            .add(word);
+      }
+    }
+
+    // 按词书创建时间排序（保持稳定顺序）
+    final bookOrder = await db.query(
+      'word_books',
+      columns: ['id'],
+      orderBy: 'created_at ASC',
+    );
+    final idOrder = bookOrder.map((m) => m['id'] as int).toList();
+    final groups = <DueWordsGroup>[];
+    for (final id in idOrder) {
+      final g = groupMap[id];
+      if (g != null) groups.add(g);
+    }
+    // 补充未在 word_books 中（理论上不会发生）的分组
+    for (final g in groupMap.values) {
+      if (!groups.contains(g)) groups.add(g);
+    }
+
+    if (uncategorized.isNotEmpty) {
+      groups.add(
+        DueWordsGroup(bookId: null, bookTitle: '未分类', words: uncategorized),
+      );
+    }
+
+    return groups;
   }
 
   // ─── 全局随机干扰项池 ──────────────────────────

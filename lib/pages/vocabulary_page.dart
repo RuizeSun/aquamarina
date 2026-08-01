@@ -27,6 +27,7 @@ class VocabularyPageState extends State<VocabularyPage> {
   static const _currentBookIdKey = 'vocabulary_current_book_id';
   static const _reviewLimitKey = 'review_limit';
   static const _learningLimitKey = 'learning_limit';
+  static const _reviewAskBookKey = 'review_ask_book';
 
   @override
   void initState() {
@@ -93,7 +94,9 @@ class VocabularyPageState extends State<VocabularyPage> {
 
     final prefs = await SharedPreferences.getInstance();
     final reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
+    final askBook = prefs.getBool(_reviewAskBookKey) ?? true;
 
+    // 所有待复习单词（去重后的全局列表）
     var dueWords = await LearningService.getAllDueWords();
 
     if (dueWords.isEmpty) {
@@ -103,6 +106,17 @@ class VocabularyPageState extends State<VocabularyPage> {
         ).showSnackBar(const SnackBar(content: Text('今日没有待复习的单词！')));
       }
       return;
+    }
+
+    // 需要询问词书选择时，获取分组数据
+    if (askBook) {
+      final groups = await LearningService.getDueWordsGroupedByBook();
+      // 仅当存在多本词书有待复习时弹窗选择
+      if (groups.length > 1) {
+        final selected = await _showReviewBookPicker(groups);
+        if (selected == null) return; // 用户取消
+        dueWords = selected;
+      }
     }
 
     // 应用复习上限
@@ -123,6 +137,61 @@ class VocabularyPageState extends State<VocabularyPage> {
       // 返回后总是刷新数据
       _loadData();
     }
+  }
+
+  /// 弹出词书选择对话框，返回选中的待复习单词列表；取消则返回 null。
+  Future<List<String>?> _showReviewBookPicker(
+    List<DueWordsGroup> groups,
+  ) async {
+    // 收集全部单词（去重），作为"全部词书"选项
+    final allWords = <String>[];
+    final seen = <String>{};
+    for (final g in groups) {
+      for (final w in g.words) {
+        final cleaned = w.trim().toLowerCase();
+        if (seen.add(cleaned)) allWords.add(w);
+      }
+    }
+
+    return showDialog<List<String>>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('选择复习词书'),
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 全部词书
+                ListTile(
+                  leading: const Icon(Icons.collections_bookmark_outlined),
+                  title: const Text('全部词书'),
+                  subtitle: Text('${allWords.length} 个待复习单词'),
+                  onTap: () => Navigator.of(context).pop(allWords),
+                ),
+                const Divider(height: 1),
+                // 各词书
+                ...groups.map(
+                  (g) => ListTile(
+                    leading: const Icon(Icons.menu_book),
+                    title: Text(g.bookTitle),
+                    subtitle: Text('${g.words.length} 个待复习单词'),
+                    onTap: () => Navigator.of(context).pop(g.words),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _startLearning() async {
@@ -149,19 +218,19 @@ class VocabularyPageState extends State<VocabularyPage> {
     );
 
     if (newWords.isEmpty) {
-      if (mounted) {
-        // 检查是否词书所有词已学完
-        final allWords = await WordBookService.getBookWords(_currentBook!.id!);
-        final totalLearned = allWords.length;
-        if (totalLearned >= _currentBook!.wordCount) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('词书中所有单词已学完！')));
-        } else {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('今天没有新单词可学，明日再来！')));
-        }
+      if (!mounted) return;
+      // 检查是否词书所有词已学完
+      final allWords = await WordBookService.getBookWords(_currentBook!.id!);
+      if (!mounted) return;
+      final totalLearned = allWords.length;
+      if (totalLearned >= _currentBook!.wordCount) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('词书中所有单词已学完！')));
+      } else {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('今天没有新单词可学，明日再来！')));
       }
       return;
     }

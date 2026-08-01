@@ -24,12 +24,14 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   int _reviewLimit = 10;
   int _learningLimit = 10;
+  bool _reviewAskBook = true;
 
   // AI 配置管理
   final AiProfileService _profileService = AiProfileService();
 
   static const String _reviewLimitKey = 'review_limit';
   static const String _learningLimitKey = 'learning_limit';
+  static const String _reviewAskBookKey = 'review_ask_book';
 
   @override
   void initState() {
@@ -53,9 +55,11 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
       _learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
+      _reviewAskBook = prefs.getBool(_reviewAskBookKey) ?? true;
     });
     await prefs.setInt(_reviewLimitKey, _reviewLimit);
     await prefs.setInt(_learningLimitKey, _learningLimit);
+    await prefs.setBool(_reviewAskBookKey, _reviewAskBook);
 
     // 加载 AI 配置
     await _profileService.load();
@@ -72,6 +76,12 @@ class _SettingsPageState extends State<SettingsPage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_learningLimitKey, value);
     setState(() => _learningLimit = value);
+  }
+
+  Future<void> _setReviewAskBook(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_reviewAskBookKey, value);
+    setState(() => _reviewAskBook = value);
   }
 
   void _showReviewLimitPicker() {
@@ -345,6 +355,13 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             onTap: _showReviewLimitPicker,
+          ),
+          SwitchListTile(
+            secondary: Icon(Icons.question_answer, color: colorScheme.primary),
+            title: const Text('复习前询问词书'),
+            subtitle: const Text('多本词书有待复习时，选择先复习哪个词书'),
+            value: _reviewAskBook,
+            onChanged: _setReviewAskBook,
           ),
           ListTile(
             leading: Icon(Icons.auto_stories, color: colorScheme.primary),
