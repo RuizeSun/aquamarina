@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
 import 'pages/vocabulary_page.dart';
 import 'pages/ai_practice_page.dart';
-import 'pages/settings_page.dart';
+import 'pages/settings/settings_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database_service.dart';
