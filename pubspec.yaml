@@ -25,6 +25,7 @@ dependencies:
     flutter_edge_tts: ^0.0.2
     audioplayers: ^6.8.1
     flutter_launcher_icons: ^0.14.4
+    file_selector: ^1.1.0
 
 dev_dependencies:
     flutter_test:

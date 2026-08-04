@@ -6,7 +6,7 @@ void main() {
     await tester.pumpWidget(const AquamarinaApp());
     expect(find.text('搜索'), findsOneWidget);
     expect(find.text('背单词'), findsOneWidget);
-    expect(find.text('AI 练习'), findsOneWidget);
+    expect(find.text('句型练习'), findsOneWidget);
     expect(find.text('设置'), findsOneWidget);
   });
 }
