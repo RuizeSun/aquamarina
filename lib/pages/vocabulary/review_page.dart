@@ -54,6 +54,9 @@ class _ReviewPageState extends State<ReviewPage>
   // 累计完成的"词×阶段"步数，用于进度条（只增不减）
   int _completedSteps = 0;
 
+  // 是否已确认退出（防止重复弹出确认框）
+  bool _isExiting = false;
+
   // 收集结果（word → easy/hard/forgot/mastered）
   final Map<String, String> _results = {};
 
@@ -433,13 +436,50 @@ class _ReviewPageState extends State<ReviewPage>
 
   // ─── UI ──────────────────────────────────────
 
+  /// 退出确认：提示用户退出将不保存本次复习进度。
+  Future<bool> _confirmExit() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出复习'),
+        content: const Text('退出后将不保存本次复习进度，确定退出吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('继续复习'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+    return result == true;
+  }
+
+  /// 处理退出：先确认，确认后弹出页面。
+  Future<void> _handleExit() async {
+    if (_isExiting) return;
+    final shouldExit = await _confirmExit();
+    if (shouldExit && mounted) {
+      _isExiting = true;
+      Navigator.of(context).pop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
     return PopScope(
-      canPop: true,
+      // 总结阶段进度已保存，允许直接退出；其他阶段退出前需确认。
+      canPop: _currentPhase == 3,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop || _isExiting) return;
+        await _handleExit();
+      },
       child: Column(
         children: [
           TweenAnimationBuilder<double>(
@@ -455,7 +495,7 @@ class _ReviewPageState extends State<ReviewPage>
                 title: Text('${_globalIndex + 1}/${_words.length}'),
                 leading: IconButton(
                   icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(context).maybePop(),
                 ),
                 actions: [
                   if (_currentPhase == 2)
