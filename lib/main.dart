@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
 import 'pages/vocabulary_page.dart';
 import 'pages/ai_practice_page.dart';
-import 'pages/settings/settings_page.dart';
+import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/database_service.dart';
@@ -183,7 +183,7 @@ class _MainShellState extends State<MainShell> {
           const SearchPage(),
           VocabularyPage(key: _vocabularyKey),
           const AiPracticePage(),
-          const SettingsPage(),
+          const ProfilePage(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -206,9 +206,9 @@ class _MainShellState extends State<MainShell> {
             label: '句型练习',
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings_rounded),
-            label: '设置',
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person_rounded),
+            label: '个人',
           ),
         ],
       ),
