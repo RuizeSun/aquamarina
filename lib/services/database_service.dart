@@ -29,7 +29,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -127,6 +127,17 @@ class DatabaseService {
           )
         ''');
 
+        // ── 单词收藏与笔记相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS word_notes (
+            word TEXT PRIMARY KEY COLLATE NOCASE,
+            note TEXT,
+            is_favorited INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+
         // 索引
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_book_entries_book_id ON word_book_entries(book_id)',
@@ -151,6 +162,18 @@ class DatabaseService {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
         if (oldVersion < 2) {
           await _ensureColumn(db, 'daily_activity', 'daily_goal', 'INTEGER');
+        }
+        // 2 → 3：新增 word_notes 表（单词收藏与笔记）
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS word_notes (
+              word TEXT PRIMARY KEY COLLATE NOCASE,
+              note TEXT,
+              is_favorited INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT,
+              updated_at TEXT
+            )
+          ''');
         }
       },
     );

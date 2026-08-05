@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/learning_service.dart';
+import 'favorites_page.dart';
+import 'notes_page.dart';
 import 'settings/settings_page.dart';
 
 /// 个人页：展示个人信息与学习统计，并作为「设置」等功能的入口
@@ -240,6 +242,31 @@ class _ProfilePageState extends State<ProfilePage> {
 
     return Column(
       children: [
+        ListTile(
+          leading: Icon(Icons.edit_note, color: colorScheme.primary),
+          title: const Text('我的笔记'),
+          subtitle: const Text('查看所有单词笔记'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (context) => const NotesPage()));
+          },
+        ),
+        ListTile(
+          leading: Icon(
+            Icons.star_outline_rounded,
+            color: Colors.amber.shade700,
+          ),
+          title: const Text('我的收藏'),
+          subtitle: const Text('收藏的单词与笔记'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => const FavoritesPage()),
+            );
+          },
+        ),
         ListTile(
           leading: Icon(Icons.settings_outlined, color: colorScheme.primary),
           title: const Text('设置'),
