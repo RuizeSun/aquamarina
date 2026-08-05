@@ -357,7 +357,7 @@ class _LearningPageState extends State<LearningPage>
     setState(() => _isLoading = true);
 
     try {
-      await LearningService.saveLearningBatchResults(_results);
+      await LearningService.saveLearningBatchResults(_results, isReview: false);
     } catch (e) {
       // 保存失败也继续
     }

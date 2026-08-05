@@ -366,7 +366,7 @@ class _ReviewPageState extends State<ReviewPage>
     }
 
     try {
-      await LearningService.saveLearningBatchResults(_results);
+      await LearningService.saveLearningBatchResults(_results, isReview: true);
     } catch (e) {
       // 保存失败也继续
     }

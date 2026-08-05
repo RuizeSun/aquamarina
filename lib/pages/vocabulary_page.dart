@@ -9,6 +9,7 @@ import 'vocabulary/learning_page.dart';
 import 'vocabulary/review_page.dart';
 import 'vocabulary/review_plan_page.dart';
 import 'vocabulary/word_overview_page.dart';
+import 'vocabulary/stats_page.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -21,6 +22,11 @@ class VocabularyPageState extends State<VocabularyPage> {
   WordBook? _currentBook;
   DailyStats? _stats;
   int _streak = 0;
+  Map<String, dynamic> _goalProgress = {
+    'learned': 0,
+    'goal': 10,
+    'completed': false,
+  };
   bool _isLoading = true;
   Timer? _refreshTimer;
 
@@ -73,6 +79,8 @@ class VocabularyPageState extends State<VocabularyPage> {
       _stats = await LearningService.getDailyStats();
       // 获取连续打卡
       _streak = await LearningService.getStreak();
+      // 获取今日打卡进度
+      _goalProgress = await LearningService.getTodayGoalProgress();
     } catch (e) {
       // ignore errors during loading
     }
@@ -317,24 +325,49 @@ class VocabularyPageState extends State<VocabularyPage> {
             _buildBookCard(theme, colorScheme),
             const SizedBox(height: 16),
 
-            // 单词总览入口
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const WordOverviewPage()),
-                  );
-                  _loadData();
-                },
-                icon: const Icon(Icons.insights),
-                label: const Text('单词总览'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+            // 单词总览 + 学习统计入口
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const WordOverviewPage(),
+                        ),
+                      );
+                      _loadData();
+                    },
+                    icon: const Icon(Icons.insights),
+                    label: const Text('单词总览'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const StatsPage()),
+                      );
+                      _loadData();
+                    },
+                    icon: const Icon(Icons.bar_chart),
+                    label: const Text('学习统计'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+
+            // 今日打卡进度卡片
+            _buildGoalCard(theme, colorScheme),
+            const SizedBox(height: 16),
 
             // 🔥 连续打卡
             if (_streak > 0)
@@ -541,6 +574,77 @@ class VocabularyPageState extends State<VocabularyPage> {
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  /// 今日打卡进度卡片
+  Widget _buildGoalCard(ThemeData theme, ColorScheme colorScheme) {
+    final learned = (_goalProgress['learned'] as int?) ?? 0;
+    final goal = (_goalProgress['goal'] as int?) ?? 10;
+    final completed = (_goalProgress['completed'] as bool?) ?? false;
+    final progress = goal <= 0 ? 0.0 : (learned / goal).clamp(0.0, 1.0);
+    final remaining = goal - learned > 0 ? goal - learned : 0;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: completed
+            ? Colors.green.withValues(alpha: 0.12)
+            : colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: completed
+            ? Border.all(color: Colors.green.withValues(alpha: 0.5))
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                completed ? Icons.check_circle : Icons.event_available,
+                color: completed ? Colors.green : colorScheme.primary,
+                size: 28,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  completed ? '今日已打卡' : '今日打卡进度',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: completed ? Colors.green : colorScheme.primary,
+                  ),
+                ),
+              ),
+              Text(
+                '$learned / $goal',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: completed ? Colors.green : colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 8,
+              backgroundColor: colorScheme.surfaceContainerHighest,
+              color: completed ? Colors.green : colorScheme.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            completed ? '目标达成，继续保持！' : '还差 $remaining 个新词完成今日打卡',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
     );
   }

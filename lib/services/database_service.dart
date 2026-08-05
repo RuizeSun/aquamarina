@@ -29,7 +29,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -88,7 +88,8 @@ class DatabaseService {
             words_reviewed INTEGER DEFAULT 0,
             correct_count INTEGER DEFAULT 0,
             wrong_count INTEGER DEFAULT 0,
-            completed INTEGER DEFAULT 0
+            completed INTEGER DEFAULT 0,
+            daily_goal INTEGER
           )
         ''');
 
@@ -146,7 +147,27 @@ class DatabaseService {
           'CREATE INDEX IF NOT EXISTS idx_wrong_sentences_set_id ON wrong_sentences(set_id)',
         );
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
+        if (oldVersion < 2) {
+          await _ensureColumn(db, 'daily_activity', 'daily_goal', 'INTEGER');
+        }
+      },
     );
+  }
+
+  /// 检查表中是否存在指定列，缺失则添加（幂等，可安全重复调用）
+  static Future<void> _ensureColumn(
+    Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = columns.any((c) => c['name'] == column);
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    }
   }
 
   static Future<void> close() async {

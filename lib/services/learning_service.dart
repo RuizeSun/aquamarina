@@ -1,4 +1,5 @@
 import 'package:sqflite/sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_word_record.dart';
 import 'database_service.dart';
 
@@ -314,6 +315,17 @@ class LearningService {
 
   // ─── 打卡与统计数据 ──────────────────────────
 
+  /// 每日学习目标（SharedPreferences key）
+  static const String dailyGoalKey = 'daily_goal';
+
+  /// 读取今日学习目标（默认 10）
+  static Future<int> getDailyGoal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final goal = prefs.getInt(dailyGoalKey) ?? 10;
+    if (goal <= 0) return 10;
+    return goal;
+  }
+
   /// 记录/更新今日活动
   static Future<void> recordDailyActivity({
     int wordsLearned = 0,
@@ -334,6 +346,7 @@ class LearningService {
         'correct_count',
         'wrong_count',
         'completed',
+        'daily_goal',
       ],
       where: 'date = ?',
       whereArgs: [today],
@@ -361,8 +374,91 @@ class LearningService {
         'correct_count': correctCount,
         'wrong_count': wrongCount,
         'completed': completed ? 1 : 0,
+        'daily_goal': null,
       });
     }
+
+    // 每次写入后检查是否达标
+    await _checkAndMarkCompleted();
+  }
+
+  /// 检查今日学习数是否达到目标，达标则标记 completed=1 并记录当日目标值
+  static Future<void> _checkAndMarkCompleted() async {
+    final db = await DatabaseService.database;
+    final today = _todayStr();
+    final goal = await getDailyGoal();
+
+    final row = await db.query(
+      'daily_activity',
+      columns: ['words_learned', 'completed'],
+      where: 'date = ?',
+      whereArgs: [today],
+    );
+    if (row.isEmpty) return;
+
+    final learned = (row.first['words_learned'] as int?) ?? 0;
+    final completed = (row.first['completed'] as int?) == 1;
+    if (!completed && learned >= goal) {
+      await db.update(
+        'daily_activity',
+        {'completed': 1, 'daily_goal': goal},
+        where: 'date = ?',
+        whereArgs: [today],
+      );
+    }
+  }
+
+  /// 当日打卡进度（用于主页进度条展示）
+  /// 返回 {learned, goal, completed}
+  static Future<Map<String, dynamic>> getTodayGoalProgress() async {
+    final db = await DatabaseService.database;
+    final today = _todayStr();
+    final goal = await getDailyGoal();
+
+    final row = await db.query(
+      'daily_activity',
+      columns: ['words_learned', 'completed'],
+      where: 'date = ?',
+      whereArgs: [today],
+    );
+
+    final learned = row.isEmpty ? 0 : (row.first['words_learned'] as int?) ?? 0;
+    final completed = row.isNotEmpty && (row.first['completed'] as int?) == 1;
+
+    return {'learned': learned, 'goal': goal, 'completed': completed};
+  }
+
+  /// 获取指定月份每天的打卡数据（用于日历展示）
+  /// 返回 {date, completed} 列表，未打卡日期也包含（completed=0）
+  static Future<List<Map<String, dynamic>>> getMonthlyActivity(
+    int year,
+    int month,
+  ) async {
+    final db = await DatabaseService.database;
+    final prefix = '$year-${month.toString().padLeft(2, '0')}';
+
+    final rows = await db.query(
+      'daily_activity',
+      columns: ['date', 'completed'],
+      where: 'date LIKE ?',
+      whereArgs: ['$prefix%'],
+    );
+
+    final completedMap = <String, bool>{};
+    for (final r in rows) {
+      completedMap[r['date'] as String] = (r['completed'] as int?) == 1;
+    }
+
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final results = <Map<String, dynamic>>[];
+    for (int day = 1; day <= daysInMonth; day++) {
+      final dateStr = '$prefix-${day.toString().padLeft(2, '0')}';
+      results.add({
+        'date': dateStr,
+        'completed': completedMap[dateStr] ?? false,
+      });
+    }
+    return results;
   }
 
   /// 获取连续打卡天数（从昨天往前数，连续 completed=1 的天数）
@@ -643,9 +739,12 @@ class LearningService {
   ///
   /// 改进：对 easy/hard 不再硬编码 stage=0，而是参考原 stage 做递进或降级，
   ///       与 processReviewEasy/processReviewForgot 逻辑对齐。
+  ///
+  /// [isReview] 为 true 时计入「今日复习」，false 时计入「今日学习」。
   static Future<void> saveLearningBatchResults(
-    Map<String, String> results,
-  ) async {
+    Map<String, String> results, {
+    bool isReview = false,
+  }) async {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
 
@@ -758,6 +857,23 @@ class LearningService {
         }
       }
     });
+
+    // ── 每日活动统计 ──
+    var correctCount = 0;
+    var wrongCount = 0;
+    for (final result in results.values) {
+      if (result == 'easy' || result == 'mastered') {
+        correctCount++;
+      } else if (result == 'hard' || result == 'forgot') {
+        wrongCount++;
+      }
+    }
+    await recordDailyActivity(
+      wordsLearned: isReview ? 0 : results.length,
+      wordsReviewed: isReview ? results.length : 0,
+      correctCount: correctCount,
+      wrongCount: wrongCount,
+    );
   }
 
   // ─── 第一遍学习流程 ──────────────────────────────

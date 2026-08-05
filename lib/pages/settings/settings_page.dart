@@ -149,7 +149,7 @@ class _SettingsPageState extends State<SettingsPage> {
         // 左侧：分类列表（Master）
         SizedBox(
           width: 280,
-          child: ColoredBox(
+          child: Material(
             color: Theme.of(
               context,
             ).colorScheme.surfaceContainerLow.withValues(alpha: 0.5),
