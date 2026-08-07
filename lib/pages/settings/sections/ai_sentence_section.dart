@@ -68,7 +68,7 @@ class _AiSentenceSettingsSectionState extends State<AiSentenceSettingsSection> {
                         IconButton(
                           icon: const Icon(Icons.remove_circle_outline),
                           onPressed: temp > 1
-                              ? () => setDialogState(() => temp -= 5)
+                              ? () => setDialogState(() => temp--)
                               : null,
                         ),
                         const SizedBox(width: 16),
@@ -81,7 +81,7 @@ class _AiSentenceSettingsSectionState extends State<AiSentenceSettingsSection> {
                         IconButton(
                           icon: const Icon(Icons.add_circle_outline),
                           onPressed: temp < 50
-                              ? () => setDialogState(() => temp += 5)
+                              ? () => setDialogState(() => temp++)
                               : null,
                         ),
                       ],
@@ -210,7 +210,7 @@ class _AiSentenceSettingsSectionState extends State<AiSentenceSettingsSection> {
                         const SizedBox(width: 16),
                         IconButton(
                           icon: const Icon(Icons.add_circle_outline),
-                          onPressed: temp < 10
+                          onPressed: temp < 9
                               ? () => setDialogState(() => temp++)
                               : null,
                         ),

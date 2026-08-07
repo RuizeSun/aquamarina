@@ -114,7 +114,7 @@ class _VocabularySectionState extends State<VocabularySection> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.remove_circle_outline),
-                          onPressed: temp > 1
+                          onPressed: temp > 5
                               ? () => setDialogState(() => temp--)
                               : null,
                         ),
