@@ -86,7 +86,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       : null;
 
   int get _totalSentences => _sessionSentences.length;
-  int get _remainingSentences => _totalSentences - _currentSentenceIndex;
+  int get _remainingSentences => _totalSentences - _currentSentenceIndex - 1;
 
   @override
   void initState() {
@@ -757,12 +757,12 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
               child: FilledButton.icon(
                 onPressed: _nextSentence,
                 icon: Icon(
-                  _remainingSentences > 1
+                  _remainingSentences > 0
                       ? Icons.arrow_forward
                       : Icons.done_all,
                 ),
                 label: Text(
-                  _remainingSentences > 1
+                  _remainingSentences > 0
                       ? '下一题（还剩 $_remainingSentences 句）'
                       : '查看总结',
                   style: const TextStyle(fontSize: 16),
