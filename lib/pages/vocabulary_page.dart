@@ -55,7 +55,11 @@ class VocabularyPageState extends State<VocabularyPage> {
   Future<void> refresh() => _loadData();
 
   Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+    // 首次加载时显示 loading，后续后台刷新静默更新
+    final isFirstLoad = _stats == null;
+    if (isFirstLoad) {
+      setState(() => _isLoading = true);
+    }
 
     try {
       // 获取上次选中的词书
