@@ -12,6 +12,7 @@ import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
 import 'services/ai_profile_service.dart';
 import 'services/theme_mode_service.dart';
+import 'services/update_service.dart';
 import 'models/ai_profile.dart';
 
 void main() async {
@@ -162,6 +163,81 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     // 初始化 TTS 服务
     TtsService.instance.init();
+    // 延迟检测应用更新（等待首屏渲染完成）
+    Future.delayed(const Duration(seconds: 3), _checkForUpdate);
+  }
+
+  /// 检查应用更新，发现新版本时弹窗提示。
+  Future<void> _checkForUpdate() async {
+    final updateInfo = await UpdateService.checkForUpdate();
+    if (!mounted || updateInfo == null) return;
+    _showUpdateDialog(updateInfo);
+  }
+
+  /// 展示更新提示弹窗。
+  void _showUpdateDialog(UpdateInfo updateInfo) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: Icon(
+          Icons.system_update_rounded,
+          color: colorScheme.primary,
+          size: 36,
+        ),
+        title: Text('发现新版本 ${updateInfo.latestVersion}'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '当前版本: ${updateInfo.currentVersion}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '更新日志',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                updateInfo.release.body.isNotEmpty
+                    ? updateInfo.release.body
+                    : '暂无更新日志',
+                style: theme.textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              UpdateService.setSkippedVersion(updateInfo.latestVersion);
+              Navigator.of(context).pop();
+            },
+            child: const Text('跳过此版本'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后提醒'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              UpdateService.launchUpdate(updateInfo);
+            },
+            child: const Text('立即更新'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _onTabSelected(int index) {
