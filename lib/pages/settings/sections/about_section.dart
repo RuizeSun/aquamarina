@@ -3,8 +3,31 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../../services/update_service.dart';
 
 /// 关于分区
-class AboutSection extends StatelessWidget {
+class AboutSection extends StatefulWidget {
   const AboutSection({super.key});
+
+  @override
+  State<AboutSection> createState() => _AboutSectionState();
+}
+
+class _AboutSectionState extends State<AboutSection> {
+  UpdateChannel _channel = UpdateChannel.latest;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadChannel();
+  }
+
+  Future<void> _loadChannel() async {
+    final channel = await UpdateService.getUpdateChannel();
+    if (mounted) setState(() => _channel = channel);
+  }
+
+  Future<void> _setChannel(UpdateChannel channel) async {
+    await UpdateService.setUpdateChannel(channel);
+    if (mounted) setState(() => _channel = channel);
+  }
 
   Future<void> _showAbout(BuildContext context) async {
     final platform = Theme.of(context).platform == TargetPlatform.android
@@ -34,7 +57,10 @@ class AboutSection extends StatelessWidget {
       ),
     );
 
-    final updateInfo = await UpdateService.checkForUpdate(force: true);
+    final updateInfo = await UpdateService.checkForUpdate(
+      force: true,
+      bypassChannel: true,
+    );
 
     if (!context.mounted) return;
 
@@ -132,6 +158,34 @@ class AboutSection extends StatelessWidget {
           subtitle: const Text('查看是否有新版本可用'),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => _checkUpdate(context),
+        ),
+        ListTile(
+          leading: Icon(
+            Icons.notifications_outlined,
+            color: colorScheme.primary,
+          ),
+          title: const Text('新版本推送'),
+          subtitle: Text(
+            _channel == UpdateChannel.stable
+                ? '仅提示重大版本更新'
+                : _channel == UpdateChannel.latest
+                ? '提示所有版本更新'
+                : '已关闭自动更新提醒',
+          ),
+          trailing: SegmentedButton<UpdateChannel>(
+            segments: const [
+              ButtonSegment(value: UpdateChannel.stable, label: Text('稳定')),
+              ButtonSegment(value: UpdateChannel.latest, label: Text('最新')),
+              ButtonSegment(value: UpdateChannel.off, label: Text('关闭')),
+            ],
+            selected: {_channel},
+            onSelectionChanged: (selected) => _setChannel(selected.first),
+            showSelectedIcon: false,
+            style: ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ),
         ),
         ListTile(
           leading: Icon(Icons.info_outline, color: colorScheme.primary),

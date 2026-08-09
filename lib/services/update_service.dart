@@ -77,6 +77,22 @@ class UpdateInfo {
   });
 }
 
+/// 新版本推送频道
+enum UpdateChannel {
+  /// 稳定：仅当 major 或 minor 版本变更时提示（忽略纯 patch 更新）
+  stable('稳定'),
+
+  /// 最新：任何版本变更都提示
+  latest('最新'),
+
+  /// 关闭：不进行任何更新检查
+  off('关闭');
+
+  /// 显示名称
+  final String label;
+  const UpdateChannel(this.label);
+}
+
 /// 应用更新检测服务
 ///
 /// 通过 GitHub Releases API 检测是否有新版本可用。
@@ -88,6 +104,7 @@ class UpdateService {
       'https://api.github.com/repos/RuizeSun/aquamarina/releases/latest';
   static const String _lastCheckKey = 'update_last_check_time';
   static const String _skippedVersionKey = 'update_skipped_version';
+  static const String _updateChannelKey = 'update_channel';
 
   /// 检查间隔：24 小时
   static const Duration _checkInterval = Duration(hours: 24);
@@ -106,9 +123,20 @@ class UpdateService {
   /// 检查是否有新版本可用。
   ///
   /// [force] 为 true 时忽略冷却期，强制检查。
+  /// [bypassChannel] 为 true 时忽略频道设置（用于手动检查更新）。
   /// 返回 [UpdateInfo] 如果有新版本，否则返回 null。
-  static Future<UpdateInfo?> checkForUpdate({bool force = false}) async {
+  static Future<UpdateInfo?> checkForUpdate({
+    bool force = false,
+    bool bypassChannel = false,
+  }) async {
     try {
+      // 读取更新频道，关闭则直接跳过（除非手动绕过）
+      final savedChannel = await getUpdateChannel();
+      if (!bypassChannel && savedChannel == UpdateChannel.off) return null;
+
+      // 手动绕过时始终使用 latest 频道进行版本比较
+      final channel = bypassChannel ? UpdateChannel.latest : savedChannel;
+
       if (!force && !await _shouldCheck()) {
         return null;
       }
@@ -129,8 +157,8 @@ class UpdateService {
       final packageInfo = await PackageInfo.fromPlatform();
       final currentVersion = packageInfo.version;
 
-      // 比较版本
-      if (!isNewerVersion(release.tagName, currentVersion)) {
+      // 根据频道比较版本
+      if (!isNewerByChannel(release.tagName, currentVersion, channel)) {
         return null;
       }
 
@@ -169,6 +197,52 @@ class UpdateService {
       if (remote[i] < local[i]) return false;
     }
     return false;
+  }
+
+  /// 根据更新频道判断 [remoteVersion] 是否比 [localVersion] 更应被提示更新。
+  ///
+  /// - [UpdateChannel.latest]：任何版本号变更都视为有更新（等同于 [isNewerVersion]）。
+  /// - [UpdateChannel.stable]：仅当 major 或 minor 版本变更时才视为有更新。
+  static bool isNewerByChannel(
+    String remoteVersion,
+    String localVersion,
+    UpdateChannel channel,
+  ) {
+    if (channel == UpdateChannel.latest) {
+      return isNewerVersion(remoteVersion, localVersion);
+    }
+
+    // stable 模式：比较 major 和 minor，忽略纯 patch 变更
+    final remote = _parseVersion(remoteVersion);
+    final local = _parseVersion(localVersion);
+    if (remote == null || local == null) return false;
+
+    // major 不同 → 有更新
+    if (remote[0] > local[0]) return true;
+    if (remote[0] < local[0]) return false;
+
+    // major 相同，minor 不同 → 有更新
+    if (remote[1] > local[1]) return true;
+
+    // major 和 minor 都相同 → 不提示（即使 patch 有变更）
+    return false;
+  }
+
+  /// 获取当前更新频道设置。
+  static Future<UpdateChannel> getUpdateChannel() async {
+    final prefs = await SharedPreferences.getInstance();
+    final index = prefs.getInt(_updateChannelKey);
+    if (index != null && index >= 0 && index < UpdateChannel.values.length) {
+      return UpdateChannel.values[index];
+    }
+    // 默认：最新
+    return UpdateChannel.latest;
+  }
+
+  /// 设置更新频道并持久化。
+  static Future<void> setUpdateChannel(UpdateChannel channel) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_updateChannelKey, channel.index);
   }
 
   /// 将版本字符串解析为 [major, minor, patch] 列表。
