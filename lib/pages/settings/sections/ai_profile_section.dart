@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../models/ai_profile.dart';
@@ -171,10 +173,17 @@ class _AiProfileSectionState extends State<AiProfileSection> {
     );
 
     try {
-      final result = await _profileService.testConnection(profile);
+      // 服务层超时兜底：即使 Dio 未触发超时，也能保证对话框能关闭
+      final result = await _profileService
+          .testConnection(profile)
+          .timeout(const Duration(seconds: 15));
       if (!mounted) return;
       Navigator.of(context).pop();
       _showResultSnackBar(result, isSuccess: true);
+    } on TimeoutException {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      _showResultSnackBar('连接超时，请检查网络或 Base URL', isSuccess: false);
     } on AiConfigException catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();

@@ -101,6 +101,7 @@ class AiConfigService extends ChangeNotifier {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ${cfg.apiKey}',
           },
+          connectTimeout: const Duration(seconds: 10),
           sendTimeout: const Duration(seconds: 10),
           receiveTimeout: const Duration(seconds: 10),
         ),
@@ -124,8 +125,9 @@ class AiConfigService extends ChangeNotifier {
         throw _mapHttpError(e.response?.statusCode, e.message);
       }
       if (e.type == DioExceptionType.connectionTimeout ||
-          e.type == DioExceptionType.receiveTimeout) {
-        throw AiConfigException('连接超时，请检查网络或 Base URL');
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.connectionError) {
+        throw AiConfigException('连接超时或失败，请检查网络或 Base URL');
       }
       throw AiConfigException('网络连接失败：${e.message}');
     }

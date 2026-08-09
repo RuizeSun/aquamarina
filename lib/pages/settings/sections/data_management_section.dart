@@ -1,9 +1,10 @@
 import 'dart:io';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../services/backup_service.dart';
 import '../settings_section_header.dart';
 
@@ -77,20 +78,64 @@ class DataManagementSection extends StatelessWidget {
 
     final fileName = 'aquamarina_backup_${_backupTimeStamp()}.zip';
 
-    // 3. 选择保存位置（平台不支持时回退到应用文档目录）
-    FileSaveLocation? saveLocation;
-    var saveDialogUnavailable = false;
-    try {
-      saveLocation = await getSaveLocation(
-        suggestedName: fileName,
-        acceptedTypeGroups: const [_zipTypeGroup],
-      );
-    } catch (_) {
-      saveDialogUnavailable = true;
-    }
-    if (!saveDialogUnavailable && saveLocation == null) return; // 用户取消
+    // 3. 保存文件
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      // 手机端：保存到临时目录后调用系统分享面板，
+      // 让用户自由选择保存到 Downloads、发送到邮件/云盘等
+      final tmpDir = await getTemporaryDirectory();
+      final tmpPath = p.join(tmpDir.path, fileName);
+      final tmpFile = await File(tmpPath).writeAsBytes(bytes, flush: true);
+      if (!context.mounted) return;
 
-    if (saveLocation != null) {
+      try {
+        final result = await SharePlus.instance.share(
+          ShareParams(files: [XFile(tmpPath)], subject: fileName),
+        );
+        if (!context.mounted) return;
+
+        if (result.status == ShareResultStatus.success ||
+            result.status == ShareResultStatus.dismissed) {
+          _showResultSnackBar(context, '导出完成', isSuccess: true);
+        }
+      } finally {
+        // 清理临时文件
+        if (await tmpFile.exists()) {
+          await tmpFile.delete();
+        }
+      }
+    } else {
+      // 桌面端：使用系统文件保存对话框
+      FileSaveLocation? saveLocation;
+      try {
+        saveLocation = await getSaveLocation(
+          suggestedName: fileName,
+          acceptedTypeGroups: const [_zipTypeGroup],
+        );
+      } catch (_) {
+        // 平台不支持文件保存对话框时回退到应用文档目录
+        try {
+          final docsDir = await getApplicationDocumentsDirectory();
+          final fallbackPath = p.join(docsDir.path, fileName);
+          await File(fallbackPath).writeAsBytes(bytes, flush: true);
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('导出成功，已保存到：\n$fallbackPath'),
+                behavior: SnackBarBehavior.floating,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
+        } catch (e) {
+          if (context.mounted) {
+            _showResultSnackBar(context, '保存失败：$e', isSuccess: false);
+          }
+        }
+        return;
+      }
+      if (saveLocation == null) return; // 用户取消
+
       try {
         await File(saveLocation.path).writeAsBytes(bytes, flush: true);
       } catch (e) {
@@ -105,27 +150,6 @@ class DataManagementSection extends StatelessWidget {
           '导出成功：${p.basename(saveLocation.path)}',
           isSuccess: true,
         );
-      }
-      return;
-    }
-
-    // 回退：保存到应用文档目录
-    try {
-      final docsDir = await getApplicationDocumentsDirectory();
-      final fallbackPath = p.join(docsDir.path, fileName);
-      await File(fallbackPath).writeAsBytes(bytes, flush: true);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('导出成功，已保存到：\n$fallbackPath'),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 6),
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        _showResultSnackBar(context, '保存失败：$e', isSuccess: false);
       }
     }
   }
