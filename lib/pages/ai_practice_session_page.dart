@@ -6,6 +6,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/ai_service.dart';
+import '../services/study_timer_service.dart';
 
 /// 练习阶段
 enum _PracticePhase {
@@ -100,11 +101,18 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       curve: Curves.easeInOut,
     );
     _animController.forward();
+    // 启动句型练习时长计时（区分句式集练习和错题本练习）
+    final sessionType = widget.isWrongBookPractice
+        ? SessionType.wrongSentencePractice
+        : SessionType.sentencePractice;
+    StudyTimerService.instance.startSession(sessionType);
     _startPractice();
   }
 
   @override
   void dispose() {
+    // 结束学习时长计时
+    StudyTimerService.instance.endSession();
     // 取消未完成的 AI 请求
     _cancelToken.cancel();
     _animController.dispose();

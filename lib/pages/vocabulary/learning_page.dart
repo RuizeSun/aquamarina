@@ -5,6 +5,7 @@ import '../../models/word_entry.dart';
 import '../../services/dictionary_service.dart';
 import '../../services/learning_service.dart';
 import '../../services/tts_service.dart';
+import '../../services/study_timer_service.dart';
 import 'shared/bottom_bar_widget.dart';
 import 'shared/data_loader.dart';
 import 'shared/quiz_widget.dart';
@@ -80,6 +81,8 @@ class _LearningPageState extends State<LearningPage>
   @override
   void initState() {
     super.initState();
+    // 启动学习时长计时
+    StudyTimerService.instance.startSession(SessionType.wordLearn);
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -94,6 +97,8 @@ class _LearningPageState extends State<LearningPage>
 
   @override
   void dispose() {
+    // 结束学习时长计时
+    StudyTimerService.instance.endSession();
     _animController.dispose();
     super.dispose();
   }

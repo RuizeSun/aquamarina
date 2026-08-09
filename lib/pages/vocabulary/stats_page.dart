@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../services/learning_service.dart';
+import '../../services/study_timer_service.dart';
 
-/// 单词学习统计页：打卡日历、7天趋势、连续打卡
+/// 单词学习统计页：打卡日历、7天趋势、连续打卡、学习时长
 class StatsPage extends StatefulWidget {
   const StatsPage({super.key});
 
@@ -18,6 +19,12 @@ class _StatsPageState extends State<StatsPage> {
   late DateTime _displayedMonth;
   List<Map<String, dynamic>> _monthlyData = [];
   List<Map<String, dynamic>> _weeklyData = [];
+
+  // 学习时长相关
+  int _todayDurationSeconds = 0;
+  int _totalDurationSeconds = 0;
+  Map<String, int> _durationByType = {};
+  List<Map<String, dynamic>> _weeklyDurationData = [];
 
   @override
   void initState() {
@@ -37,6 +44,12 @@ class _StatsPageState extends State<StatsPage> {
       _displayedMonth.month,
     );
 
+    // 学习时长数据
+    final todaySeconds = await StudyTimerService.getTodayTotalSeconds();
+    final totalSeconds = await StudyTimerService.getTotalDuration();
+    final byType = await StudyTimerService.getDurationByType();
+    final weeklyDuration = await StudyTimerService.getWeeklyDuration();
+
     if (!mounted) return;
     setState(() {
       _streak = streak;
@@ -45,6 +58,10 @@ class _StatsPageState extends State<StatsPage> {
       _monthlyCheckInCount = monthly
           .where((d) => d['completed'] == true)
           .length;
+      _todayDurationSeconds = todaySeconds;
+      _totalDurationSeconds = totalSeconds;
+      _durationByType = byType;
+      _weeklyDurationData = weeklyDuration;
       _isLoading = false;
     });
   }
@@ -85,6 +102,9 @@ class _StatsPageState extends State<StatsPage> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   _buildStreakCard(theme, colorScheme),
+                  const SizedBox(height: 24),
+                  // 学习时长统计
+                  _buildDurationSection(theme, colorScheme),
                   const SizedBox(height: 24),
                   Text('打卡日历', style: theme.textTheme.titleMedium),
                   const SizedBox(height: 8),
@@ -162,6 +182,308 @@ class _StatsPageState extends State<StatsPage> {
               color: Colors.white.withValues(alpha: 0.9),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  // ─── 学习时长统计 ────────────────────────────
+
+  Widget _buildDurationSection(ThemeData theme, ColorScheme colorScheme) {
+    final todayText = StudyTimerService.formatDuration(_todayDurationSeconds);
+    final totalText = StudyTimerService.formatDuration(_totalDurationSeconds);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('学习时长', style: theme.textTheme.titleMedium),
+        const SizedBox(height: 8),
+
+        // 今日 + 累计时长卡片
+        Row(
+          children: [
+            // 今日时长
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.today,
+                      color: colorScheme.onPrimaryContainer,
+                      size: 20,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      todayText,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '今日学习',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onPrimaryContainer.withValues(
+                          alpha: 0.7,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            // 累计时长
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.timer,
+                      color: colorScheme.onSecondaryContainer,
+                      size: 20,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      totalText,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '累计学习',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSecondaryContainer.withValues(
+                          alpha: 0.7,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 16),
+
+        // 近 7 天时长柱状图
+        Text('近 7 天学习时长', style: theme.textTheme.titleSmall),
+        const SizedBox(height: 4),
+        Text(
+          '每日有效学习时间',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildDurationWeeklyChart(theme, colorScheme),
+
+        // 各类型时长分布（仅当有数据时显示）
+        if (_totalDurationSeconds > 0) ...[
+          const SizedBox(height: 16),
+          Text('时长分布', style: theme.textTheme.titleSmall),
+          const SizedBox(height: 8),
+          _buildDurationByType(theme, colorScheme),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildDurationWeeklyChart(ThemeData theme, ColorScheme colorScheme) {
+    final barColor = colorScheme.primary;
+
+    // 计算最大值（秒）
+    var maxValue = 0;
+    for (final day in _weeklyDurationData) {
+      final secs = (day['duration_seconds'] as int?) ?? 0;
+      if (secs > maxValue) maxValue = secs;
+    }
+    if (maxValue <= 0) maxValue = 1;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 120,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (final day in _weeklyDurationData)
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 3),
+                      child: _buildDurationBar(
+                        (day['duration_seconds'] as int?) ?? 0,
+                        maxValue,
+                        barColor,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          // 日期标签
+          Row(
+            children: [
+              for (final day in _weeklyDurationData)
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      _formatDateLabel(day['date'] as String),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDurationBar(int seconds, int maxValue, Color color) {
+    final fraction = maxValue <= 0 ? 0.0 : (seconds / maxValue).clamp(0.0, 1.0);
+    final heightFactor = fraction == 0 ? 0.08 : fraction;
+
+    // 格式化显示文本
+    final String label;
+    if (seconds < 60) {
+      label = '';
+    } else {
+      final minutes = seconds ~/ 60;
+      if (minutes < 60) {
+        label = '${minutes}m';
+      } else {
+        final h = minutes ~/ 60;
+        final m = minutes % 60;
+        label = m > 0 ? '${h}h${m}m' : '${h}h';
+      }
+    }
+
+    return Expanded(
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: FractionallySizedBox(
+          heightFactor: heightFactor,
+          child: Container(
+            width: 14,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: seconds > 0 ? 0.9 : 0.15),
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(4),
+              ),
+            ),
+            child: label.isNotEmpty
+                ? Align(
+                    alignment: Alignment.topCenter,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        label,
+                        style: TextStyle(
+                          fontSize: 7,
+                          color: color,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDurationByType(ThemeData theme, ColorScheme colorScheme) {
+    final typeLabels = {
+      'word_learn': '单词学习',
+      'word_review': '单词复习',
+      'sentence_practice': '句型练习',
+      'wrong_sentence_practice': '错题练习',
+    };
+    final typeIcons = {
+      'word_learn': Icons.auto_stories,
+      'word_review': Icons.replay,
+      'sentence_practice': Icons.smart_toy,
+      'wrong_sentence_practice': Icons.error_outline,
+    };
+    final typeColors = {
+      'word_learn': colorScheme.primary,
+      'word_review': Colors.orange,
+      'sentence_practice': Colors.teal,
+      'wrong_sentence_practice': Colors.red.shade300,
+    };
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        children: [
+          for (final entry in typeLabels.entries)
+            if ((_durationByType[entry.key] ?? 0) > 0)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Icon(
+                      typeIcons[entry.key] ?? Icons.school,
+                      size: 18,
+                      color: typeColors[entry.key] ?? colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(entry.value, style: theme.textTheme.bodyMedium),
+                    const Spacer(),
+                    Text(
+                      StudyTimerService.formatDuration(
+                        _durationByType[entry.key] ?? 0,
+                      ),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          // 如果所有类型都没有数据
+          if (_durationByType.isEmpty ||
+              _durationByType.values.every((v) => v == 0))
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Text(
+                '暂无数据',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
         ],
       ),
     );

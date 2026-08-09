@@ -29,7 +29,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -157,6 +157,21 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_sentences_set_id ON wrong_sentences(set_id)',
         );
+
+        // ── 学习时长统计相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS learning_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_type TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            duration_seconds INTEGER NOT NULL DEFAULT 0,
+            date TEXT NOT NULL
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_learning_sessions_date ON learning_sessions(date)',
+        );
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -174,6 +189,22 @@ class DatabaseService {
               updated_at TEXT
             )
           ''');
+        }
+        // 3 → 4：新增 learning_sessions 表（学习时长统计）
+        if (oldVersion < 4) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS learning_sessions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_type TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              ended_at TEXT,
+              duration_seconds INTEGER NOT NULL DEFAULT 0,
+              date TEXT NOT NULL
+            )
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_learning_sessions_date ON learning_sessions(date)',
+          );
         }
       },
     );

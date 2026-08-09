@@ -13,12 +13,16 @@ import 'services/tts_service.dart';
 import 'services/ai_profile_service.dart';
 import 'services/theme_mode_service.dart';
 import 'services/update_service.dart';
+import 'services/study_timer_service.dart';
 import 'models/ai_profile.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DatabaseService.database; // 初始化业务数据库
   await SharedPreferences.getInstance(); // 预热 SharedPreferences
+
+  // 清理上次未正常结束的学习会话（闪退恢复）
+  await StudyTimerService.recoverInterruptedSessions();
 
   // 自动创建 Aquamarina 官方 AI 配置（首次启动时）
   try {
@@ -157,6 +161,7 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   final GlobalKey<VocabularyPageState> _vocabularyKey = GlobalKey();
+  final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   @override
   void initState() {
@@ -248,6 +253,10 @@ class _MainShellState extends State<MainShell> {
     if (index == 1) {
       _vocabularyKey.currentState?.refresh();
     }
+    // 切到个人Tab时立即刷新
+    if (index == 3) {
+      _profileKey.currentState?.refresh();
+    }
   }
 
   @override
@@ -259,7 +268,7 @@ class _MainShellState extends State<MainShell> {
           const SearchPage(),
           VocabularyPage(key: _vocabularyKey),
           const AiPracticePage(),
-          const ProfilePage(),
+          ProfilePage(key: _profileKey),
         ],
       ),
       bottomNavigationBar: NavigationBar(

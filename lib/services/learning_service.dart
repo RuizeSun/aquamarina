@@ -43,10 +43,7 @@ class LearningService {
 
     final wrongCount =
         Sqflite.firstIntValue(
-          await db.rawQuery(
-            'SELECT COUNT(*) FROM wrong_words WHERE scheduled_date <= ?',
-            [today],
-          ),
+          await db.rawQuery('SELECT COUNT(*) FROM wrong_sentences'),
         ) ??
         0;
 

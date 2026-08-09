@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/learning_service.dart';
+import '../services/study_timer_service.dart';
 import 'favorites_page.dart';
+import 'vocabulary/stats_page.dart';
 import 'notes_page.dart';
 import 'settings/settings_page.dart';
 
@@ -9,12 +11,16 @@ class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  State<ProfilePage> createState() => ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
+class ProfilePageState extends State<ProfilePage> {
+  /// 外部调用以刷新数据（供 MainShell 切 tab 时使用）
+  void refresh() => _loadData();
+
   DailyStats? _stats;
   int _streak = 0;
+  int _todayDurationSeconds = 0;
   Map<String, dynamic> _goalProgress = {
     'learned': 0,
     'goal': 10,
@@ -35,11 +41,13 @@ class _ProfilePageState extends State<ProfilePage> {
       final stats = await LearningService.getDailyStats();
       final streak = await LearningService.getStreak();
       final goalProgress = await LearningService.getTodayGoalProgress();
+      final todayDuration = await StudyTimerService.getTodayTotalSeconds();
       if (!mounted) return;
       setState(() {
         _stats = stats;
         _streak = streak;
         _goalProgress = goalProgress;
+        _todayDurationSeconds = todayDuration;
         _isLoading = false;
       });
     } catch (_) {
@@ -128,79 +136,123 @@ class _ProfilePageState extends State<ProfilePage> {
     final goal = (_goalProgress['goal'] as int?) ?? 10;
     final completed = (_goalProgress['completed'] as bool?) ?? false;
 
+    final todayDurationText = StudyTimerService.formatDuration(
+      _todayDurationSeconds,
+    );
+
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  completed ? Icons.emoji_events : Icons.local_fire_department,
-                  color: completed ? Colors.amber : colorScheme.primary,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  completed ? '今日打卡已完成' : '今日学习进度',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () {
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const StatsPage()));
+        },
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    completed
+                        ? Icons.emoji_events
+                        : Icons.local_fire_department,
+                    color: completed ? Colors.amber : colorScheme.primary,
                   ),
+                  const SizedBox(width: 8),
+                  Text(
+                    completed ? '今日打卡已完成' : '今日学习进度',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '连续打卡 $_streak 天',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // 进度条
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: goal > 0 ? (learned / goal).clamp(0.0, 1.0) : 0,
+                  minHeight: 8,
+                  backgroundColor: colorScheme.surfaceContainerHighest,
                 ),
-                const Spacer(),
-                Text(
-                  '连续打卡 $_streak 天',
-                  style: theme.textTheme.bodySmall?.copyWith(
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '已学 $learned / $goal 个新词',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 统计行
+              Row(
+                children: [
+                  _buildStatItem(
+                    icon: Icons.auto_stories,
+                    label: '今日学习',
+                    value: stats?.todayLearnedCount ?? 0,
+                  ),
+                  _buildStatItem(
+                    icon: Icons.replay,
+                    label: '今日复习',
+                    value: stats?.todayReviewedCount ?? 0,
+                  ),
+                  _buildStatItem(
+                    icon: Icons.schedule,
+                    label: '待复习',
+                    value: stats?.dueReviewCount ?? 0,
+                  ),
+                  _buildStatItem(
+                    icon: Icons.error_outline,
+                    label: '待纠正',
+                    value: stats?.wrongWordCount ?? 0,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // 今日学习时长 + 查看更多提示
+              Row(
+                children: [
+                  Icon(
+                    Icons.schedule,
+                    size: 16,
                     color: colorScheme.onSurfaceVariant,
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // 进度条
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: goal > 0 ? (learned / goal).clamp(0.0, 1.0) : 0,
-                minHeight: 8,
-                backgroundColor: colorScheme.surfaceContainerHighest,
+                  const SizedBox(width: 4),
+                  Text(
+                    '今日学习 $todayDurationText',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '查看详情',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.primary,
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 16,
+                    color: colorScheme.primary,
+                  ),
+                ],
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '已学 $learned / $goal 个新词',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 12),
-            // 统计行
-            Row(
-              children: [
-                _buildStatItem(
-                  icon: Icons.auto_stories,
-                  label: '今日学习',
-                  value: stats?.todayLearnedCount ?? 0,
-                ),
-                _buildStatItem(
-                  icon: Icons.replay,
-                  label: '今日复习',
-                  value: stats?.todayReviewedCount ?? 0,
-                ),
-                _buildStatItem(
-                  icon: Icons.schedule,
-                  label: '待复习',
-                  value: stats?.dueReviewCount ?? 0,
-                ),
-                _buildStatItem(
-                  icon: Icons.error_outline,
-                  label: '待纠正',
-                  value: stats?.wrongWordCount ?? 0,
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
