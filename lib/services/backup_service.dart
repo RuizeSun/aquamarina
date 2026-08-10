@@ -30,8 +30,7 @@ class BackupService {
   /// 导入的备份文件大小上限（防滥用，正常备份远小于此值）
   static const int _maxBackupSize = 500 * 1024 * 1024;
 
-  static const FlutterSecureStorage _secureStorage =
-      FlutterSecureStorage();
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
   // ── 导出 ─────────────────────────────────────────────
 
@@ -61,19 +60,13 @@ class BackupService {
 
     // 2. SharedPreferences
     archive.addFile(
-      ArchiveFile.string(
-        _prefsFileName,
-        await _exportPreferences(),
-      ),
+      ArchiveFile.string(_prefsFileName, await _exportPreferences()),
     );
 
     // 3. AI API Keys（可选）
     if (includeApiKeys) {
       archive.addFile(
-        ArchiveFile.string(
-          _secureFileName,
-          await _exportSecureStorage(),
-        ),
+        ArchiveFile.string(_secureFileName, await _exportSecureStorage()),
       );
     }
 
@@ -196,9 +189,9 @@ class BackupService {
     final metaEntry = archive.findFile(_metaFileName);
     if (metaEntry != null) {
       try {
-        final meta = jsonDecode(
-          utf8.decode(metaEntry.content as List<int>),
-        ) as Map<String, dynamic>;
+        final meta =
+            jsonDecode(utf8.decode(metaEntry.content as List<int>))
+                as Map<String, dynamic>;
         if (meta['app'] != 'aquamarina') {
           throw const BackupException('不是 Aquamarina 的备份文件');
         }
@@ -227,9 +220,7 @@ class BackupService {
     if (hasSecureEntry) {
       try {
         final decoded = jsonDecode(
-          utf8.decode(
-            archive.findFile(_secureFileName)!.content as List<int>,
-          ),
+          utf8.decode(archive.findFile(_secureFileName)!.content as List<int>),
         );
         if (decoded is! Map) {
           throw const FormatException('JSON 顶层不是对象');
@@ -286,9 +277,7 @@ class BackupService {
       try {
         await DatabaseService.database;
       } catch (_) {
-        throw const BackupException(
-          '数据库文件已替换，但打开失败，请重启应用',
-        );
+        throw const BackupException('数据库文件已替换，但打开失败，请重启应用');
       }
     } catch (e) {
       // 回滚：恢复导入前的数据库
@@ -414,6 +403,66 @@ class BackupService {
     for (final entry in backup.entries) {
       try {
         await _secureStorage.write(key: entry.key, value: entry.value);
+      } catch (_) {}
+    }
+  }
+
+  // ── 清除全部数据 ─────────────────────────────────────
+
+  /// 清除全部用户数据（数据库、SharedPreferences、Secure Storage）。
+  ///
+  /// 执行顺序：
+  ///   1. 清空 Secure Storage 中已知的 API Key
+  ///   2. 清空 SharedPreferences 所有键
+  ///   3. 关闭数据库 → 删除数据库文件 → 重新创建空数据库（触发 onCreate）
+  static Future<void> clearAllData() async {
+    // 1. 清空 Secure Storage
+    await _clearSecureStorage();
+
+    // 2. 清空 SharedPreferences
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+
+    // 3. 删除并重建数据库
+    final dir = await getApplicationSupportDirectory();
+    final dbPath = p.join(dir.path, dbFileName);
+
+    await DatabaseService.close();
+
+    // 删除数据库文件及其 WAL/SHM 副本
+    for (final suffix in ['', '-wal', '-shm']) {
+      final file = File('$dbPath$suffix');
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+
+    // 重新打开数据库（会自动触发 onCreate 创建空表）
+    await DatabaseService.database;
+  }
+
+  /// 清空 Secure Storage 中所有已知的 API Key。
+  static Future<void> _clearSecureStorage() async {
+    final keysToClear = <String>{'ai_api_key'};
+
+    // 尝试从即将被清空的 SharedPreferences 中读取 profile IDs
+    final prefs = await SharedPreferences.getInstance();
+    final profilesJson = prefs.getString('ai_profiles_v2');
+    if (profilesJson != null) {
+      try {
+        final list = jsonDecode(profilesJson) as List<dynamic>;
+        for (final item in list) {
+          final id = (item as Map<String, dynamic>)['id'] as String?;
+          if (id != null && id.isNotEmpty) {
+            keysToClear.add('ai_api_key_$id');
+          }
+        }
+      } catch (_) {}
+    }
+
+    for (final key in keysToClear) {
+      try {
+        await _secureStorage.delete(key: key);
       } catch (_) {}
     }
   }
