@@ -384,36 +384,32 @@ class _StatsPageState extends State<StatsPage> {
       }
     }
 
-    return Expanded(
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: FractionallySizedBox(
-          heightFactor: heightFactor,
-          child: Container(
-            width: 14,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: seconds > 0 ? 0.9 : 0.15),
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(4),
-              ),
-            ),
-            child: label.isNotEmpty
-                ? Align(
-                    alignment: Alignment.topCenter,
-                    child: Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                          fontSize: 7,
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                        ),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: FractionallySizedBox(
+        heightFactor: heightFactor,
+        child: Container(
+          width: 14,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: seconds > 0 ? 0.9 : 0.15),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+          ),
+          child: label.isNotEmpty
+              ? Align(
+                  alignment: Alignment.topCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 7,
+                        color: color,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                  )
-                : null,
-          ),
+                  ),
+                )
+              : null,
         ),
       ),
     );
