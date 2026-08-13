@@ -10,6 +10,7 @@ import 'vocabulary/review_page.dart';
 import 'vocabulary/review_plan_page.dart';
 import 'vocabulary/word_overview_page.dart';
 import 'vocabulary/stats_page.dart';
+import 'vocabulary/vocab_test_page.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -329,7 +330,7 @@ class VocabularyPageState extends State<VocabularyPage> {
             _buildBookCard(theme, colorScheme),
             const SizedBox(height: 16),
 
-            // 单词总览 + 学习统计入口
+            // 单词总览 + 学习统计 + 词汇测试入口
             Row(
               children: [
                 Expanded(
@@ -366,6 +367,23 @@ class VocabularyPageState extends State<VocabularyPage> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const VocabTestPage()),
+                  );
+                  _loadData();
+                },
+                icon: const Icon(Icons.quiz),
+                label: const Text('词汇测试'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+              ),
             ),
             const SizedBox(height: 16),
 

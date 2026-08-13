@@ -673,6 +673,62 @@ class LearningService {
     return maps;
   }
 
+  /// 获取已掌握的单词列表，用于词汇测试。
+  /// `[count]` 为 null 或 <= 0 时返回全部已掌握单词。
+  /// `[bookId]` 不为 null 时仅返回该词书中的已掌握单词。
+  /// 返回列表，每个元素为 {word, books: List<String>}。
+  static Future<List<Map<String, dynamic>>> getMasteredWordsForTest({
+    int? count,
+    int? bookId,
+  }) async {
+    final db = await DatabaseService.database;
+
+    Set<String>? bookWordSet;
+    if (bookId != null) {
+      final maps = await db.query(
+        'word_book_entries',
+        columns: ['word'],
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+      bookWordSet = maps.map((m) => m['word'] as String).toSet();
+    }
+
+    final limitClause = (count != null && count > 0) ? 'LIMIT $count' : '';
+    final wordMaps = await db.rawQuery('''
+      SELECT DISTINCT r.word FROM user_word_records r
+      WHERE r.is_mastered = 1
+      ORDER BY RANDOM()
+      $limitClause
+    ''');
+
+    var words = wordMaps.map((m) => m['word'] as String).toList();
+    if (bookWordSet != null) {
+      words = words.where((w) => bookWordSet!.contains(w)).toList();
+      if (count != null && count > 0 && words.length > count) {
+        words = words.sublist(0, count);
+      }
+    }
+
+    if (words.isEmpty) return [];
+
+    // 查询来源词书映射
+    final bookMaps = await db.rawQuery('''
+      SELECT e.word, b.title FROM word_book_entries e
+      JOIN word_books b ON b.id = e.book_id
+    ''');
+    final sourceMap = <String, Set<String>>{};
+    for (final m in bookMaps) {
+      final word = m['word'] as String;
+      final title = m['title'] as String;
+      sourceMap.putIfAbsent(word, () => <String>{}).add(title);
+    }
+
+    return words.map((w) {
+      return {'word': w, 'books': sourceMap[w]?.toList() ?? <String>[]};
+    }).toList();
+  }
+
   /// 批量标记为已掌握（事务）
   /// 对于还没有学习记录的词（等待学习），直接创建一条已掌握记录。
   static Future<void> markAsMasteredBatch(List<String> words) async {
