@@ -15,7 +15,10 @@ enum SessionType {
   sentencePractice('sentence_practice'),
 
   /// 错题本练习（句型错题）
-  wrongSentencePractice('wrong_sentence_practice');
+  wrongSentencePractice('wrong_sentence_practice'),
+
+  /// 词汇测试
+  vocabTest('vocab_test');
 
   final String value;
   const SessionType(this.value);

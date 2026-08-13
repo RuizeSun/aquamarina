@@ -421,18 +421,21 @@ class _StatsPageState extends State<StatsPage> {
       'word_review': '单词复习',
       'sentence_practice': '句型练习',
       'wrong_sentence_practice': '错题练习',
+      'vocab_test': '词汇测试',
     };
     final typeIcons = {
       'word_learn': Icons.auto_stories,
       'word_review': Icons.replay,
       'sentence_practice': Icons.smart_toy,
       'wrong_sentence_practice': Icons.error_outline,
+      'vocab_test': Icons.quiz,
     };
     final typeColors = {
       'word_learn': colorScheme.primary,
       'word_review': Colors.orange,
       'sentence_practice': Colors.teal,
       'wrong_sentence_practice': Colors.red.shade300,
+      'vocab_test': Colors.purple,
     };
 
     return Container(
