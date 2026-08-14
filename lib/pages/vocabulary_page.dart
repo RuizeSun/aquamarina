@@ -29,6 +29,7 @@ class VocabularyPageState extends State<VocabularyPage> {
     'completed': false,
   };
   bool _isLoading = true;
+  bool _requireReviewBeforeLearning = true;
   Timer? _refreshTimer;
 
   static const _currentBookIdKey = 'vocabulary_current_book_id';
@@ -88,6 +89,9 @@ class VocabularyPageState extends State<VocabularyPage> {
       _streak = await LearningService.getStreak();
       // 获取今日打卡进度
       _goalProgress = await LearningService.getTodayGoalProgress();
+      // 读取是否强制要求先复习（缓存到 state，避免 build 中重复创建 Future）
+      _requireReviewBeforeLearning =
+          prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
     } catch (e) {
       // ignore errors during loading
     }
@@ -326,11 +330,6 @@ class VocabularyPageState extends State<VocabularyPage> {
     final dueCount =
         (stats?.wrongWordCount ?? 0) + (stats?.dueReviewCount ?? 0);
 
-    // 读取是否强制要求先复习
-    final requireReviewFuture = SharedPreferences.getInstance().then(
-      (prefs) => prefs.getBool(_requireReviewBeforeLearningKey) ?? true,
-    );
-
     return RefreshIndicator(
       onRefresh: _loadData,
       child: SingleChildScrollView(
@@ -535,11 +534,9 @@ class VocabularyPageState extends State<VocabularyPage> {
             const SizedBox(height: 16),
 
             // 操作按钮
-            FutureBuilder<bool>(
-              future: requireReviewFuture,
-              builder: (context, snapshot) {
-                final requireReview = snapshot.data ?? true;
-                final canLearn = !requireReview || dueCount == 0;
+            Builder(
+              builder: (context) {
+                final canLearn = !_requireReviewBeforeLearning || dueCount == 0;
 
                 return Column(
                   children: [
@@ -568,7 +565,7 @@ class VocabularyPageState extends State<VocabularyPage> {
                         ),
                       ],
                     ),
-                    if (requireReview && dueCount > 0) ...[
+                    if (_requireReviewBeforeLearning && dueCount > 0) ...[
                       const SizedBox(height: 8),
                       Text(
                         '请先完成今日复习任务后再学习新词',
