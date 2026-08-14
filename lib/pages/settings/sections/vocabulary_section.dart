@@ -13,11 +13,14 @@ class _VocabularySectionState extends State<VocabularySection> {
   int _reviewLimit = 10;
   int _learningLimit = 10;
   bool _reviewAskBook = true;
+  bool _requireReviewBeforeLearning = true;
   int _dailyGoal = 10;
 
   static const String _reviewLimitKey = 'review_limit';
   static const String _learningLimitKey = 'learning_limit';
   static const String _reviewAskBookKey = 'review_ask_book';
+  static const String _requireReviewBeforeLearningKey =
+      'require_review_before_learning';
   static const String _dailyGoalKey = 'daily_goal';
 
   @override
@@ -33,11 +36,17 @@ class _VocabularySectionState extends State<VocabularySection> {
       _reviewLimit = prefs.getInt(_reviewLimitKey) ?? 10;
       _learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
       _reviewAskBook = prefs.getBool(_reviewAskBookKey) ?? true;
+      _requireReviewBeforeLearning =
+          prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
       _dailyGoal = prefs.getInt(_dailyGoalKey) ?? 10;
     });
     await prefs.setInt(_reviewLimitKey, _reviewLimit);
     await prefs.setInt(_learningLimitKey, _learningLimit);
     await prefs.setBool(_reviewAskBookKey, _reviewAskBook);
+    await prefs.setBool(
+      _requireReviewBeforeLearningKey,
+      _requireReviewBeforeLearning,
+    );
     await prefs.setInt(_dailyGoalKey, _dailyGoal);
   }
 
@@ -57,6 +66,12 @@ class _VocabularySectionState extends State<VocabularySection> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_reviewAskBookKey, value);
     setState(() => _reviewAskBook = value);
+  }
+
+  Future<void> _setRequireReviewBeforeLearning(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_requireReviewBeforeLearningKey, value);
+    setState(() => _requireReviewBeforeLearning = value);
   }
 
   Future<void> _setDailyGoal(int value) async {
@@ -182,6 +197,13 @@ class _VocabularySectionState extends State<VocabularySection> {
           subtitle: const Text('多本词书有待复习时，选择先复习哪个词书'),
           value: _reviewAskBook,
           onChanged: _setReviewAskBook,
+        ),
+        SwitchListTile(
+          secondary: Icon(Icons.lock_open, color: colorScheme.primary),
+          title: const Text('复习后才能学习新词'),
+          subtitle: const Text('有待复习单词时，需先完成复习才能学习新词'),
+          value: _requireReviewBeforeLearning,
+          onChanged: _setRequireReviewBeforeLearning,
         ),
         ListTile(
           leading: Icon(Icons.auto_stories, color: colorScheme.primary),

@@ -35,6 +35,8 @@ class VocabularyPageState extends State<VocabularyPage> {
   static const _reviewLimitKey = 'review_limit';
   static const _learningLimitKey = 'learning_limit';
   static const _reviewAskBookKey = 'review_ask_book';
+  static const _requireReviewBeforeLearningKey =
+      'require_review_before_learning';
 
   @override
   void initState() {
@@ -210,18 +212,24 @@ class VocabularyPageState extends State<VocabularyPage> {
   Future<void> _startLearning() async {
     if (_currentBook == null) return;
 
-    // 检查是否有待处理的复习任务
-    final hasPending = await LearningService.hasPendingTasks();
-    if (hasPending) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('请先完成今日复习任务！')));
+    // 根据设置决定是否强制要求先复习
+    final prefs = await SharedPreferences.getInstance();
+    final requireReviewBeforeLearning =
+        prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
+
+    if (requireReviewBeforeLearning) {
+      // 检查是否有待处理的复习任务
+      final hasPending = await LearningService.hasPendingTasks();
+      if (hasPending) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('请先完成今日复习任务！')));
+        }
+        return;
       }
-      return;
     }
 
-    final prefs = await SharedPreferences.getInstance();
     final learningLimit = prefs.getInt(_learningLimitKey) ?? 10;
 
     // 获取新词
@@ -317,6 +325,11 @@ class VocabularyPageState extends State<VocabularyPage> {
     final stats = _stats;
     final dueCount =
         (stats?.wrongWordCount ?? 0) + (stats?.dueReviewCount ?? 0);
+
+    // 读取是否强制要求先复习
+    final requireReviewFuture = SharedPreferences.getInstance().then(
+      (prefs) => prefs.getBool(_requireReviewBeforeLearningKey) ?? true,
+    );
 
     return RefreshIndicator(
       onRefresh: _loadData,
@@ -522,42 +535,53 @@ class VocabularyPageState extends State<VocabularyPage> {
             const SizedBox(height: 16),
 
             // 操作按钮
-            Row(
-              children: [
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: dueCount > 0 ? _startReview : null,
-                    icon: const Icon(Icons.replay),
-                    label: const Text('开始复习'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: dueCount == 0 ? _startLearning : null,
-                    icon: const Icon(Icons.auto_stories),
-                    label: const Text('开始学习'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+            FutureBuilder<bool>(
+              future: requireReviewFuture,
+              builder: (context, snapshot) {
+                final requireReview = snapshot.data ?? true;
+                final canLearn = !requireReview || dueCount == 0;
 
-            if (dueCount > 0) ...[
-              const SizedBox(height: 8),
-              Text(
-                '请先完成今日复习任务后再学习新词',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: colorScheme.error,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ],
+                return Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: dueCount > 0 ? _startReview : null,
+                            icon: const Icon(Icons.replay),
+                            label: const Text('开始复习'),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: FilledButton.icon(
+                            onPressed: canLearn ? _startLearning : null,
+                            icon: const Icon(Icons.auto_stories),
+                            label: const Text('开始学习'),
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (requireReview && dueCount > 0) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '请先完成今日复习任务后再学习新词',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.error,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
 
             const SizedBox(height: 24),
 
