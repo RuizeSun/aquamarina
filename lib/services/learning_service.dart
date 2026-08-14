@@ -472,7 +472,6 @@ class LearningService {
       whereArgs: [today],
     );
 
-    int streak = 0;
     // 如果今天已完成，从今天开始；否则从昨天开始
     final startDay = (todayRow.isNotEmpty && todayRow.first['completed'] == 1)
         ? DateTime(now.year, now.month, now.day)
@@ -482,17 +481,29 @@ class LearningService {
             now.day,
           ).subtract(const Duration(days: 1));
 
+    // 只用一条 SQL 查询最近 365 天的打卡记录，在内存中计算连续天数
+    final startDate = startDay.subtract(const Duration(days: 364));
+    final startStr =
+        '${startDate.year}-${startDate.month.toString().padLeft(2, '0')}-${startDate.day.toString().padLeft(2, '0')}';
+
+    final rows = await db.query(
+      'daily_activity',
+      columns: ['date'],
+      where: 'date >= ? AND completed = 1',
+      whereArgs: [startStr],
+    );
+
+    final completedDates = <String>{};
+    for (final row in rows) {
+      completedDates.add(row['date'] as String);
+    }
+
+    int streak = 0;
     for (int i = 0; i < 365; i++) {
       final date = startDay.subtract(Duration(days: i));
       final dateStr =
           '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-      final row = await db.query(
-        'daily_activity',
-        columns: ['completed'],
-        where: 'date = ? AND completed = 1',
-        whereArgs: [dateStr],
-      );
-      if (row.isNotEmpty) {
+      if (completedDates.contains(dateStr)) {
         streak++;
       } else {
         break;
