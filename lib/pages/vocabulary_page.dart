@@ -19,7 +19,8 @@ class VocabularyPage extends StatefulWidget {
   State<VocabularyPage> createState() => VocabularyPageState();
 }
 
-class VocabularyPageState extends State<VocabularyPage> {
+class VocabularyPageState extends State<VocabularyPage>
+    with WidgetsBindingObserver {
   WordBook? _currentBook;
   DailyStats? _stats;
   int _streak = 0;
@@ -42,17 +43,35 @@ class VocabularyPageState extends State<VocabularyPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
-    // 每15秒自动刷新
-    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      _loadData();
-    });
+    _startPeriodicRefresh();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  /// App 生命周期回调：进入后台时暂停定时器，回到前台时恢复并立即刷新
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startPeriodicRefresh();
+      _loadData();
+    } else if (state == AppLifecycleState.paused) {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+    }
+  }
+
+  void _startPeriodicRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      _loadData();
+    });
   }
 
   /// 供外部调用的刷新方法
