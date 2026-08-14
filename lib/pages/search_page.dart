@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -25,6 +26,7 @@ class _SearchPageState extends State<SearchPage> {
   bool _isSearching = false;
   String? _errorMessage;
   List<String> _searchHistory = [];
+  Timer? _debounceTimer;
 
   static const _historyKey = 'search_history';
 
@@ -42,6 +44,7 @@ class _SearchPageState extends State<SearchPage> {
 
   @override
   void dispose() {
+    _debounceTimer?.cancel();
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
     _focusNode.dispose();
@@ -86,13 +89,18 @@ class _SearchPageState extends State<SearchPage> {
   void _onSearchChanged() {
     final query = _searchController.text.trim();
     if (query.isEmpty) {
+      _debounceTimer?.cancel();
       setState(() {
         _suggestions = [];
         _errorMessage = null;
       });
       return;
     }
-    _performFuzzySearch(query);
+    // 防抖：取消上一次的延迟搜索，等待用户停止输入后再查询
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 300), () {
+      _performFuzzySearch(query);
+    });
   }
 
   Future<void> _performFuzzySearch(String query) async {
