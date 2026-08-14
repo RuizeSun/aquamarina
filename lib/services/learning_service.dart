@@ -163,14 +163,20 @@ class LearningService {
 
     final db = await DatabaseService.database;
 
-    // 查询所有词书条目（word → 所属词书列表）
+    // 只查询待复习单词涉及的词书条目，而非全表扫描
+    final cleanedDueWords = allDueWords
+        .map((w) => w.trim().toLowerCase())
+        .toSet()
+        .toList();
+    final placeholders = cleanedDueWords.map((_) => '?').join(',');
     final maps = await db.rawQuery('''
       SELECT e.word, e.book_id, b.title FROM word_book_entries e
       JOIN word_books b ON b.id = e.book_id
-    ''');
+      WHERE LOWER(e.word) IN ($placeholders)
+    ''', cleanedDueWords);
     final wordBooksMap = <String, List<Map<String, dynamic>>>{};
     for (final m in maps) {
-      final word = m['word'] as String;
+      final word = (m['word'] as String).toLowerCase();
       wordBooksMap.putIfAbsent(word, () => []).add(m);
     }
 
