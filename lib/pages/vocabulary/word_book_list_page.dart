@@ -1,4 +1,12 @@
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../../models/word_book.dart';
 import '../../services/word_book_service.dart';
 import 'word_book_create_page.dart';
@@ -15,9 +23,15 @@ class WordBookListPage extends StatefulWidget {
 }
 
 class _WordBookListPageState extends State<WordBookListPage> {
+  static const XTypeGroup _jsonTypeGroup = XTypeGroup(
+    label: 'JSON',
+    extensions: ['json'],
+  );
+
   List<WordBook> _books = [];
   bool _isLoading = true;
   int? _currentBookId;
+  bool _isImporting = false;
 
   @override
   void initState() {
@@ -35,6 +49,134 @@ class _WordBookListPageState extends State<WordBookListPage> {
         _isLoading = false;
       });
     }
+  }
+
+  /// 导出单本词书为 JSON 文件
+  Future<void> _exportBook(WordBook book) async {
+    if (book.id == null) return;
+
+    final String jsonStr;
+    try {
+      jsonStr = await WordBookService.exportBookToJson(book.id!);
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar(context, '导出失败：$e', isSuccess: false);
+      }
+      return;
+    }
+
+    final safeTitle = book.title
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .trim();
+    final fileName = '${safeTitle.isEmpty ? 'wordbook' : safeTitle}.json';
+
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      // 手机端：保存到临时目录后调用系统分享面板
+      try {
+        final tmpDir = await getTemporaryDirectory();
+        final tmpPath = p.join(tmpDir.path, fileName);
+        final tmpFile = await File(tmpPath).writeAsString(jsonStr, flush: true);
+        if (!mounted) return;
+
+        final result = await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(tmpPath, mimeType: 'application/json')],
+            subject: fileName,
+          ),
+        );
+        if (!mounted) return;
+
+        if (result.status == ShareResultStatus.success ||
+            result.status == ShareResultStatus.dismissed) {
+          _showSnackBar(context, '已导出 "${book.title}"', isSuccess: true);
+        }
+        // 清理临时文件
+        if (await tmpFile.exists()) {
+          await tmpFile.delete();
+        }
+      } catch (e) {
+        if (mounted) {
+          _showSnackBar(context, '导出失败：$e', isSuccess: false);
+        }
+      }
+    } else {
+      // 桌面端：使用系统文件保存对话框
+      FileSaveLocation? saveLocation;
+      try {
+        saveLocation = await getSaveLocation(
+          suggestedName: fileName,
+          acceptedTypeGroups: const [_jsonTypeGroup],
+        );
+      } catch (_) {
+        if (mounted) {
+          _showSnackBar(context, '无法打开文件保存对话框', isSuccess: false);
+        }
+        return;
+      }
+      if (saveLocation == null) return; // 用户取消
+
+      try {
+        await File(saveLocation.path).writeAsString(jsonStr, flush: true);
+        if (mounted) {
+          _showSnackBar(
+            context,
+            '已导出到：\n${saveLocation.path}',
+            isSuccess: true,
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          _showSnackBar(context, '保存失败：$e', isSuccess: false);
+        }
+      }
+    }
+  }
+
+  /// 从 JSON 文件导入单本词书
+  Future<void> _importBook() async {
+    final XFile? file;
+    try {
+      file = await openFile(acceptedTypeGroups: const [_jsonTypeGroup]);
+    } catch (_) {
+      if (mounted) {
+        _showSnackBar(context, '无法打开文件选择器', isSuccess: false);
+      }
+      return;
+    }
+    if (file == null) return; // 用户取消
+
+    setState(() => _isImporting = true);
+    try {
+      final jsonStr = await file.readAsString();
+      final bookId = await WordBookService.importBookFromJson(jsonStr);
+      final book = await WordBookService.getBookById(bookId);
+      if (!mounted) return;
+      _showSnackBar(context, '已导入词书 "${book?.title ?? ''}"', isSuccess: true);
+      await _loadBooks();
+    } catch (e) {
+      if (mounted) {
+        _showSnackBar(context, '导入失败：$e', isSuccess: false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isImporting = false);
+      }
+    }
+  }
+
+  void _showSnackBar(
+    BuildContext context,
+    String message, {
+    required bool isSuccess,
+  }) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isSuccess ? Colors.green : Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _deleteBook(WordBook book) async {
@@ -84,6 +226,18 @@ class _WordBookListPageState extends State<WordBookListPage> {
       appBar: AppBar(
         title: const Text('词书管理'),
         actions: [
+          // 导入词书按钮
+          IconButton(
+            icon: _isImporting
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.file_open_outlined),
+            tooltip: '导入词书',
+            onPressed: _isImporting ? null : _importBook,
+          ),
           if (widget.onBookSelected != null)
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
@@ -275,6 +429,12 @@ class _WordBookListPageState extends State<WordBookListPage> {
                     size: 20,
                   ),
                 ),
+              // 导出按钮（所有词书都显示）
+              IconButton(
+                icon: const Icon(Icons.ios_share),
+                tooltip: '导出词书',
+                onPressed: () => _exportBook(book),
+              ),
               // 编辑按钮（所有词书都显示）
               IconButton(
                 icon: const Icon(Icons.edit_outlined),

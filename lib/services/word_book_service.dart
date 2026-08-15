@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import '../models/word_book.dart';
 import 'database_service.dart';
@@ -188,6 +189,92 @@ class WordBookService {
     return (learnedWords: learnedWords, newWords: newWords);
   }
 
+  // ===== 单本词书导出 / 导入 =====
+
+  /// 导出单本词书为 JSON 字符串
+  ///
+  /// 包含词书元数据（标题/描述/作者/封面色）与全部单词。
+  /// 可通过 [importBookFromJson] 重新导入。
+  static Future<String> exportBookToJson(int bookId) async {
+    final book = await getBookById(bookId);
+    if (book == null) {
+      throw WordBookException('词书不存在或已被删除');
+    }
+    final words = await getBookWords(bookId);
+
+    return jsonEncode({
+      'app': 'aquamarina',
+      'type': 'wordbook',
+      'version': 1,
+      'created_at': DateTime.now().toIso8601String(),
+      'book': {
+        'title': book.title,
+        'description': book.description,
+        'author': book.author,
+        'cover_color': book.coverColor,
+        'words': words,
+      },
+    });
+  }
+
+  /// 从 JSON 字符串导入单本词书
+  ///
+  /// 返回新创建的词书 ID。标题冲突时自动添加序号（类似 Windows 重命名）。
+  /// JSON 格式不合法时抛出 [WordBookException]。
+  static Future<int> importBookFromJson(String jsonStr) async {
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(jsonStr);
+    } catch (_) {
+      throw const WordBookException('文件不是有效的 JSON 格式');
+    }
+
+    if (decoded is! Map<String, dynamic>) {
+      throw const WordBookException('词书文件格式错误：顶层不是对象');
+    }
+    if (decoded['app'] != 'aquamarina' || decoded['type'] != 'wordbook') {
+      throw const WordBookException('不是有效的 Aquamarina 词书文件');
+    }
+    final bookData = decoded['book'];
+    if (bookData is! Map<String, dynamic>) {
+      throw const WordBookException('词书文件缺少 book 数据');
+    }
+
+    final title = bookData['title'] as String?;
+    if (title == null || title.trim().isEmpty) {
+      throw const WordBookException('词书文件缺少标题');
+    }
+
+    final wordsRaw = bookData['words'];
+    final words = <String>[];
+    if (wordsRaw is List) {
+      for (final w in wordsRaw) {
+        if (w is String && w.trim().isNotEmpty) {
+          words.add(w.trim().toLowerCase());
+        }
+      }
+    }
+
+    // 名称冲突时自动加序号
+    final uniqueTitle = await generateUniqueBookTitle(title.trim());
+    final bookId = await createBook(
+      WordBook(
+        title: uniqueTitle,
+        description: (bookData['description'] as String?)?.trim(),
+        author: (bookData['author'] as String?)?.trim(),
+        coverColor: (bookData['cover_color'] as num?)?.toInt(),
+      ),
+    );
+
+    if (words.isNotEmpty) {
+      await addWordsToBook(bookId, words);
+    }
+
+    return bookId;
+  }
+
+  // ===== 导入词汇（文本） =====
+
   /// 导入词汇：解析文本（一行一词），批量查本地词典，返回结果
   static Future<ImportResult> importWords(String text) async {
     final lines = text
@@ -218,6 +305,15 @@ class WordBookService {
       missingWords: missing,
     );
   }
+}
+
+/// 词书操作异常
+class WordBookException implements Exception {
+  final String message;
+  const WordBookException(this.message);
+
+  @override
+  String toString() => message;
 }
 
 /// 导入结果
