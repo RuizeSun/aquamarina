@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import '../models/word_book.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
 import '../services/tts_service.dart';
+import '../services/word_book_service.dart';
 import '../services/word_note_service.dart';
 import 'vocabulary/shared/word_utils.dart';
 import 'word_card.dart';
@@ -35,6 +37,79 @@ class _WordDetailPageState extends State<WordDetailPage> {
       _note = wordNote?.note;
       _isLoading = false;
     });
+  }
+
+  /// 弹出词书选择器并将当前单词加入所选词书
+  Future<void> _addToWordBook() async {
+    final books = await WordBookService.getAllBooks();
+    if (!mounted) return;
+
+    if (books.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还没有词书，请先在"背单词"页创建词书')));
+      return;
+    }
+
+    final selectedBook = await showModalBottomSheet<WordBook>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                '将「${widget.word}」加入词书',
+                style: Theme.of(
+                  ctx,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              ),
+            ),
+            for (final book in books)
+              ListTile(
+                leading: Icon(
+                  Icons.menu_book,
+                  color: Color(book.coverColor ?? 0xFF00BFA5),
+                ),
+                title: Text(book.title),
+                subtitle: Text('${book.wordCount} 词'),
+                onTap: () => Navigator.of(ctx).pop(book),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    if (selectedBook == null || !mounted) return;
+
+    // 检查是否已存在于该词书
+    final existingWords = await WordBookService.getBookWords(selectedBook.id!);
+    if (!mounted) return;
+    final normalizedWord = widget.word.trim().toLowerCase();
+    final alreadyExists = existingWords.any(
+      (w) => w.trim().toLowerCase() == normalizedWord,
+    );
+    if (alreadyExists) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「${widget.word}」已在词书「${selectedBook.title}」中')),
+      );
+      return;
+    }
+
+    await WordBookService.addWordsToBook(selectedBook.id!, [widget.word]);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('已加入词书「${selectedBook.title}」'),
+          duration: const Duration(seconds: 1),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   /// 切换收藏状态
@@ -126,6 +201,11 @@ class _WordDetailPageState extends State<WordDetailPage> {
             ),
             tooltip: _isFavorited ? '取消收藏' : '收藏',
             onPressed: _toggleFavorite,
+          ),
+          IconButton(
+            icon: Icon(Icons.playlist_add, color: colorScheme.primary),
+            tooltip: '加入词书',
+            onPressed: _addToWordBook,
           ),
           IconButton(
             icon: Icon(Icons.volume_up, color: colorScheme.primary),
