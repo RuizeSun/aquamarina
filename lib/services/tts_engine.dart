@@ -1,7 +1,8 @@
 /// TTS 引擎抽象接口
 abstract class TtsEngine {
-  /// 朗读文本
-  Future<void> speak(String text);
+  /// 朗读文本。
+  /// 返回 `true` 表示合成/播放成功，`false` 表示失败（如无网络、无语音包等）。
+  Future<bool> speak(String text);
 
   /// 停止朗读
   Future<void> stop();

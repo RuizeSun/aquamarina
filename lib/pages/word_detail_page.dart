@@ -210,7 +210,17 @@ class _WordDetailPageState extends State<WordDetailPage> {
           IconButton(
             icon: Icon(Icons.volume_up, color: colorScheme.primary),
             tooltip: '朗读',
-            onPressed: () => TtsService.instance.speak(widget.word),
+            onPressed: () async {
+              final success = await TtsService.instance.speak(widget.word);
+              if (!success && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('朗读失败：请检查网络连接或系统语音设置'),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
           ),
         ],
       ),

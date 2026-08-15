@@ -48,8 +48,16 @@ class WordCard extends StatelessWidget {
                 IconButton(
                   icon: Icon(Icons.volume_up, color: colorScheme.primary),
                   tooltip: '朗读',
-                  onPressed: () {
-                    TtsService.instance.speak(entry.word);
+                  onPressed: () async {
+                    final success = await TtsService.instance.speak(entry.word);
+                    if (!success && context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('朗读失败：请检查网络连接或系统语音设置'),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
                   },
                 ),
               ],

@@ -53,13 +53,31 @@ class TtsService {
     }
   }
 
-  /// 朗读文本
-  Future<void> speak(String text) async {
-    if (!_settings.enabled || text.isEmpty) return;
+  /// 朗读文本。
+  /// 返回 `true` 表示朗读成功；`false` 表示所有可用引擎都失败（如无网络且无系统语音）。
+  /// Edge TTS 失败时会自动降级到系统 TTS。
+  Future<bool> speak(String text) async {
+    if (!_settings.enabled || text.isEmpty) return true;
     await _ensureEngine();
+    if (_engine == null) return false;
+
     // 停止之前的朗读
-    await _engine?.stop();
-    await _engine?.speak(text);
+    await _engine!.stop();
+
+    final success = await _engine!.speak(text);
+    if (success) return true;
+
+    // Edge TTS 失败（如无网络）时降级到系统 TTS
+    if (_settings.provider == TtsProvider.edge) {
+      try {
+        // 临时创建系统引擎并朗读（不影响用户设置的 provider）
+        final fallback = SystemTtsEngine();
+        return await fallback.speak(text);
+      } catch (e) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /// 停止朗读

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_edge_tts/flutter_edge_tts.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'tts_engine.dart';
@@ -16,7 +17,7 @@ class EdgeTtsEngine implements TtsEngine {
   double _pitch = 1.0;
 
   @override
-  Future<void> speak(String text) async {
+  Future<bool> speak(String text) async {
     await _ensureInitialized();
     await _ensureAudioPlayer();
 
@@ -38,8 +39,11 @@ class EdgeTtsEngine implements TtsEngine {
 
       // 使用 audioplayers 播放音频字节
       await _player!.play(BytesSource(result.audioBytes));
+      return true;
     } catch (e) {
-      // 合成失败时静默处理
+      // 合成失败（如无网络）：返回失败状态，由调用方决定降级或提示
+      debugPrint('EdgeTtsEngine.speak failed: $e');
+      return false;
     }
   }
 

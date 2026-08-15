@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'tts_engine.dart';
 
@@ -7,9 +8,15 @@ class SystemTtsEngine implements TtsEngine {
   bool _initialized = false;
 
   @override
-  Future<void> speak(String text) async {
+  Future<bool> speak(String text) async {
     await _ensureInitialized();
-    await _tts.speak(text);
+    try {
+      await _tts.speak(text);
+      return true;
+    } catch (e) {
+      debugPrint('SystemTtsEngine.speak failed: $e');
+      return false;
+    }
   }
 
   @override
