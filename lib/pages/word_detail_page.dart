@@ -3,13 +3,8 @@ import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
 import '../services/tts_service.dart';
 import '../services/word_note_service.dart';
+import 'vocabulary/shared/word_utils.dart';
 import 'word_card.dart';
-
-/// 将数据库中的字面 \n 替换为真正的换行符
-String _normalizeNewlines(String? text) {
-  if (text == null) return '';
-  return text.replaceAll('\\n', '\n');
-}
 
 class WordDetailPage extends StatefulWidget {
   final CombinedResult result;
@@ -317,7 +312,7 @@ class _CedictCard extends StatelessWidget {
             _Section(
               title: '英文释义',
               child: Text(
-                _normalizeNewlines(entry.definitions),
+                normalizeNewlines(entry.definitions),
                 style: theme.textTheme.bodyLarge,
               ),
             ),

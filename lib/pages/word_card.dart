@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
 import '../services/tts_service.dart';
-
-/// 将数据库中的字面 \n 替换为真正的换行符
-String _normalizeNewlines(String? text) {
-  if (text == null) return '';
-  return text.replaceAll('\\n', '\n');
-}
+import 'vocabulary/shared/word_utils.dart';
 
 class WordCard extends StatelessWidget {
   final WordEntry entry;
@@ -107,7 +102,7 @@ class WordCard extends StatelessWidget {
               _Section(
                 title: '释义',
                 child: Text(
-                  _normalizeNewlines(entry.translation),
+                  normalizeNewlines(entry.translation),
                   style: theme.textTheme.bodyLarge,
                 ),
               ),
@@ -117,7 +112,7 @@ class WordCard extends StatelessWidget {
               _Section(
                 title: '英文释义',
                 child: Text(
-                  _normalizeNewlines(entry.definition),
+                  normalizeNewlines(entry.definition),
                   style: theme.textTheme.bodyMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),

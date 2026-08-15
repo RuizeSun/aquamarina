@@ -4,13 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
+import 'vocabulary/shared/word_utils.dart';
 import 'word_detail_page.dart';
-
-/// 将数据库中的字面 \n 替换为真正的换行符
-String _normalizeNewlines(String? text) {
-  if (text == null) return '';
-  return text.replaceAll('\\n', '\n');
-}
 
 class SearchPage extends StatefulWidget {
   const SearchPage({super.key});
@@ -376,7 +371,7 @@ class _SearchPageState extends State<SearchPage> {
                 result.displaySubtitle != null &&
                     result.displaySubtitle!.isNotEmpty
                 ? Text(
-                    _normalizeNewlines(result.displaySubtitle),
+                    normalizeNewlines(result.displaySubtitle),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   )
