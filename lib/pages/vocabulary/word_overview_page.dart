@@ -19,6 +19,8 @@ class _WordOverviewPageState extends State<WordOverviewPage>
 
   late final TabController _tabController;
   final ScrollController _bookFilterController = ScrollController();
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
   List<Map<String, dynamic>> _books = [];
   int? _selectedBookId;
   List<List<Map<String, dynamic>>> _wordsByStatus = [[], [], []];
@@ -41,8 +43,19 @@ class _WordOverviewPageState extends State<WordOverviewPage>
   @override
   void dispose() {
     _bookFilterController.dispose();
+    _searchController.dispose();
     _tabController.dispose();
     super.dispose();
+  }
+
+  /// 对单词列表做客户端过滤（大小写不敏感）
+  List<Map<String, dynamic>> _filterWords(List<Map<String, dynamic>> source) {
+    final query = _searchQuery.trim().toLowerCase();
+    if (query.isEmpty) return source;
+    return source.where((item) {
+      final word = (item['word'] as String).toLowerCase();
+      return word.contains(query);
+    }).toList();
   }
 
   // ─── 数据加载 ─────────────────────────────────
@@ -110,7 +123,7 @@ class _WordOverviewPageState extends State<WordOverviewPage>
   }
 
   void _toggleSelectAll() {
-    final words = _wordsByStatus[_tabController.index];
+    final words = _filterWords(_wordsByStatus[_tabController.index]);
     setState(() {
       if (_selectedWords.length == words.length) {
         _selectedWords.clear();
@@ -259,6 +272,8 @@ class _WordOverviewPageState extends State<WordOverviewPage>
               children: [
                 // 词书筛选
                 _buildBookFilter(theme, colorScheme),
+                // 搜索栏
+                _buildSearchBar(theme, colorScheme),
                 // TabBar
                 TabBar(
                   controller: _tabController,
@@ -349,6 +364,35 @@ class _WordOverviewPageState extends State<WordOverviewPage>
     );
   }
 
+  /// 搜索栏：对当前 Tab 的单词列表做客户端过滤
+  Widget _buildSearchBar(ThemeData theme, ColorScheme colorScheme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: TextField(
+        controller: _searchController,
+        decoration: InputDecoration(
+          hintText: '搜索单词...',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  tooltip: '清空搜索',
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = '');
+                  },
+                )
+              : null,
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        onChanged: (value) {
+          setState(() => _searchQuery = value);
+        },
+      ),
+    );
+  }
+
   Widget _buildSelectionBar(ThemeData theme, ColorScheme colorScheme) {
     final total = _wordsByStatus[_tabController.index].length;
     final selected = _selectedWords.length;
@@ -408,7 +452,42 @@ class _WordOverviewPageState extends State<WordOverviewPage>
   }
 
   Widget _buildWordList(int status, ThemeData theme, ColorScheme colorScheme) {
-    final words = _wordsByStatus[status];
+    final allWords = _wordsByStatus[status];
+    final words = _filterWords(allWords);
+
+    // 无匹配结果（搜索了但当前状态没有对应单词）
+    if (allWords.isNotEmpty && words.isEmpty) {
+      return RefreshIndicator(
+        onRefresh: _loadData,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(
+              height: 240,
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.search_off,
+                      size: 64,
+                      color: colorScheme.primary.withValues(alpha: 0.3),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '没有匹配"$_searchQuery"的单词',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (words.isEmpty) {
       return RefreshIndicator(
