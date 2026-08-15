@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
@@ -16,13 +17,51 @@ import 'services/update_service.dart';
 import 'services/study_timer_service.dart';
 import 'models/ai_profile.dart';
 
+/// 将错误信息记录到日志（debugPrint 在 release 构建中也会输出到系统日志）
+void _logError(String source, Object error, StackTrace? stackTrace) {
+  // ignore: avoid_print
+  debugPrint('[$source] $error');
+  if (stackTrace != null) {
+    debugPrint('$stackTrace');
+  }
+}
+
+/// 后台预热词典数据库，失败时记录日志（搜索页会给用户明确提示）
+Future<void> _prewarmDictionaries() async {
+  try {
+    await DictionaryService.enDb;
+    await DictionaryService.cnDb;
+  } catch (e, stackTrace) {
+    _logError('DictionaryService', e, stackTrace);
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await DatabaseService.database; // 初始化业务数据库
-  await SharedPreferences.getInstance(); // 预热 SharedPreferences
 
-  // 清理上次未正常结束的学习会话（闪退恢复）
-  await StudyTimerService.recoverInterruptedSessions();
+  // ── 全局未捕获异常处理器 ──────────────────────────
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    _logError('FlutterError', details.exception, details.stack);
+  };
+
+  PlatformDispatcher.instance.onError = (error, stack) {
+    _logError('Platform', error, stack);
+    return true;
+  };
+
+  // ── 关键服务初始化（失败时仍启动 App 并显示错误提示）──
+  Object? initError;
+  try {
+    await DatabaseService.database; // 初始化业务数据库
+    await SharedPreferences.getInstance(); // 预热 SharedPreferences
+
+    // 清理上次未正常结束的学习会话（闪退恢复）
+    await StudyTimerService.recoverInterruptedSessions();
+  } catch (e, stackTrace) {
+    _logError('DatabaseService', e, stackTrace);
+    initError = e;
+  }
 
   // 自动创建 Aquamarina 官方 AI 配置（首次启动时）
   try {
@@ -34,13 +73,16 @@ void main() async {
       ).copyWith(isDefault: true);
       await profileService.addProfile(defaultProfile);
     }
-  } catch (_) {
-    // 静默处理初始化异常
+  } catch (e, stackTrace) {
+    // 记录日志但不阻止启动（AI 配置初始化失败不影响核心功能）
+    _logError('AiProfileService', e, stackTrace);
   }
 
   // 预热词典数据库（在后台解压 + 打开，避免首次搜词时阻塞）
-  unawaited(DictionaryService.enDb);
-  unawaited(DictionaryService.cnDb);
+  // 后台加载失败时记录日志，搜索页会给出明确的错误提示
+  unawaited(_prewarmDictionaries());
+
+  // ── 开源许可证注册保持原样 ─────────────────────────
 
   // 注册开源许可证
   LicenseRegistry.addLicense(() async* {
@@ -99,11 +141,14 @@ SOFTWARE.''',
     );
   });
 
-  runApp(const AquamarinaApp());
+  runApp(AquamarinaApp(initError: initError));
 }
 
 class AquamarinaApp extends StatefulWidget {
-  const AquamarinaApp({super.key});
+  /// 数据库/关键服务初始化失败时的错误信息（为 null 表示初始化成功）
+  final Object? initError;
+
+  const AquamarinaApp({super.key, this.initError});
 
   @override
   State<AquamarinaApp> createState() => _AquamarinaAppState();
@@ -114,6 +159,31 @@ class _AquamarinaAppState extends State<AquamarinaApp> {
   void initState() {
     super.initState();
     ThemeModeService.instance.load();
+
+    // 关键服务初始化失败时向用户弹窗提示
+    final initError = widget.initError;
+    if (initError != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            icon: const Icon(Icons.error_outline, color: Colors.red),
+            title: const Text('初始化失败'),
+            content: Text(
+              '数据库初始化失败，部分功能可能无法使用。\n\n错误信息：$initError\n\n'
+              '您可以尝试在「设置 → 数据管理」中导入备份或清除数据后重试。',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('知道了'),
+              ),
+            ],
+          ),
+        );
+      });
+    }
   }
 
   @override

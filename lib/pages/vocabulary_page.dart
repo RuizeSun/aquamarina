@@ -30,6 +30,7 @@ class VocabularyPageState extends State<VocabularyPage>
     'completed': false,
   };
   bool _isLoading = true;
+  bool _loadFailed = false;
   bool _requireReviewBeforeLearning = true;
   Timer? _refreshTimer;
 
@@ -111,8 +112,11 @@ class VocabularyPageState extends State<VocabularyPage>
       // 读取是否强制要求先复习（缓存到 state，避免 build 中重复创建 Future）
       _requireReviewBeforeLearning =
           prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
+      _loadFailed = false;
     } catch (e) {
-      // ignore errors during loading
+      // 数据加载失败：显示错误状态并提示用户重试
+      debugPrint('VocabularyPage._loadData failed: $e');
+      _loadFailed = true;
     }
 
     if (mounted) {
@@ -300,9 +304,50 @@ class VocabularyPageState extends State<VocabularyPage>
       appBar: AppBar(title: const Text('背单词'), centerTitle: false),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
+          : _loadFailed
+          ? _buildErrorState(theme, colorScheme)
           : _currentBook == null
           ? _buildNoBookState(theme, colorScheme)
           : _buildDashboard(theme, colorScheme),
+    );
+  }
+
+  /// 数据加载失败时的错误状态 UI
+  Widget _buildErrorState(ThemeData theme, ColorScheme colorScheme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 80,
+              color: colorScheme.error.withValues(alpha: 0.6),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '数据加载失败',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '请检查数据库状态后重试',
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _loadData,
+              icon: const Icon(Icons.refresh),
+              label: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
