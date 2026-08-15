@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/word_book.dart';
 import '../services/word_book_service.dart';
@@ -32,7 +31,6 @@ class VocabularyPageState extends State<VocabularyPage>
   bool _isLoading = true;
   bool _loadFailed = false;
   bool _requireReviewBeforeLearning = true;
-  Timer? _refreshTimer;
 
   static const _currentBookIdKey = 'vocabulary_current_book_id';
   static const _reviewLimitKey = 'review_limit';
@@ -46,33 +44,20 @@ class VocabularyPageState extends State<VocabularyPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _loadData();
-    _startPeriodicRefresh();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _refreshTimer?.cancel();
     super.dispose();
   }
 
-  /// App 生命周期回调：进入后台时暂停定时器，回到前台时恢复并立即刷新
+  /// App 生命周期回调：回到前台时立即刷新数据
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _startPeriodicRefresh();
       _loadData();
-    } else if (state == AppLifecycleState.paused) {
-      _refreshTimer?.cancel();
-      _refreshTimer = null;
     }
-  }
-
-  void _startPeriodicRefresh() {
-    _refreshTimer?.cancel();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
-      _loadData();
-    });
   }
 
   /// 供外部调用的刷新方法
