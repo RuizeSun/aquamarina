@@ -153,6 +153,7 @@ class AiService {
   Stream<String> chatStream({
     required List<Map<String, String>> messages,
     AiProfile? profile,
+    bool includeReasoningContent = true,
   }) {
     final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
@@ -206,7 +207,8 @@ class AiService {
                       // 提取 DeepSeek reasoning_content（思维链）
                       final reasoningContent =
                           delta['reasoning_content'] as String?;
-                      if (reasoningContent != null &&
+                      if (includeReasoningContent &&
+                          reasoningContent != null &&
                           reasoningContent.isNotEmpty) {
                         controller.add(reasoningContent);
                       }

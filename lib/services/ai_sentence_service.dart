@@ -185,6 +185,77 @@ class AiSentenceService {
   }
 
   // ===== 评测 =====
+
+  /// 构建评测所需的 messages 列表（OpenAI 兼容协议）
+  List<Map<String, String>> _buildEvaluateMessages({
+    required Sentence sentence,
+    required String userAnswer,
+    required PracticeMode mode,
+    List<String>? shuffledWords,
+  }) {
+    final systemPrompt = _buildSystemPrompt(mode);
+    final userPrompt = _buildUserPrompt(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: mode,
+      shuffledWords: shuffledWords,
+    );
+    return [
+      {'role': 'system', 'content': systemPrompt},
+      {'role': 'user', 'content': userPrompt},
+    ];
+  }
+
+  /// 流式评测：边接收边返回 AI 批改内容片段
+  ///
+  /// - Aquamarina 官方 API：不支持流式，内部仍走非流式端点，
+  ///   返回包含完整响应的单元素流。
+  /// - OpenAI / DeepSeek：使用 [AiService.chatStream]，
+  ///   过滤思维链内容，仅暴露正式回答的增量片段。
+  Stream<String> evaluateStream({
+    required Sentence sentence,
+    required String userAnswer,
+    required PracticeMode mode,
+    List<String>? shuffledWords,
+  }) async* {
+    await _profileService.load();
+    final profile = _profileService.defaultProfile;
+    if (profile == null) {
+      throw AiServiceException('请先在设置中配置 AI 服务');
+    }
+    _aiService.setCurrentProfile(profile);
+
+    if (profile.isAquamarina) {
+      // Aquamarina 官方 API 不支持流式，一次性返回完整内容
+      final modeStr = mode == PracticeMode.beginner ? 'beginner' : 'high_level';
+      final response = await _aiService.callAquamarinaSentence(
+        mode: modeStr,
+        sentence: {'chinese': sentence.chinese, 'english': sentence.english},
+        userAnswer: userAnswer,
+        shuffledWords: shuffledWords,
+        baseUrl: profile.baseUrl,
+      );
+      yield response;
+      return;
+    }
+
+    if (profile.apiKey.isEmpty) {
+      throw AiServiceException('请先在设置中配置 API Key');
+    }
+
+    final messages = _buildEvaluateMessages(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: mode,
+      shuffledWords: shuffledWords,
+    );
+
+    yield* _aiService.chatStream(
+      messages: messages,
+      includeReasoningContent: false,
+    );
+  }
+
   Future<AiSentenceResult> evaluate({
     required Sentence sentence,
     required String userAnswer,
@@ -259,7 +330,7 @@ class AiSentenceService {
     }
 
     // 解析 JSON - 处理可能因推理模式带来的额外文本
-    final jsonStr = _extractJson(response);
+    final jsonStr = extractJson(response);
     if (jsonStr == null) {
       throw AiServiceException('AI 返回格式异常，无法解析批改结果');
     }
@@ -273,7 +344,8 @@ class AiSentenceService {
   }
 
   /// 从 AI 回复中提取 JSON 对象
-  String? _extractJson(String response) {
+  /// 供流式评测场景在累积完整文本后调用
+  static String? extractJson(String response) {
     // 尝试直接解析
     final trimmed = response.trim();
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {

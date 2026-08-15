@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -76,6 +77,10 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
   AiSentenceResult? _lastResult;
   List<PracticeRecord> _completedRecords = [];
   bool _isEvaluating = false;
+
+  // 流式评测状态
+  final StringBuffer _streamBuffer = StringBuffer();
+  String _streamingText = '';
 
   // 动画
   late AnimationController _animController;
@@ -248,20 +253,37 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     setState(() {
       _phase = _PracticePhase.evaluating;
       _isEvaluating = true;
+      _streamBuffer.clear();
+      _streamingText = '';
     });
 
     try {
-      final result = await _sentenceService.evaluate(
+      // 流式接收 AI 批改内容，边接收边显示
+      await for (final chunk in _sentenceService.evaluateStream(
         sentence: _currentSentence!,
         userAnswer: userAnswer,
         mode: widget.practiceMode,
         shuffledWords: widget.practiceMode == PracticeMode.beginner
             ? _shuffledWords
             : null,
-        cancelToken: _cancelToken,
-      );
+      )) {
+        if (!mounted) return;
+        _streamBuffer.write(chunk);
+        setState(() {
+          _streamingText = _streamBuffer.toString();
+        });
+      }
 
       if (!mounted) return;
+
+      // 流式内容收齐后解析 JSON
+      final jsonStr = AiSentenceService.extractJson(_streamBuffer.toString());
+      if (jsonStr == null) {
+        throw AiServiceException('AI 返回格式异常，无法解析批改结果');
+      }
+
+      final data = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final result = AiSentenceResult.fromJson(data);
 
       setState(() {
         _lastResult = result;
@@ -598,6 +620,52 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
 
   // ===== 加载/评测中 =====
   Widget _buildEvaluating(ThemeData theme, ColorScheme colorScheme) {
+    // 流式内容已到达时，实时显示 AI 输出
+    if (_streamingText.isNotEmpty) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'AI 正在批改...',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _streamingText,
+                      style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
