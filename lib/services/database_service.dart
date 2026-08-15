@@ -29,7 +29,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -172,6 +172,22 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_learning_sessions_date ON learning_sessions(date)',
         );
+
+        // ── 词汇测试历史记录相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS vocab_test_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            total_count INTEGER NOT NULL,
+            correct_count INTEGER NOT NULL,
+            accuracy REAL NOT NULL,
+            book_id INTEGER,
+            book_title TEXT
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_vocab_test_history_date ON vocab_test_history(date)',
+        );
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -204,6 +220,23 @@ class DatabaseService {
           ''');
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_learning_sessions_date ON learning_sessions(date)',
+          );
+        }
+        // 4 → 5：新增 vocab_test_history 表（词汇测试历史记录）
+        if (oldVersion < 5) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS vocab_test_history (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              date TEXT NOT NULL,
+              total_count INTEGER NOT NULL,
+              correct_count INTEGER NOT NULL,
+              accuracy REAL NOT NULL,
+              book_id INTEGER,
+              book_title TEXT
+            )
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_vocab_test_history_date ON vocab_test_history(date)',
           );
         }
       },

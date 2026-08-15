@@ -955,4 +955,56 @@ class LearningService {
     if (maps.isEmpty) return null;
     return UserWordRecord.fromMap(maps.first);
   }
+
+  // ─── 词汇测试历史记录 ─────────────────────────
+
+  /// 保存一次词汇测试结果到历史记录表
+  static Future<void> saveVocabTestResult({
+    required int totalCount,
+    required int correctCount,
+    int? bookId,
+    String? bookTitle,
+  }) async {
+    final db = await DatabaseService.database;
+    final accuracy = totalCount > 0 ? (correctCount / totalCount) : 0.0;
+    await db.insert('vocab_test_history', {
+      'date': DateTime.now().toIso8601String(),
+      'total_count': totalCount,
+      'correct_count': correctCount,
+      'accuracy': accuracy,
+      'book_id': bookId,
+      'book_title': bookTitle,
+    });
+  }
+
+  /// 获取词汇测试历史记录（按时间倒序），可选限制条数
+  static Future<List<Map<String, dynamic>>> getVocabTestHistory({
+    int limit = 50,
+  }) async {
+    final db = await DatabaseService.database;
+    final maps = await db.query(
+      'vocab_test_history',
+      orderBy: 'date DESC',
+      limit: limit,
+    );
+    return maps;
+  }
+
+  /// 获取词汇测试历史统计数据（用于趋势展示）
+  static Future<Map<String, dynamic>> getVocabTestStats() async {
+    final db = await DatabaseService.database;
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery('SELECT COUNT(*) FROM vocab_test_history'),
+        ) ??
+        0;
+    final avgResult = await db.rawQuery(
+      'SELECT AVG(accuracy) FROM vocab_test_history',
+    );
+    final avgAccuracy =
+        avgResult.isNotEmpty && avgResult.first.values.first != null
+        ? (avgResult.first.values.first as num).toDouble()
+        : 0.0;
+    return {'count': count, 'avgAccuracy': avgAccuracy};
+  }
 }

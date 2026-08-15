@@ -26,6 +26,11 @@ class _StatsPageState extends State<StatsPage> {
   Map<String, int> _durationByType = {};
   List<Map<String, dynamic>> _weeklyDurationData = [];
 
+  // 词汇测试历史相关
+  List<Map<String, dynamic>> _vocabTestHistory = [];
+  int _vocabTestCount = 0;
+  double _vocabTestAvgAccuracy = 0.0;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +55,10 @@ class _StatsPageState extends State<StatsPage> {
     final byType = await StudyTimerService.getDurationByType();
     final weeklyDuration = await StudyTimerService.getWeeklyDuration();
 
+    // 词汇测试历史数据
+    final testHistory = await LearningService.getVocabTestHistory(limit: 50);
+    final testStats = await LearningService.getVocabTestStats();
+
     if (!mounted) return;
     setState(() {
       _streak = streak;
@@ -62,6 +71,9 @@ class _StatsPageState extends State<StatsPage> {
       _totalDurationSeconds = totalSeconds;
       _durationByType = byType;
       _weeklyDurationData = weeklyDuration;
+      _vocabTestHistory = testHistory;
+      _vocabTestCount = testStats['count'] as int? ?? 0;
+      _vocabTestAvgAccuracy = testStats['avgAccuracy'] as double? ?? 0.0;
       _isLoading = false;
     });
   }
@@ -105,6 +117,9 @@ class _StatsPageState extends State<StatsPage> {
                   const SizedBox(height: 24),
                   // 学习时长统计
                   _buildDurationSection(theme, colorScheme),
+                  const SizedBox(height: 24),
+                  // 词汇测试历史
+                  _buildVocabTestSection(theme, colorScheme),
                   const SizedBox(height: 24),
                   Text('打卡日历', style: theme.textTheme.titleMedium),
                   const SizedBox(height: 8),
@@ -486,6 +501,144 @@ class _StatsPageState extends State<StatsPage> {
         ],
       ),
     );
+  }
+
+  // ─── 词汇测试历史 ────────────────────────────
+
+  Widget _buildVocabTestSection(ThemeData theme, ColorScheme colorScheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text('词汇测试历史', style: theme.textTheme.titleMedium),
+            const Spacer(),
+            if (_vocabTestCount > 0)
+              Text(
+                '平均正确率 ${(_vocabTestAvgAccuracy * 100).round()}%',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (_vocabTestHistory.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              '暂无测试记录，完成一次词汇测试后这里会展示历史趋势',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          )
+        else
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                // 最近 7 次测试的正确率柱状图
+                SizedBox(
+                  height: 100,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      for (final item in _vocabTestHistory.reversed.take(7))
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: _buildTestBar(
+                              ((item['accuracy'] as num?) ?? 0).toDouble(),
+                              theme,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // 最近记录摘要
+                for (final item in _vocabTestHistory.take(3))
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.quiz,
+                          size: 16,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _formatTestDate(item['date'] as String),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${item['correct_count']}/${item['total_count']} (${(((item['accuracy'] as num?) ?? 0) * 100).round()}%)',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// 词汇测试正确率柱状条
+  Widget _buildTestBar(double accuracy, ThemeData theme) {
+    final fraction = accuracy.clamp(0.0, 1.0);
+    // 无数据时显示淡色小底座
+    final heightFactor = accuracy <= 0 ? 0.08 : fraction;
+    final color = accuracy >= 0.8
+        ? Colors.green
+        : accuracy >= 0.6
+        ? Colors.orange
+        : Colors.red;
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: FractionallySizedBox(
+        heightFactor: heightFactor,
+        child: Container(
+          width: 14,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: accuracy > 0 ? 0.9 : 0.15),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 格式化测试时间（ISO 字符串 → MM/dd HH:mm）
+  String _formatTestDate(String isoDate) {
+    final dt = DateTime.tryParse(isoDate);
+    if (dt == null) return isoDate;
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    return '$m/$d $h:$min';
   }
 
   // ─── 打卡日历 ────────────────────────────────

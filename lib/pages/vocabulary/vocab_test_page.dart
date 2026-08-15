@@ -288,6 +288,31 @@ class _VocabTestPageState extends State<VocabTestPage>
       }
     }
 
+    // 保存测试历史记录（正确率、测试数量等）
+    final total = _testResults.length;
+    final correctCount = _testResults.values.where((v) => v).length;
+    // 查询当前筛选词书的标题
+    String? bookTitle;
+    if (_selectedBookId != null) {
+      for (final b in _books) {
+        if (b['id'] == _selectedBookId) {
+          bookTitle = b['title'] as String;
+          break;
+        }
+      }
+    }
+    try {
+      await LearningService.saveVocabTestResult(
+        totalCount: total,
+        correctCount: correctCount,
+        bookId: _selectedBookId,
+        bookTitle: bookTitle,
+      );
+    } catch (e) {
+      // 保存失败不影响测试结果展示
+      debugPrint('saveVocabTestResult failed: $e');
+    }
+
     if (mounted) {
       setState(() {
         _phase = 2;
