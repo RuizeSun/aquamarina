@@ -177,8 +177,10 @@ class AiService {
           final responseStream = response.data as ResponseBody;
           String buffer = '';
 
-          await for (final chunk in responseStream.stream) {
-            buffer += utf8.decode(chunk.toList());
+          // 使用有状态的 utf8.decoder 转换流，正确处理跨 chunk 的
+          // UTF-8 多字节字符拼接，避免 chunk 边界截断导致 FormatException
+          await for (final chunk in utf8.decoder.bind(responseStream.stream)) {
+            buffer += chunk;
 
             // 解析 SSE 格式：data: {...}\n\n
             while (buffer.contains('\n')) {
