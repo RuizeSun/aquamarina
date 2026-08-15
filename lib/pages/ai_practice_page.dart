@@ -9,6 +9,10 @@ import 'ai_sentence_set_list_page.dart';
 import 'ai_practice_session_page.dart';
 import 'wrong_sentence_book_page.dart';
 
+/// 全局路由观察者，用于检测子页面弹出后刷新数据
+final RouteObserver<ModalRoute<void>> routeObserver =
+    RouteObserver<ModalRoute<void>>();
+
 class AiPracticePage extends StatefulWidget {
   const AiPracticePage({super.key});
 
@@ -16,7 +20,7 @@ class AiPracticePage extends StatefulWidget {
   State<AiPracticePage> createState() => _AiPracticePageState();
 }
 
-class _AiPracticePageState extends State<AiPracticePage> {
+class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
   final SentenceSetService _setService = SentenceSetService.instance;
   final AiSentenceService _sentenceService = AiSentenceService();
 
@@ -49,9 +53,24 @@ class _AiPracticePageState extends State<AiPracticePage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)!);
+  }
+
+  @override
   void dispose() {
+    routeObserver.unsubscribe(this);
     _setService.removeListener(_onSetsChanged);
     super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    // 从子页面（设置页、练习会话页等）返回时，重新加载设置和进度
+    _loadSettings().then((_) {
+      _refreshProgress();
+    });
   }
 
   void _onSetsChanged() {
@@ -452,8 +471,8 @@ class _AiPracticePageState extends State<AiPracticePage> {
               ),
             ),
 
-            // 句式集练习进度（不重复练习开启时不显示）
-            if (_selectedSet != null && _totalCount > 0 && !_skipRepeated) ...[
+            // 句式集练习进度（仅不重复练习开启时显示）
+            if (_selectedSet != null && _totalCount > 0 && _skipRepeated) ...[
               const SizedBox(height: 12),
               _buildProgressRow(
                 theme: theme,

@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
 import 'pages/vocabulary_page.dart';
-import 'pages/ai_practice_page.dart';
+import 'pages/ai_practice_page.dart' show AiPracticePage, routeObserver;
 import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -129,6 +129,7 @@ class _AquamarinaAppState extends State<AquamarinaApp> {
         return MaterialApp(
           title: 'Aquamarina',
           debugShowCheckedModeBanner: false,
+          navigatorObservers: [routeObserver],
           theme: ThemeData(
             useMaterial3: true,
             colorScheme: ColorScheme.fromSeed(
