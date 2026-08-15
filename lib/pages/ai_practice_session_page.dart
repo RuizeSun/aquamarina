@@ -266,6 +266,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
         shuffledWords: widget.practiceMode == PracticeMode.beginner
             ? _shuffledWords
             : null,
+        cancelToken: _cancelToken,
       )) {
         if (!mounted) return;
         _streamBuffer.write(chunk);
@@ -309,6 +310,16 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       final message = e.isRateLimit ? e.message : '批改失败：$e';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(message), backgroundColor: Colors.red),
+      );
+    } on DioException catch (e) {
+      // 页面退出时主动取消请求，不视为错误，静默返回
+      if (!mounted || CancelToken.isCancel(e)) return;
+      setState(() {
+        _isEvaluating = false;
+        _phase = _PracticePhase.answering;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('批改失败：$e'), backgroundColor: Colors.red),
       );
     } catch (e) {
       if (!mounted) return;

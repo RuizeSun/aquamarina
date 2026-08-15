@@ -212,11 +212,14 @@ class AiSentenceService {
   ///   返回包含完整响应的单元素流。
   /// - OpenAI / DeepSeek：使用 [AiService.chatStream]，
   ///   过滤思维链内容，仅暴露正式回答的增量片段。
+  ///
+  /// [cancelToken] 传入后可在页面退出时取消未完成的请求。
   Stream<String> evaluateStream({
     required Sentence sentence,
     required String userAnswer,
     required PracticeMode mode,
     List<String>? shuffledWords,
+    CancelToken? cancelToken,
   }) async* {
     await _profileService.load();
     final profile = _profileService.defaultProfile;
@@ -234,6 +237,7 @@ class AiSentenceService {
         userAnswer: userAnswer,
         shuffledWords: shuffledWords,
         baseUrl: profile.baseUrl,
+        cancelToken: cancelToken,
       );
       yield response;
       return;
@@ -253,6 +257,7 @@ class AiSentenceService {
     yield* _aiService.chatStream(
       messages: messages,
       includeReasoningContent: false,
+      cancelToken: cancelToken,
     );
   }
 

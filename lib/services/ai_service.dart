@@ -154,6 +154,7 @@ class AiService {
     required List<Map<String, String>> messages,
     AiProfile? profile,
     bool includeReasoningContent = true,
+    CancelToken? cancelToken,
   }) {
     final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
@@ -170,6 +171,7 @@ class AiService {
           url,
           options: Options(headers: headers, responseType: ResponseType.stream),
           data: _buildBody(profile: cfg, messages: messages, stream: true),
+          cancelToken: cancelToken,
         )
         .then((response) async {
           final responseStream = response.data as ResponseBody;
