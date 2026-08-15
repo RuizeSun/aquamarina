@@ -230,4 +230,23 @@ class DatabaseService {
       _db = null;
     }
   }
+
+  /// 导出一份数据库的一致快照到 [targetPath]。
+  ///
+  /// 使用 SQLite 的 `VACUUM INTO` 命令，由 SQLite 引擎在内部生成
+  /// 与主连接一致（含 WAL 中未合并事务）的独立副本，
+  /// 全程保持主连接打开，不会产生「关闭 → 拷贝 → 重开」的窗口期，
+  /// 因此其他异步写入（如 StudyTimerService 的定时持久化）不受影响。
+  ///
+  /// 注意：`VACUUM INTO` 的目标必须是不存在的文件，否则会抛错。
+  static Future<void> exportDatabaseCopy(String targetPath) async {
+    final db = await database;
+    await db.rawQuery('VACUUM INTO ?', [targetPath]);
+  }
+
+  /// 当前数据库文件的完整路径。
+  static Future<String> get databasePath async {
+    final dir = await getApplicationSupportDirectory();
+    return p.join(dir.path, 'aquamarina.db');
+  }
 }

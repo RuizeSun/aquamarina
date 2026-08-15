@@ -38,23 +38,32 @@ class BackupService {
   ///
   /// [includeApiKeys] 为 true 时包含 AI API Keys（敏感信息）。
   ///
-  /// 数据库通过“关闭连接 → 拷贝文件 → 重新打开”的方式导出，
-  /// 确保拷贝时没有未合并进主文件的 WAL 事务，备份数据完整。
+  /// 数据库通过 SQLite `VACUUM INTO` 生成一致快照副本后读取，
+  /// 全程保持主连接打开，避免「关闭 → 拷贝 → 重开」窗口期内
+  /// 其他异步写入（如 StudyTimerService 定时持久化）访问数据库出错。
   static Future<Uint8List> exportBackup({required bool includeApiKeys}) async {
     final archive = Archive();
 
-    // 1. 业务数据库
-    final dir = await getApplicationSupportDirectory();
-    final dbFile = File(p.join(dir.path, dbFileName));
+    // 1. 业务数据库（VACUUM INTO 生成快照，不关闭主连接）
+    final dbPath = await DatabaseService.databasePath;
+    final dbFile = File(dbPath);
     if (await dbFile.exists()) {
-      await DatabaseService.close();
+      final tmpPath = '$dbPath.export_tmp';
+      final tmpFile = File(tmpPath);
+      // 清理可能残留的临时文件（上次导出异常中断时）
+      if (await tmpFile.exists()) {
+        await tmpFile.delete();
+      }
       try {
+        // 由 SQLite 引擎生成与主连接一致（含 WAL 事务）的独立快照
+        await DatabaseService.exportDatabaseCopy(tmpPath);
         archive.addFile(
-          ArchiveFile.bytes(dbFileName, await dbFile.readAsBytes()),
+          ArchiveFile.bytes(dbFileName, await tmpFile.readAsBytes()),
         );
       } finally {
-        // 立即重新打开数据库，恢复业务功能
-        await DatabaseService.database;
+        if (await tmpFile.exists()) {
+          await tmpFile.delete();
+        }
       }
     }
 
