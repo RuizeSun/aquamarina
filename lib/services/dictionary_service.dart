@@ -44,9 +44,15 @@ class DictionaryService {
   }
 
   /// 从 assets 中的 databases.zip 解压出所有数据库文件（仅执行一次）
+  /// 失败时重置 [_extractFuture]，允许后续调用重试
   static Future<void> _ensureExtracted() async {
     _extractFuture ??= _doExtract();
-    return _extractFuture!;
+    try {
+      await _extractFuture;
+    } catch (_) {
+      _extractFuture = null;
+      rethrow;
+    }
   }
 
   static Future<void> _doExtract() async {
@@ -88,18 +94,30 @@ class DictionaryService {
   }
 
   /// 获取英英/英汉词典数据库（线程安全，防并发重复初始化）
+  /// 初始化失败时重置 [_enDbInitFuture]，之后调用可重新尝试
   static Future<Database> get enDb async {
     if (_enDb != null) return _enDb!;
     _enDbInitFuture ??= _openEnDb().then((db) => _enDb = db);
-    await _enDbInitFuture;
+    try {
+      await _enDbInitFuture;
+    } catch (_) {
+      _enDbInitFuture = null;
+      rethrow;
+    }
     return _enDb!;
   }
 
   /// 获取汉英词典数据库（线程安全，防并发重复初始化）
+  /// 初始化失败时重置 [_cnDbInitFuture]，之后调用可重新尝试
   static Future<Database> get cnDb async {
     if (_cnDb != null) return _cnDb!;
     _cnDbInitFuture ??= _openCnDb().then((db) => _cnDb = db);
-    await _cnDbInitFuture;
+    try {
+      await _cnDbInitFuture;
+    } catch (_) {
+      _cnDbInitFuture = null;
+      rethrow;
+    }
     return _cnDb!;
   }
 
@@ -239,6 +257,7 @@ class DictionaryService {
   }
 
   /// 关闭所有数据库
+  /// 同时重置初始化 Future，避免再次访问时返回已关闭的连接
   static Future<void> close() async {
     if (_enDb != null) {
       await _enDb!.close();
@@ -248,5 +267,9 @@ class DictionaryService {
       await _cnDb!.close();
       _cnDb = null;
     }
+    _enDbInitFuture = null;
+    _cnDbInitFuture = null;
+    // 同样重置解压 Future，允许关闭后重新解压
+    _extractFuture = null;
   }
 }

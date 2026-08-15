@@ -6,6 +6,10 @@ import 'package:path_provider/path_provider.dart';
 class DatabaseService {
   static Database? _db;
 
+  /// 初始化 Future，防止并发重复初始化
+  /// 初始化失败时重置，允许后续调用重试
+  static Future<Database>? _dbInitFuture;
+
   static Future<void> _initFfi() async {
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.windows ||
@@ -18,8 +22,16 @@ class DatabaseService {
 
   static Future<Database> get database async {
     if (_db != null) return _db!;
-    _db = await _initDb();
-    return _db!;
+    _dbInitFuture ??= _initDb().then((db) {
+      _db = db;
+      return db;
+    });
+    try {
+      return await _dbInitFuture!;
+    } catch (_) {
+      _dbInitFuture = null;
+      rethrow;
+    }
   }
 
   static Future<Database> _initDb() async {
@@ -262,6 +274,8 @@ class DatabaseService {
       await _db!.close();
       _db = null;
     }
+    // 同时重置初始化 Future，避免再次访问时返回已关闭的连接
+    _dbInitFuture = null;
   }
 
   /// 导出一份数据库的一致快照到 [targetPath]。
