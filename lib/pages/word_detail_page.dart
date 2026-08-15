@@ -212,7 +212,7 @@ class _WordDetailPageState extends State<WordDetailPage> {
             tooltip: '朗读',
             onPressed: () async {
               final success = await TtsService.instance.speak(widget.word);
-              if (!success && mounted) {
+              if (!success && context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('朗读失败：请检查网络连接或系统语音设置'),
