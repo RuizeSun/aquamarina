@@ -141,9 +141,8 @@ class _SearchPageState extends State<SearchPage> {
         ),
       );
 
-      _searchController.clear();
+      // 返回后保留搜索上下文，不清空搜索框和联想结果
       setState(() {
-        _suggestions = [];
         _errorMessage = null;
       });
     } catch (e) {
