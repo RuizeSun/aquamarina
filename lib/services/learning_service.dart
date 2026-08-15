@@ -607,7 +607,7 @@ class LearningService {
   /// 按状态获取单词列表
   /// [status]: 0=等待学习, 1=已学习, 2=已掌握
   /// [bookId] 不为 null 时按词书筛选
-  /// 返回列表，每个元素为 {word, books: List<String>}，
+  /// 返回列表，每个元素为 {word, books: `List<String>`}，
   /// books 为该单词来源的所有词书名称（去重）。
   static Future<List<Map<String, dynamic>>> getWordsByStatus({
     int? status,
@@ -693,7 +693,7 @@ class LearningService {
   /// 获取已掌握的单词列表，用于词汇测试。
   /// `[count]` 为 null 或 <= 0 时返回全部已掌握单词。
   /// `[bookId]` 不为 null 时仅返回该词书中的已掌握单词。
-  /// 返回列表，每个元素为 {word, books: List<String>}。
+  /// 返回列表，每个元素为 {word, books: `List<String>`}。
   static Future<List<Map<String, dynamic>>> getMasteredWordsForTest({
     int? count,
     int? bookId,
