@@ -831,12 +831,53 @@ class LearningService {
           );
           await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
         } else if (result == 'forgot') {
-          // 忘记 → 完全删除记录，从头学起
-          await txn.delete(
+          // 忘记 → 回到低 Stage 并标记为弱词（不删除记录，保留学习历史）
+          final existing = await txn.query(
             'user_word_records',
+            columns: ['review_count'],
             where: 'word = ?',
             whereArgs: [word],
           );
+
+          if (existing.isNotEmpty) {
+            final oldReviewCount =
+                (existing.first['review_count'] as int?) ?? 0;
+            final nextDate = UserWordRecord(
+              word: word,
+              stage: 0,
+            ).computeNextReviewDate();
+
+            await txn.update(
+              'user_word_records',
+              {
+                'stage': 0,
+                'is_weak': 1,
+                'is_mastered': 0,
+                'next_review_date': nextDate,
+                'last_reviewed_at': now,
+                'review_count': oldReviewCount + 1,
+              },
+              where: 'word = ?',
+              whereArgs: [word],
+            );
+          } else {
+            // 无记录时创建一条新记录（首次学习即忘记）
+            final nextDate = UserWordRecord(
+              word: word,
+              stage: 0,
+            ).computeNextReviewDate();
+
+            await txn.insert('user_word_records', {
+              'word': word,
+              'stage': 0,
+              'is_weak': 1,
+              'is_mastered': 0,
+              'next_review_date': nextDate,
+              'last_reviewed_at': now,
+              'review_count': 1,
+              'created_at': now,
+            });
+          }
           await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
         } else {
           final isWeak = result == 'hard' ? 1 : 0;
