@@ -273,17 +273,17 @@ class UpdateService {
     if (assets.isEmpty) return null;
 
     if (Platform.isAndroid) {
-      // 优先选择 arm64-v8a 的 aligned APK
-      final aligned = assets.where(
-        (a) => a.name.contains('arm64-v8a') && a.name.contains('aligned'),
-      );
-      if (aligned.isNotEmpty) return aligned.first.browserDownloadUrl;
-
-      // 次选 arm64-v8a 的 signed APK
+      // 优先选择 arm64-v8a 的 signed APK
       final signed = assets.where(
         (a) => a.name.contains('arm64-v8a') && a.name.contains('signed'),
       );
       if (signed.isNotEmpty) return signed.first.browserDownloadUrl;
+
+      // 次选 arm64-v8a 的 aligned APK
+      final aligned = assets.where(
+        (a) => a.name.contains('arm64-v8a') && a.name.contains('aligned'),
+      );
+      if (aligned.isNotEmpty) return aligned.first.browserDownloadUrl;
 
       // 再选任意 arm64 APK
       final arm64 = assets.where((a) => a.name.contains('arm64-v8a'));
