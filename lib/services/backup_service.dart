@@ -9,6 +9,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database_service.dart';
+import 'theme_mode_service.dart';
+import 'tts_service.dart';
 
 /// 备份文件格式：ZIP
 ///
@@ -287,6 +289,18 @@ class BackupService {
         await DatabaseService.database;
       } catch (_) {
         throw const BackupException('数据库文件已替换，但打开失败，请重启应用');
+      }
+
+      // 2e. 热更新 TTS 与主题设置（无需重启即可生效）
+      try {
+        await TtsService.instance.refreshSettings();
+      } catch (_) {
+        // TTS 刷新失败不影响导入结果
+      }
+      try {
+        await ThemeModeService.instance.load();
+      } catch (_) {
+        // 主题刷新失败不影响导入结果
       }
     } catch (e) {
       // 回滚：恢复导入前的数据库
