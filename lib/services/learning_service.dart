@@ -660,16 +660,24 @@ class LearningService {
           .toList();
     }
 
-    // 查询所有单词的来源词书映射
-    final bookMaps = await db.rawQuery('''
-      SELECT e.word, b.title FROM word_book_entries e
-      JOIN word_books b ON b.id = e.book_id
-    ''');
+    // 仅查询结果单词的来源词书映射，避免全表 JOIN
+    final resultWords = wordMaps
+        .map((m) => m['word'] as String)
+        .toSet()
+        .toList();
     final sourceMap = <String, Set<String>>{};
-    for (final m in bookMaps) {
-      final word = m['word'] as String;
-      final title = m['title'] as String;
-      sourceMap.putIfAbsent(word, () => <String>{}).add(title);
+    if (resultWords.isNotEmpty) {
+      final placeholders = resultWords.map((_) => '?').join(',');
+      final bookMaps = await db.rawQuery('''
+        SELECT e.word, b.title FROM word_book_entries e
+        JOIN word_books b ON b.id = e.book_id
+        WHERE e.word IN ($placeholders)
+      ''', resultWords);
+      for (final m in bookMaps) {
+        final word = m['word'] as String;
+        final title = m['title'] as String;
+        sourceMap.putIfAbsent(word, () => <String>{}).add(title);
+      }
     }
 
     return wordMaps.map((m) {
@@ -727,22 +735,9 @@ class LearningService {
       }
     }
 
-    if (words.isEmpty) return [];
-
-    // 查询来源词书映射
-    final bookMaps = await db.rawQuery('''
-      SELECT e.word, b.title FROM word_book_entries e
-      JOIN word_books b ON b.id = e.book_id
-    ''');
-    final sourceMap = <String, Set<String>>{};
-    for (final m in bookMaps) {
-      final word = m['word'] as String;
-      final title = m['title'] as String;
-      sourceMap.putIfAbsent(word, () => <String>{}).add(title);
-    }
-
+    // 词汇测试仅需要单词本身，直接返回（books 字段与测试逻辑无关，省略 JOIN 提升性能）
     return words.map((w) {
-      return {'word': w, 'books': sourceMap[w]?.toList() ?? <String>[]};
+      return {'word': w, 'books': <String>[]};
     }).toList();
   }
 
