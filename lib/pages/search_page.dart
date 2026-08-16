@@ -383,6 +383,32 @@ class _SearchPageState extends State<SearchPage> {
       );
     }
 
-    return const SizedBox.shrink();
+    // 搜索完成但无匹配结果
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.search_off,
+            size: 64,
+            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '未找到"${_searchController.text.trim()}"的匹配结果',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '请检查拼写或尝试其他关键词',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
