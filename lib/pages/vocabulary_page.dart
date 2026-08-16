@@ -682,11 +682,10 @@ class VocabularyPageState extends State<VocabularyPage>
     final goal = (_goalProgress['goal'] as int?) ?? 10;
     final completed = (_goalProgress['completed'] as bool?) ?? false;
     final progress = goal <= 0 ? 0.0 : (learned / goal).clamp(0.0, 1.0);
-    final remaining = goal - learned > 0 ? goal - learned : 0;
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
       decoration: BoxDecoration(
         color: completed
             ? Colors.green.withValues(alpha: 0.12)
@@ -725,21 +724,33 @@ class VocabularyPageState extends State<VocabularyPage>
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 8,
-              backgroundColor: colorScheme.surfaceContainerHighest,
-              color: completed ? Colors.green : colorScheme.primary,
-            ),
-          ),
           const SizedBox(height: 8),
-          Text(
-            completed ? '目标达成，继续保持！' : '还差 $remaining 个新词完成今日打卡',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
+          // 自定义进度条：固定 8 高度，轨道使用与卡片背景不同的浅色。
+          // 原实现使用 LinearProgressIndicator 且轨道背景与卡片背景相同
+          // （surfaceContainerHighest），当进度为 0 时整条进度条完全不可见；
+          // 同时 M3 默认的 trackGap/trackHeight 会让其在布局中占更高空间，
+          // 导致“今日打卡进度”行下方出现一块看似多余的空白。
+          SizedBox(
+            height: 8,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ColoredBox(
+                    color: colorScheme.onSurface.withValues(alpha: 0.1),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FractionallySizedBox(
+                      widthFactor: progress,
+                      child: ColoredBox(
+                        color: completed ? Colors.green : colorScheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
