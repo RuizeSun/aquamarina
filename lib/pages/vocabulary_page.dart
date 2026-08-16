@@ -405,7 +405,7 @@ class VocabularyPageState extends State<VocabularyPage>
                       _loadData();
                     },
                     icon: const Icon(Icons.insights),
-                    label: const Text('单词总览'),
+                    label: const Text('单词总览', textScaler: TextScaler.noScaling),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
@@ -421,7 +421,7 @@ class VocabularyPageState extends State<VocabularyPage>
                       _loadData();
                     },
                     icon: const Icon(Icons.bar_chart),
-                    label: const Text('学习统计'),
+                    label: const Text('学习统计', textScaler: TextScaler.noScaling),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
@@ -440,7 +440,7 @@ class VocabularyPageState extends State<VocabularyPage>
                   _loadData();
                 },
                 icon: const Icon(Icons.quiz),
-                label: const Text('词汇测试'),
+                label: const Text('词汇测试', textScaler: TextScaler.noScaling),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -574,7 +574,7 @@ class VocabularyPageState extends State<VocabularyPage>
                   _loadData();
                 },
                 icon: const Icon(Icons.event_note),
-                label: const Text('查看复习计划'),
+                label: const Text('查看复习计划', textScaler: TextScaler.noScaling),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -595,7 +595,10 @@ class VocabularyPageState extends State<VocabularyPage>
                           child: FilledButton.icon(
                             onPressed: dueCount > 0 ? _startReview : null,
                             icon: const Icon(Icons.replay),
-                            label: const Text('开始复习'),
+                            label: const Text(
+                              '开始复习',
+                              textScaler: TextScaler.noScaling,
+                            ),
                             style: FilledButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 16),
                             ),
@@ -606,7 +609,10 @@ class VocabularyPageState extends State<VocabularyPage>
                           child: FilledButton.icon(
                             onPressed: canLearn ? _startLearning : null,
                             icon: const Icon(Icons.auto_stories),
-                            label: const Text('开始学习'),
+                            label: const Text(
+                              '开始学习',
+                              textScaler: TextScaler.noScaling,
+                            ),
                             style: FilledButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 16),
                             ),

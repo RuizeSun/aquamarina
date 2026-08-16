@@ -116,6 +116,7 @@ class QuizPhaseView extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
                         ),
+                        textScaler: TextScaler.noScaling,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -123,6 +124,7 @@ class QuizPhaseView extends StatelessWidget {
                       child: Text(
                         options[i],
                         style: const TextStyle(fontSize: 16),
+                        textScaler: TextScaler.noScaling,
                       ),
                     ),
                     if (isAnswered && isCorrectOption)

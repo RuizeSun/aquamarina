@@ -426,7 +426,7 @@ class _WordOverviewPageState extends State<WordOverviewPage>
           child: FilledButton.icon(
             onPressed: selected > 0 ? _resetSelectedLearning : null,
             icon: const Icon(Icons.replay),
-            label: Text('重新学习（$selected）'),
+            label: Text('重新学习（$selected）', textScaler: TextScaler.noScaling),
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
@@ -442,7 +442,7 @@ class _WordOverviewPageState extends State<WordOverviewPage>
         child: FilledButton.icon(
           onPressed: selected > 0 ? _markSelectedMastered : null,
           icon: const Icon(Icons.check_circle_outline),
-          label: Text('标记已掌握（$selected）'),
+          label: Text('标记已掌握（$selected）', textScaler: TextScaler.noScaling),
           style: FilledButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 14),
           ),

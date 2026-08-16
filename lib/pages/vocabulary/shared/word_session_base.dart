@@ -589,6 +589,7 @@ abstract class WordSessionBaseState<T extends WordSessionPage> extends State<T>
                                   label: const Text(
                                     '完成',
                                     style: TextStyle(fontSize: 16),
+                                    textScaler: TextScaler.noScaling,
                                   ),
                                   style: FilledButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
