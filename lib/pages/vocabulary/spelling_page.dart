@@ -190,7 +190,6 @@ class _SpellingPageState extends State<SpellingPage>
                           label: Text(
                             _showingResult ? '下一个' : '确认',
                             style: const TextStyle(fontSize: 16),
-                            textScaler: TextScaler.noScaling,
                           ),
                           style: FilledButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),

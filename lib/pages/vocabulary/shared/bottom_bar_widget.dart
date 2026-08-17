@@ -47,7 +47,7 @@ class WordLearningBottomBar extends StatelessWidget {
             child: FilledButton.icon(
               onPressed: onLearnNext,
               icon: const Icon(Icons.arrow_forward),
-              label: const Text('下一步', textScaler: TextScaler.noScaling),
+              label: const Text('下一步'),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
@@ -60,7 +60,7 @@ class WordLearningBottomBar extends StatelessWidget {
                   child: FilledButton.icon(
                     onPressed: onQuizConfirm,
                     icon: const Icon(Icons.arrow_forward),
-                    label: const Text('继续', textScaler: TextScaler.noScaling),
+                    label: const Text('继续'),
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                     ),
@@ -74,11 +74,7 @@ class WordLearningBottomBar extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => onRecallFirstChoice?.call(false),
                   icon: const Icon(Icons.sentiment_dissatisfied, size: 28),
-                  label: const Text(
-                    '忘记了',
-                    style: TextStyle(fontSize: 16),
-                    textScaler: TextScaler.noScaling,
-                  ),
+                  label: const Text('忘记了', style: TextStyle(fontSize: 16)),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 20),
                     foregroundColor: colorScheme.error,
@@ -91,11 +87,7 @@ class WordLearningBottomBar extends StatelessWidget {
                 child: FilledButton.icon(
                   onPressed: () => onRecallFirstChoice?.call(true),
                   icon: const Icon(Icons.sentiment_satisfied, size: 28),
-                  label: const Text(
-                    '我记得',
-                    style: TextStyle(fontSize: 16),
-                    textScaler: TextScaler.noScaling,
-                  ),
+                  label: const Text('我记得', style: TextStyle(fontSize: 16)),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 20),
                   ),
@@ -112,11 +104,7 @@ class WordLearningBottomBar extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () => onRecallSecondChoice?.call(false),
                   icon: const Icon(Icons.error_outline, size: 24),
-                  label: const Text(
-                    '记错了',
-                    style: TextStyle(fontSize: 16),
-                    textScaler: TextScaler.noScaling,
-                  ),
+                  label: const Text('记错了', style: TextStyle(fontSize: 16)),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     foregroundColor: Colors.orange,
@@ -130,11 +118,7 @@ class WordLearningBottomBar extends StatelessWidget {
                 child: FilledButton.icon(
                   onPressed: () => onRecallSecondChoice?.call(true),
                   icon: const Icon(Icons.check_circle_outline, size: 24),
-                  label: const Text(
-                    '继续',
-                    style: TextStyle(fontSize: 16),
-                    textScaler: TextScaler.noScaling,
-                  ),
+                  label: const Text('继续', style: TextStyle(fontSize: 16)),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     backgroundColor: colorScheme.primary,

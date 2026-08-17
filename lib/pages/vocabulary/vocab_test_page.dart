@@ -702,11 +702,7 @@ class _VocabTestPageState extends State<VocabTestPage>
             child: FilledButton.icon(
               onPressed: _masteredCount > 0 ? _startTest : null,
               icon: const Icon(Icons.play_arrow),
-              label: const Text(
-                '开始测试',
-                style: TextStyle(fontSize: 16),
-                textScaler: TextScaler.noScaling,
-              ),
+              label: const Text('开始测试', style: TextStyle(fontSize: 16)),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
@@ -796,7 +792,6 @@ class _VocabTestPageState extends State<VocabTestPage>
                     child: Text(
                       _currentIndex >= _testWords.length - 1 ? '查看结果' : '下一题',
                       style: const TextStyle(fontSize: 16),
-                      textScaler: TextScaler.noScaling,
                     ),
                   ),
                 ),
@@ -952,7 +947,7 @@ class _VocabTestPageState extends State<VocabTestPage>
               child: OutlinedButton.icon(
                 onPressed: _addToExistingBook,
                 icon: const Icon(Icons.playlist_add),
-                label: const Text('加入现有词书', textScaler: TextScaler.noScaling),
+                label: const Text('加入现有词书'),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -964,7 +959,7 @@ class _VocabTestPageState extends State<VocabTestPage>
               child: OutlinedButton.icon(
                 onPressed: _createNewBook,
                 icon: const Icon(Icons.create_new_folder),
-                label: const Text('新建词书', textScaler: TextScaler.noScaling),
+                label: const Text('新建词书'),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
@@ -975,7 +970,7 @@ class _VocabTestPageState extends State<VocabTestPage>
               width: double.infinity,
               child: TextButton(
                 onPressed: _doNothing,
-                child: const Text('不做处理', textScaler: TextScaler.noScaling),
+                child: const Text('不做处理'),
               ),
             ),
           ] else ...[
@@ -1008,7 +1003,7 @@ class _VocabTestPageState extends State<VocabTestPage>
               width: double.infinity,
               child: FilledButton(
                 onPressed: _doNothing,
-                child: const Text('完成', textScaler: TextScaler.noScaling),
+                child: const Text('完成'),
               ),
             ),
           ],
