@@ -312,12 +312,17 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Widget _buildContent() {
-    if (_isSearching) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    final Widget content;
+    final query = _searchController.text.trim();
 
-    if (_errorMessage != null) {
-      return Center(
+    if (_isSearching) {
+      content = const Center(
+        key: ValueKey('searching'),
+        child: CircularProgressIndicator(),
+      );
+    } else if (_errorMessage != null) {
+      content = Center(
+        key: ValueKey('error_$query'),
         child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(
@@ -340,10 +345,9 @@ class _SearchPageState extends State<SearchPage> {
           ),
         ),
       );
-    }
-
-    if (_suggestions.isNotEmpty) {
-      return ListView.separated(
+    } else if (_suggestions.isNotEmpty) {
+      content = ListView.separated(
+        key: ValueKey('results_$query'),
         itemCount: _suggestions.length,
         separatorBuilder: (_, a) => const Divider(height: 1),
         itemBuilder: (context, index) {
@@ -361,54 +365,124 @@ class _SearchPageState extends State<SearchPage> {
                 )
               : null;
 
-          return ListTile(
-            leading: Icon(
-              leadingIcon,
-              color: Theme.of(context).colorScheme.primary,
+          return _StaggeredFadeIn(
+            index: index,
+            child: ListTile(
+              leading: Icon(
+                leadingIcon,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              title: Text(result.displayWord),
+              subtitle:
+                  result.displaySubtitle != null &&
+                      result.displaySubtitle!.isNotEmpty
+                  ? Text(
+                      normalizeNewlines(result.displaySubtitle),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    )
+                  : null,
+              trailing: trailing,
+              onTap: () => _onSelectWord(result.displayWord),
             ),
-            title: Text(result.displayWord),
-            subtitle:
-                result.displaySubtitle != null &&
-                    result.displaySubtitle!.isNotEmpty
-                ? Text(
-                    normalizeNewlines(result.displaySubtitle),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  )
-                : null,
-            trailing: trailing,
-            onTap: () => _onSelectWord(result.displayWord),
           );
         },
       );
+    } else {
+      // 搜索完成但无匹配结果
+      content = Center(
+        key: ValueKey('no_results_$query'),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.search_off,
+              size: 64,
+              color: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.3),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '未找到"$query"的匹配结果',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '请检查拼写或尝试其他关键词',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
-    // 搜索完成但无匹配结果
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.search_off,
-            size: 64,
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '未找到"${_searchController.text.trim()}"的匹配结果',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '请检查拼写或尝试其他关键词',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 250),
+      switchInCurve: Curves.easeOut,
+      switchOutCurve: Curves.easeIn,
+      child: content,
+    );
+  }
+}
+
+/// 带交错延迟的淡入动画容器，用于搜索结果列表逐项浮现
+class _StaggeredFadeIn extends StatefulWidget {
+  static const _duration = Duration(milliseconds: 250);
+  static const _delayPerItem = Duration(milliseconds: 40);
+
+  final int index;
+  final Widget child;
+
+  const _StaggeredFadeIn({required this.index, required this.child});
+
+  @override
+  State<_StaggeredFadeIn> createState() => _StaggeredFadeInState();
+}
+
+class _StaggeredFadeInState extends State<_StaggeredFadeIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _opacity;
+  late final Animation<Offset> _offset;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: _StaggeredFadeIn._duration,
+    );
+    final curved = CurvedAnimation(
+      parent: _controller,
+      curve: Curves.easeOutCubic,
+    );
+    _opacity = curved;
+    _offset = Tween<Offset>(
+      begin: const Offset(0, 0.15),
+      end: Offset.zero,
+    ).animate(curved);
+
+    Future.delayed(_StaggeredFadeIn._delayPerItem * widget.index, () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _opacity,
+      child: SlideTransition(position: _offset, child: widget.child),
     );
   }
 }
