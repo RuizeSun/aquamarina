@@ -479,87 +479,101 @@ class VocabularyPageState extends State<VocabularyPage>
             Text('今日概览', style: theme.textTheme.titleMedium),
             const SizedBox(height: 12),
 
-            // 待复习数量
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: dueCount > 0
-                    ? colorScheme.errorContainer
-                    : colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    dueCount > 0
-                        ? Icons.notifications_active
-                        : Icons.check_circle,
-                    color: dueCount > 0
-                        ? colorScheme.error
-                        : colorScheme.primary,
-                    size: 32,
-                  ),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '今日待复习',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: dueCount > 0
-                              ? colorScheme.onErrorContainer
-                              : colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Text(
-                        '$dueCount 词',
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
+            // 今日概览统计：待复习 + 已学习/已复习（一行两卡片）
+            Row(
+              children: [
+                // 待复习数量
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: dueCount > 0
+                          ? colorScheme.errorContainer
+                          : colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          dueCount > 0
+                              ? Icons.notifications_active
+                              : Icons.check_circle,
                           color: dueCount > 0
                               ? colorScheme.error
                               : colorScheme.primary,
+                          size: 32,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '今日待复习',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: dueCount > 0
+                                      ? colorScheme.onErrorContainer
+                                      : colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              Text(
+                                '$dueCount 词',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: dueCount > 0
+                                      ? colorScheme.error
+                                      : colorScheme.primary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // 已学习/复习数量
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.trending_up, color: colorScheme.primary, size: 32),
-                  const SizedBox(width: 12),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '今日已学习 / 已复习',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      Text(
-                        '${stats?.todayLearnedCount ?? 0} 学 / ${stats?.todayReviewedCount ?? 0} 复',
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
+                ),
+                const SizedBox(width: 12),
+                // 已学习/复习数量
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.trending_up,
                           color: colorScheme.primary,
+                          size: 32,
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 12),
+                        Flexible(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '今日背词',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              Text(
+                                '${stats?.todayLearnedCount ?? 0} 学 / ${stats?.todayReviewedCount ?? 0} 复',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
 
