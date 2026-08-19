@@ -121,12 +121,26 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _onSelectWord(String word) async {
-    await _addToHistory(word);
-
     if (!mounted) return;
 
     try {
       final result = await DictionaryService.searchAllExact(word);
+      if (!mounted) return;
+
+      // 单词不存在时不允许进入详情页
+      if (!result.hasAny) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('未找到「$word」的匹配结果'),
+            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      await _addToHistory(word);
+
       if (!mounted) return;
 
       await Navigator.push(
