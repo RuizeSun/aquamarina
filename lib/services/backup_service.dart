@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database_service.dart';
+import 'log_service.dart';
 import 'theme_mode_service.dart';
 import 'tts_service.dart';
 
@@ -44,6 +45,7 @@ class BackupService {
   /// 全程保持主连接打开，避免「关闭 → 拷贝 → 重开」窗口期内
   /// 其他异步写入（如 StudyTimerService 定时持久化）访问数据库出错。
   static Future<Uint8List> exportBackup({required bool includeApiKeys}) async {
+    logInfo('BackupService', '开始导出备份 includeApiKeys=$includeApiKeys');
     final archive = Archive();
 
     // 1. 业务数据库（VACUUM INTO 生成快照，不关闭主连接）
@@ -93,7 +95,9 @@ class BackupService {
       ),
     );
 
-    return Uint8List.fromList(ZipEncoder().encode(archive));
+    final bytes = Uint8List.fromList(ZipEncoder().encode(archive));
+    logInfo('BackupService', '备份导出完成，文件大小: ${bytes.lengthInBytes} 字节');
+    return bytes;
   }
 
   /// 序列化 SharedPreferences：为每个 key 附带类型标记，保证恢复时类型不丢失。
@@ -172,6 +176,7 @@ class BackupService {
   ///
   /// 任何校验失败都会在触碰现有数据之前抛出 [BackupException]。
   static Future<BackupImportResult> importBackup(Uint8List bytes) async {
+    logInfo('BackupService', '开始导入备份，文件大小: ${bytes.length} 字节');
     // ── 1. 解压与校验 ─────────────────────────────
     if (bytes.length > _maxBackupSize) {
       throw const BackupException('备份文件过大，拒绝导入');
@@ -324,6 +329,7 @@ class BackupService {
       }
     }
 
+    logInfo('BackupService', '备份导入完成');
     return BackupImportResult(restoredApiKeys: hasSecureEntry);
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:sqflite/sqflite.dart';
 import 'database_service.dart';
+import 'log_service.dart';
 
 /// 学习会话类型
 enum SessionType {
@@ -69,6 +70,9 @@ class StudyTimerService with WidgetsBindingObserver {
       columns: ['id'],
       where: 'ended_at IS NULL',
     );
+    if (rows.isNotEmpty) {
+      logInfo('StudyTimerService', '发现 ${rows.length} 个中断的学习会话，正在恢复...');
+    }
     for (final row in rows) {
       await db.update(
         'learning_sessions',
@@ -102,6 +106,7 @@ class StudyTimerService with WidgetsBindingObserver {
     _persistedSeconds = 0;
     _resumeWallTime = now;
     _isRunning = true;
+    logDebug('StudyTimerService', '开始会话: ${type.value} id=$_sessionId');
 
     // 注册生命周期监听
     if (!_observerRegistered) {
@@ -141,6 +146,8 @@ class StudyTimerService with WidgetsBindingObserver {
       where: 'id = ?',
       whereArgs: [_sessionId],
     );
+
+    logDebug('StudyTimerService', '结束会话: id=$_sessionId duration=${_persistedSeconds}s');
 
     // 重置状态
     _sessionId = null;

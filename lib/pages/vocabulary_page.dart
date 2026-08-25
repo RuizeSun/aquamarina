@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/word_book.dart';
 import '../services/word_book_service.dart';
 import '../services/learning_service.dart';
+import '../services/log_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'vocabulary/word_book_list_page.dart';
 import 'vocabulary/learning_page.dart';
@@ -107,7 +108,7 @@ class VocabularyPageState extends State<VocabularyPage>
       _loadFailed = false;
     } catch (e) {
       // 数据加载失败：显示错误状态并提示用户重试
-      debugPrint('VocabularyPage._loadData failed: $e');
+      logError('VocabularyPage', '数据加载失败: $e');
       _loadFailed = true;
     }
 

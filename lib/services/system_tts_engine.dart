@@ -1,6 +1,6 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'tts_engine.dart';
+import 'log_service.dart';
 
 /// 基于 flutter_tts 的系统离线 TTS 引擎
 class SystemTtsEngine implements TtsEngine {
@@ -14,7 +14,7 @@ class SystemTtsEngine implements TtsEngine {
       await _tts.speak(text);
       return true;
     } catch (e) {
-      debugPrint('SystemTtsEngine.speak failed: $e');
+      logError('SystemTtsEngine', 'speak 失败: $e');
       return false;
     }
   }

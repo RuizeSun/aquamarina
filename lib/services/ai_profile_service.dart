@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ai_profile.dart';
+import 'log_service.dart';
 
 /// DeepSeek 余额信息
 class DeepSeekBalance {
@@ -120,6 +121,7 @@ class AiProfileService extends ChangeNotifier {
     }
 
     _loaded = true;
+    logInfo('AiProfileService', '加载完成，共 ${_profiles.length} 个配置');
     notifyListeners();
   }
 
@@ -132,6 +134,7 @@ class AiProfileService extends ChangeNotifier {
     _profiles.add(p);
     await _saveProfiles();
     await _saveApiKey(p.id, p.apiKey);
+    logInfo('AiProfileService', '添加配置: "${p.name}" id=${p.id}');
     notifyListeners();
   }
 
@@ -153,6 +156,7 @@ class AiProfileService extends ChangeNotifier {
     _profiles.removeWhere((p) => p.id == id);
     await _saveProfiles();
     await _secureStorage.delete(key: _secureKeyFor(id));
+    logInfo('AiProfileService', '删除配置: id=$id');
     notifyListeners();
   }
 

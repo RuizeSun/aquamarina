@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../services/backup_service.dart';
+import '../../../services/log_service.dart';
 import '../settings_section_header.dart';
 
 /// 数据管理分区（导出 / 导入 / 清除）
@@ -75,8 +76,10 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     // 2. 生成备份数据
     final Uint8List bytes;
     try {
+      logInfo('DataManagement', '开始导出数据备份 includeApiKeys=$includeKeys');
       bytes = await BackupService.exportBackup(includeApiKeys: includeKeys);
     } catch (e) {
+      logError('DataManagement', '导出数据备份失败: $e');
       if (context.mounted) {
         _showResultSnackBar(context, '导出失败：$e', isSuccess: false);
       }
@@ -174,6 +177,7 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     }
     if (file == null) return; // 用户取消
 
+    logInfo('DataManagement', '开始导入数据备份: ${file.name}');
     final Uint8List bytes;
     try {
       bytes = await file.readAsBytes();
@@ -210,6 +214,7 @@ class _DataManagementSectionState extends State<DataManagementSection> {
 
     try {
       final result = await BackupService.importBackup(bytes);
+      logInfo('DataManagement', '数据导入成功');
       if (!context.mounted) return;
       await showDialog<void>(
         context: context,
@@ -230,6 +235,7 @@ class _DataManagementSectionState extends State<DataManagementSection> {
         ),
       );
     } catch (e) {
+      logError('DataManagement', '数据导入失败: $e');
       if (context.mounted) {
         _showResultSnackBar(context, '导入失败：$e', isSuccess: false);
       }

@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import '../../services/learning_service.dart';
+import '../../services/log_service.dart';
 import '../../services/study_timer_service.dart';
 
 /// 将拼写成绩映射为复习计划中的结果标记。
@@ -204,7 +205,7 @@ class _SpellingPageState extends State<SpellingPage>
       await LearningService.saveLearningBatchResults(results, isReview: true);
     } catch (e) {
       // 保存失败不影响拼写流程
-      debugPrint('SpellingPage._saveResults failed: $e');
+      logError('SpellingPage', '保存拼写结果失败: $e');
     }
   }
 

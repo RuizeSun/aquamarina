@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:dio/dio.dart';
 import '../models/ai_profile.dart';
+import 'log_service.dart';
 
 /// OpenAI 兼容 API 聊天请求的封装
 class AiService {
@@ -65,6 +66,7 @@ class AiService {
     CancelToken? cancelToken,
   }) async {
     final url = '${baseUrl?.replaceAll(RegExp(r'/+$'), '')}/chat';
+    logInfo('AiService', '调用 Aquamarina 句型 API mode=$mode');
 
     try {
       final body = <String, dynamic>{
@@ -120,6 +122,7 @@ class AiService {
     }
 
     final (headers, url) = _buildRequest(cfg);
+    logInfo('AiService', '发起聊天请求 model=${cfg.model}');
 
     try {
       final response = await _dio.post(
@@ -134,13 +137,17 @@ class AiService {
         final choices = data['choices'] as List<dynamic>;
         if (choices.isNotEmpty) {
           final message = choices[0]['message'] as Map<String, dynamic>;
-          return message['content'] as String? ?? '';
+          final content = message['content'] as String? ?? '';
+          logInfo('AiService', '聊天请求成功，响应长度: ${content.length}');
+          return content;
         }
         return '';
       } else {
+        logError('AiService', '聊天请求失败: HTTP ${response.statusCode}');
         throw _mapError(response.statusCode, response.data);
       }
     } on DioException catch (e) {
+      logError('AiService', '聊天请求异常: ${e.message}');
       if (e.response != null) {
         throw _mapError(e.response?.statusCode, e.response?.data);
       }
@@ -162,6 +169,7 @@ class AiService {
     }
 
     final (headers, url) = _buildRequest(cfg);
+    logInfo('AiService', '发起流式聊天请求 model=${cfg.model}');
 
     // 使用 StreamController 将 Dio 流式响应转为字符串流
     final controller = StreamController<String>();
@@ -232,6 +240,7 @@ class AiService {
         })
         .catchError((error) {
           if (!controller.isClosed) {
+            logError('AiService', '流式请求异常: $error');
             if (error is DioException) {
               controller.addError(
                 _mapError(error.response?.statusCode, error.response?.data),

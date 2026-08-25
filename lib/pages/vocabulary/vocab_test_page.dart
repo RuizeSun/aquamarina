@@ -4,6 +4,7 @@ import '../../models/word_entry.dart';
 import '../../models/word_book.dart';
 import '../../services/dictionary_service.dart';
 import '../../services/learning_service.dart';
+import '../../services/log_service.dart';
 import '../../services/word_book_service.dart';
 import '../../services/study_timer_service.dart';
 import 'shared/data_loader.dart';
@@ -310,7 +311,7 @@ class _VocabTestPageState extends State<VocabTestPage>
       );
     } catch (e) {
       // 保存失败不影响测试结果展示
-      debugPrint('saveVocabTestResult failed: $e');
+      logError('VocabTestPage', '保存测试结果失败: $e');
     }
 
     if (mounted) {

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
+import '../services/log_service.dart';
 import 'vocabulary/shared/word_utils.dart';
 import 'word_detail_page.dart';
 
@@ -106,12 +107,14 @@ class _SearchPageState extends State<SearchPage> {
 
     try {
       final results = await DictionaryService.searchAllFuzzy(query);
+      logDebug('SearchPage', '搜索 "$query" 返回 ${results.length} 条结果');
       if (!mounted) return;
       setState(() {
         _suggestions = results;
         _isSearching = false;
       });
     } catch (e) {
+      logError('SearchPage', '搜索 "$query" 失败: $e');
       if (!mounted) return;
       setState(() {
         _isSearching = false;

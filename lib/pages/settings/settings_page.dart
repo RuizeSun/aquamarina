@@ -3,6 +3,7 @@ import 'sections/about_section.dart';
 import 'sections/appearance_section.dart';
 import 'sections/ai_profile_section.dart';
 import 'sections/ai_sentence_section.dart';
+import 'sections/logging_section.dart';
 import 'sections/data_management_section.dart';
 import 'sections/tts_section.dart';
 import 'sections/vocabulary_section.dart';
@@ -110,6 +111,11 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '数据管理',
       icon: Icons.storage_outlined,
       builder: () => const DataManagementSection(),
+    ),
+    SettingsCategory(
+      title: '日志设置',
+      icon: Icons.bug_report_outlined,
+      builder: () => const LoggingSection(),
     ),
     SettingsCategory(
       title: '关于',

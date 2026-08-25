@@ -15,38 +15,35 @@ import 'services/ai_profile_service.dart';
 import 'services/theme_mode_service.dart';
 import 'services/update_service.dart';
 import 'services/study_timer_service.dart';
+import 'services/log_service.dart';
 import 'models/ai_profile.dart';
-
-/// 将错误信息记录到日志（debugPrint 在 release 构建中也会输出到系统日志）
-void _logError(String source, Object error, StackTrace? stackTrace) {
-  // ignore: avoid_print
-  debugPrint('[$source] $error');
-  if (stackTrace != null) {
-    debugPrint('$stackTrace');
-  }
-}
 
 /// 后台预热词典数据库，失败时记录日志（搜索页会给用户明确提示）
 Future<void> _prewarmDictionaries() async {
   try {
     await DictionaryService.enDb;
     await DictionaryService.cnDb;
+    logInfo('DictionaryService', '词典数据库预热完成');
   } catch (e, stackTrace) {
-    _logError('DictionaryService', e, stackTrace);
+    logError('DictionaryService', '词典数据库预热失败: $e', stackTrace);
   }
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // ── 初始化日志服务 ──────────────────────────────
+  await LogService.instance.load();
+  logInfo('App', '应用启动');
+
   // ── 全局未捕获异常处理器 ──────────────────────────
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
-    _logError('FlutterError', details.exception, details.stack);
+    logError('FlutterError', '${details.exception}', details.stack);
   };
 
   PlatformDispatcher.instance.onError = (error, stack) {
-    _logError('Platform', error, stack);
+    logError('Platform', '$error', stack);
     return true;
   };
 
@@ -54,12 +51,14 @@ void main() async {
   Object? initError;
   try {
     await DatabaseService.database; // 初始化业务数据库
+    logInfo('DatabaseService', '业务数据库初始化完成');
     await SharedPreferences.getInstance(); // 预热 SharedPreferences
 
     // 清理上次未正常结束的学习会话（闪退恢复）
     await StudyTimerService.recoverInterruptedSessions();
+    logInfo('StudyTimerService', '中断会话恢复完成');
   } catch (e, stackTrace) {
-    _logError('DatabaseService', e, stackTrace);
+    logError('DatabaseService', '数据库初始化失败: $e', stackTrace);
     initError = e;
   }
 
@@ -72,10 +71,12 @@ void main() async {
         AiProfileTemplate.aquamarinaOfficial,
       ).copyWith(isDefault: true);
       await profileService.addProfile(defaultProfile);
+      logInfo('AiProfileService', '已创建默认 AI 配置');
+    } else {
+      logInfo('AiProfileService', 'AI 配置加载完成，共 ${profileService.profiles.length} 个');
     }
   } catch (e, stackTrace) {
-    // 记录日志但不阻止启动（AI 配置初始化失败不影响核心功能）
-    _logError('AiProfileService', e, stackTrace);
+    logError('AiProfileService', 'AI 配置初始化失败: $e', stackTrace);
   }
 
   // 预热词典数据库（在后台解压 + 打开，避免首次搜词时阻塞）

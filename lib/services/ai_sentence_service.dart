@@ -6,6 +6,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_profile_service.dart';
 import '../services/ai_service.dart';
 import 'database_service.dart';
+import 'log_service.dart';
 
 /// AI 句子评测服务
 class AiSentenceService {
@@ -268,6 +269,7 @@ class AiSentenceService {
     List<String>? shuffledWords,
     CancelToken? cancelToken,
   }) async {
+    logInfo('AiSentenceService', '评测句子 mode=${mode.name}');
     // 获取默认配置
     await _profileService.load();
     final profile = _profileService.defaultProfile;

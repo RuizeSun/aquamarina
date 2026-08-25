@@ -3,6 +3,7 @@ import 'package:sqflite/sqflite.dart';
 import '../models/word_book.dart';
 import 'database_service.dart';
 import 'dictionary_service.dart';
+import 'log_service.dart';
 
 class WordBookService {
   /// 获取所有词书
@@ -64,6 +65,7 @@ class WordBookService {
       'created_at': now,
       'updated_at': now,
     });
+    logInfo('WordBookService', '创建词书: "${book.title}" id=$id');
     return id;
   }
 
@@ -76,6 +78,7 @@ class WordBookService {
       where: 'id = ?',
       whereArgs: [book.id],
     );
+    logDebug('WordBookService', '更新词书: id=${book.id}');
   }
 
   /// 删除词书（级联删除条目）
@@ -83,6 +86,7 @@ class WordBookService {
     final db = await DatabaseService.database;
     await db.delete('word_book_entries', where: 'book_id = ?', whereArgs: [id]);
     await db.delete('word_books', where: 'id = ?', whereArgs: [id]);
+    logInfo('WordBookService', '删除词书: id=$id');
   }
 
   /// 获取词书中所有单词

@@ -2,6 +2,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_word_record.dart';
 import 'database_service.dart';
+import 'log_service.dart';
 
 class DailyStats {
   final int wrongWordCount;
@@ -809,6 +810,7 @@ class LearningService {
     Map<String, String> results, {
     bool isReview = false,
   }) async {
+    logDebug('LearningService', '保存批量学习结果: ${results.length} 个单词, isReview=$isReview');
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
 
@@ -1001,6 +1003,7 @@ class LearningService {
     int? bookId,
     String? bookTitle,
   }) async {
+    logDebug('LearningService', '保存词汇测试结果: $correctCount/$totalCount');
     final db = await DatabaseService.database;
     final accuracy = totalCount > 0 ? (correctCount / totalCount) : 0.0;
     await db.insert('vocab_test_history', {

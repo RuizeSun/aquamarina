@@ -5,6 +5,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'log_service.dart';
+
 /// GitHub Release 信息
 class GitHubRelease {
   final String tagName;
@@ -129,6 +131,7 @@ class UpdateService {
     bool force = false,
     bool bypassChannel = false,
   }) async {
+    logInfo('UpdateService', '检查更新 force=$force bypassChannel=$bypassChannel');
     try {
       // 读取更新频道，关闭则直接跳过（除非手动绕过）
       final savedChannel = await getUpdateChannel();
@@ -171,6 +174,7 @@ class UpdateService {
       // 根据当前平台选择合适的下载链接
       final downloadUrl = _selectDownloadUrl(release.assets);
 
+      logInfo('UpdateService', '发现新版本: ${release.tagName} (当前: $currentVersion)');
       return UpdateInfo(
         release: release,
         latestVersion: release.tagName,

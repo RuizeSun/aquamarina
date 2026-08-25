@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:archive/archive.dart';
 import '../models/word_entry.dart';
+import 'log_service.dart';
 
 /// 统一搜索结果，包含英汉双词典的匹配
 class CombinedResult {
@@ -97,7 +98,10 @@ class DictionaryService {
   /// 初始化失败时重置 [_enDbInitFuture]，之后调用可重新尝试
   static Future<Database> get enDb async {
     if (_enDb != null) return _enDb!;
-    _enDbInitFuture ??= _openEnDb().then((db) => _enDb = db);
+    _enDbInitFuture ??= _openEnDb().then((db) {
+      _enDb = db;
+      logInfo('DictionaryService', '英汉词典数据库打开成功');
+    });
     try {
       await _enDbInitFuture;
     } catch (_) {
@@ -111,7 +115,10 @@ class DictionaryService {
   /// 初始化失败时重置 [_cnDbInitFuture]，之后调用可重新尝试
   static Future<Database> get cnDb async {
     if (_cnDb != null) return _cnDb!;
-    _cnDbInitFuture ??= _openCnDb().then((db) => _cnDb = db);
+    _cnDbInitFuture ??= _openCnDb().then((db) {
+      _cnDb = db;
+      logInfo('DictionaryService', '汉英词典数据库打开成功');
+    });
     try {
       await _cnDbInitFuture;
     } catch (_) {

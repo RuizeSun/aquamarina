@@ -1,7 +1,7 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_edge_tts/flutter_edge_tts.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'tts_engine.dart';
+import 'log_service.dart';
 
 /// 基于 flutter_edge_tts 的在线 TTS 引擎
 class EdgeTtsEngine implements TtsEngine {
@@ -42,7 +42,7 @@ class EdgeTtsEngine implements TtsEngine {
       return true;
     } catch (e) {
       // 合成失败（如无网络）：返回失败状态，由调用方决定降级或提示
-      debugPrint('EdgeTtsEngine.speak failed: $e');
+      logError('EdgeTtsEngine', 'speak 失败: $e');
       return false;
     }
   }

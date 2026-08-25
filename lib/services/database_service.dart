@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'log_service.dart';
 
 class DatabaseService {
   static Database? _db;
@@ -38,6 +39,7 @@ class DatabaseService {
     await _initFfi();
     final dir = await getApplicationSupportDirectory();
     final dbPath = p.join(dir.path, 'aquamarina.db');
+    logInfo('DatabaseService', '打开数据库: $dbPath');
 
     return await openDatabase(
       dbPath,

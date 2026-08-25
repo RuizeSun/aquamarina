@@ -2,6 +2,7 @@ import 'tts_settings.dart';
 import 'tts_engine.dart';
 import 'system_tts_engine.dart';
 import 'edge_tts_engine.dart';
+import 'log_service.dart';
 
 /// 统一的 TTS 服务（单例）
 class TtsService {
@@ -23,6 +24,7 @@ class TtsService {
     _settings = await TtsSettings.load();
     await _createEngine();
     _initialized = true;
+    logInfo('TtsService', '初始化完成，引擎: ${_settings.provider.name}');
   }
 
   /// 刷新设置（从 SharedPreferences 重新加载）
@@ -71,9 +73,11 @@ class TtsService {
     if (_settings.provider == TtsProvider.edge) {
       try {
         // 临时创建系统引擎并朗读（不影响用户设置的 provider）
+        logWarning('TtsService', 'Edge TTS 失败，降级到系统 TTS');
         final fallback = SystemTtsEngine();
         return await fallback.speak(text);
       } catch (e) {
+        logError('TtsService', '系统 TTS 降级也失败: $e');
         return false;
       }
     }
