@@ -15,6 +15,7 @@ class _VocabularySectionState extends State<VocabularySection> {
   bool _reviewAskBook = true;
   bool _requireReviewBeforeLearning = true;
   int _dailyGoal = 10;
+  bool _quickSpelling = false;
 
   static const String _reviewLimitKey = 'review_limit';
   static const String _learningLimitKey = 'learning_limit';
@@ -22,6 +23,7 @@ class _VocabularySectionState extends State<VocabularySection> {
   static const String _requireReviewBeforeLearningKey =
       'require_review_before_learning';
   static const String _dailyGoalKey = 'daily_goal';
+  static const String _quickSpellingKey = 'quick_spelling_review_enabled';
 
   @override
   void initState() {
@@ -39,6 +41,7 @@ class _VocabularySectionState extends State<VocabularySection> {
       _requireReviewBeforeLearning =
           prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
       _dailyGoal = prefs.getInt(_dailyGoalKey) ?? 10;
+      _quickSpelling = prefs.getBool(_quickSpellingKey) ?? false;
     });
     await prefs.setInt(_reviewLimitKey, _reviewLimit);
     await prefs.setInt(_learningLimitKey, _learningLimit);
@@ -48,6 +51,7 @@ class _VocabularySectionState extends State<VocabularySection> {
       _requireReviewBeforeLearning,
     );
     await prefs.setInt(_dailyGoalKey, _dailyGoal);
+    await prefs.setBool(_quickSpellingKey, _quickSpelling);
   }
 
   Future<void> _setReviewLimit(int value) async {
@@ -78,6 +82,12 @@ class _VocabularySectionState extends State<VocabularySection> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_dailyGoalKey, value);
     setState(() => _dailyGoal = value);
+  }
+
+  Future<void> _setQuickSpelling(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_quickSpellingKey, value);
+    setState(() => _quickSpelling = value);
   }
 
   void _showReviewLimitPicker() {
@@ -204,6 +214,13 @@ class _VocabularySectionState extends State<VocabularySection> {
           subtitle: const Text('有待复习单词时，需先完成复习才能学习新词'),
           value: _requireReviewBeforeLearning,
           onChanged: _setRequireReviewBeforeLearning,
+        ),
+        SwitchListTile(
+          secondary: Icon(Icons.spellcheck, color: colorScheme.primary),
+          title: const Text('快速拼写复习'),
+          subtitle: const Text('开启后，点击「开始复习」将直接进入拼写模式'),
+          value: _quickSpelling,
+          onChanged: _setQuickSpelling,
         ),
         ListTile(
           leading: Icon(Icons.auto_stories, color: colorScheme.primary),

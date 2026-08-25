@@ -437,6 +437,7 @@ class _StatsPageState extends State<StatsPage> {
       'sentence_practice': '句型练习',
       'wrong_sentence_practice': '错题练习',
       'vocab_test': '词汇测试',
+      'word_spelling': '单词拼写',
     };
     final typeIcons = {
       'word_learn': Icons.auto_stories,
@@ -444,6 +445,7 @@ class _StatsPageState extends State<StatsPage> {
       'sentence_practice': Icons.smart_toy,
       'wrong_sentence_practice': Icons.error_outline,
       'vocab_test': Icons.quiz,
+      'word_spelling': Icons.spellcheck,
     };
     final typeColors = {
       'word_learn': colorScheme.primary,
@@ -451,6 +453,7 @@ class _StatsPageState extends State<StatsPage> {
       'sentence_practice': Colors.teal,
       'wrong_sentence_practice': Colors.red.shade300,
       'vocab_test': Colors.purple,
+      'word_spelling': Colors.indigo,
     };
 
     return Container(

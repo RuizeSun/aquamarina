@@ -18,7 +18,10 @@ enum SessionType {
   wrongSentencePractice('wrong_sentence_practice'),
 
   /// 词汇测试
-  vocabTest('vocab_test');
+  vocabTest('vocab_test'),
+
+  /// 单词拼写练习/快速拼写复习
+  wordSpelling('word_spelling');
 
   final String value;
   const SessionType(this.value);

@@ -1,6 +1,22 @@
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import '../../services/learning_service.dart';
+import '../../services/study_timer_service.dart';
+
+/// 将拼写成绩映射为复习计划中的结果标记。
+///
+/// - 首拼即对 → easy
+/// - 最终拼对但有失误 → hard
+/// - 3 次均未拼对 → forgot
+String mapSpellingResult({
+  required bool firstTryCorrect,
+  required bool everCorrect,
+}) {
+  if (firstTryCorrect) return 'easy';
+  if (everCorrect) return 'hard';
+  return 'forgot';
+}
 
 /// 弹出询问是否进入拼写练习的对话框。
 ///
@@ -38,7 +54,16 @@ class SpellingPage extends StatefulWidget {
   /// 词 → 中文释义
   final Map<String, String> entries;
 
-  const SpellingPage({super.key, required this.entries});
+  /// 是否在拼写完成后将结果写入记忆复习计划。
+  ///
+  /// 为 `true` 时（如「快速拼写复习」入口），拼写结束后会根据
+  /// 每个词的成绩调用 [LearningService.saveLearningBatchResults]：
+  /// 首拼即对 → easy，最终拼对但有失误 → hard，3 次均失败 → forgot，
+  /// 从而推进复习调度、更新复习次数并计入每日统计。
+  /// 为 `false`（默认，学习/复习完成后的附加拼写）时不写入，避免重复计次。
+  final bool recordResults;
+
+  const SpellingPage({super.key, required this.entries, this.recordResults = false});
 
   @override
   State<SpellingPage> createState() => _SpellingPageState();
@@ -49,6 +74,10 @@ class _SpellingPageState extends State<SpellingPage>
   // 待拼写队列（词 → 已拼写次数）
   final List<String> _queue = [];
   final Map<String, int> _attemptCount = {};
+
+  // 每个词是否首拼即对 / 是否最终拼对（用于 recordResults 时生成复习结果）
+  final Map<String, bool> _firstTryCorrect = {};
+  final Map<String, bool> _everCorrect = {};
 
   final TextEditingController _inputController = TextEditingController();
   final FocusNode _inputFocus = FocusNode();
@@ -69,6 +98,8 @@ class _SpellingPageState extends State<SpellingPage>
   @override
   void initState() {
     super.initState();
+    // 启动学习时长计时（计入「单词拼写」类型）
+    StudyTimerService.instance.startSession(SessionType.wordSpelling);
     _animController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -90,15 +121,20 @@ class _SpellingPageState extends State<SpellingPage>
 
   @override
   void dispose() {
+    // 结束学习时长计时
+    StudyTimerService.instance.endSession();
     _inputController.dispose();
     _inputFocus.dispose();
     _animController.dispose();
     super.dispose();
   }
 
-  /// 进入下一个待拼写词；队列为空时自动返回
-  void _nextWord() {
+  /// 进入下一个待拼写词；队列为空时（可选）保存结果并自动返回
+  Future<void> _nextWord() async {
     if (_queue.isEmpty) {
+      if (widget.recordResults) {
+        await _saveResults();
+      }
       if (mounted) Navigator.of(context).pop();
       return;
     }
@@ -127,6 +163,11 @@ class _SpellingPageState extends State<SpellingPage>
     setState(() {
       _attemptCount[word] = attempts;
       _completedSteps++;
+      // 记录首拼与最终成绩（供 recordResults 生成复习结果）
+      if (attempts == 1) {
+        _firstTryCorrect[word] = correct;
+      }
+      _everCorrect[word] = correct || (_everCorrect[word] ?? false);
       // 最后一题（拼对或已达 3 次上限、且队列中无其他词）提交后进度条满格
       if (_queue.isEmpty && (correct || attempts >= 3)) {
         _completedSteps = _totalAttempts;
@@ -145,6 +186,26 @@ class _SpellingPageState extends State<SpellingPage>
       _queue.add(word);
     }
     _nextWord();
+  }
+
+  /// 将拼写成绩写入记忆复习计划（仅 recordResults 时调用）。
+  ///
+  /// 首拼即对 → easy；最终拼对但有失误 → hard；3 次均失败 → forgot。
+  Future<void> _saveResults() async {
+    final results = <String, String>{};
+    for (final word in widget.entries.keys) {
+      results[word] = mapSpellingResult(
+        firstTryCorrect: _firstTryCorrect[word] ?? false,
+        everCorrect: _everCorrect[word] ?? false,
+      );
+    }
+    if (results.isEmpty) return;
+    try {
+      await LearningService.saveLearningBatchResults(results, isReview: true);
+    } catch (e) {
+      // 保存失败不影响拼写流程
+      debugPrint('SpellingPage._saveResults failed: $e');
+    }
   }
 
   // ─── UI ──────────────────────────────────────

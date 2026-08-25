@@ -10,6 +10,9 @@ import 'vocabulary/review_plan_page.dart';
 import 'vocabulary/word_overview_page.dart';
 import 'vocabulary/stats_page.dart';
 import 'vocabulary/vocab_test_page.dart';
+import 'vocabulary/spelling_page.dart';
+import 'vocabulary/shared/data_loader.dart';
+import 'vocabulary/shared/word_utils.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -31,6 +34,7 @@ class VocabularyPageState extends State<VocabularyPage>
   bool _isLoading = true;
   bool _loadFailed = false;
   bool _requireReviewBeforeLearning = true;
+  bool _quickSpellingReview = false;
 
   static const _currentBookIdKey = 'vocabulary_current_book_id';
   static const _reviewLimitKey = 'review_limit';
@@ -38,6 +42,7 @@ class VocabularyPageState extends State<VocabularyPage>
   static const _reviewAskBookKey = 'review_ask_book';
   static const _requireReviewBeforeLearningKey =
       'require_review_before_learning';
+  static const _quickSpellingKey = 'quick_spelling_review_enabled';
 
   @override
   void initState() {
@@ -97,6 +102,8 @@ class VocabularyPageState extends State<VocabularyPage>
       // 读取是否强制要求先复习（缓存到 state，避免 build 中重复创建 Future）
       _requireReviewBeforeLearning =
           prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
+      // 读取是否开启快速拼写复习
+      _quickSpellingReview = prefs.getBool(_quickSpellingKey) ?? false;
       _loadFailed = false;
     } catch (e) {
       // 数据加载失败：显示错误状态并提示用户重试
@@ -151,19 +158,56 @@ class VocabularyPageState extends State<VocabularyPage>
       dueWords = dueWords.sublist(0, reviewLimit);
     }
 
-    if (mounted) {
-      await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => ReviewPage(
-            words: dueWords,
-            bookId: _currentBook!.id!,
-            reviewType: ReviewType.review,
-          ),
-        ),
-      );
-      // 返回后总是刷新数据
-      _loadData();
+    if (!mounted) return;
+
+    // 开启「快速拼写复习」时，直接进入拼写模式
+    if (_quickSpellingReview) {
+      await _startQuickSpelling(dueWords);
+      return;
     }
+
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ReviewPage(
+          words: dueWords,
+          bookId: _currentBook!.id!,
+          reviewType: ReviewType.review,
+        ),
+      ),
+    );
+    // 返回后总是刷新数据
+    _loadData();
+  }
+
+  /// 快速拼写复习：直接对待复习单词进行拼写，并把结果写入记忆复习计划。
+  Future<void> _startQuickSpelling(List<String> dueWords) async {
+    // 批量加载释义并提取中文释义，跳过无释义的单词
+    final entries = await loadEntries(words: dueWords);
+    final spellingEntries = <String, String>{};
+    for (int i = 0; i < dueWords.length; i++) {
+      final meaning = extractFirstMeaning(entries[i]?.translation);
+      if (meaning.isNotEmpty) {
+        spellingEntries[dueWords[i]] = meaning;
+      }
+    }
+
+    if (!mounted) return;
+
+    if (spellingEntries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前待复习单词无可用释义，无法快速拼写')),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            SpellingPage(entries: spellingEntries, recordResults: true),
+      ),
+    );
+    // 返回后总是刷新数据（拼写结果已写入复习计划）
+    _loadData();
   }
 
   /// 弹出词书选择对话框，返回选中的待复习单词列表；取消则返回 null。
