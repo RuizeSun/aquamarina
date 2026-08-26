@@ -8,6 +8,7 @@ import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/ai_service.dart';
 import '../services/study_timer_service.dart';
+import '../widgets/sentence_note_bar.dart';
 
 /// 练习阶段
 enum _PracticePhase {
@@ -504,7 +505,12 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
                               ],
                             ),
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: SentenceNoteBar(sentence: sentence),
+                          ),
+                          const SizedBox(height: 12),
 
                           // 入门版 - 词块选择
                           if (widget.practiceMode == PracticeMode.beginner)
@@ -757,6 +763,11 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
                               style: theme.textTheme.bodyLarge?.copyWith(
                                 fontWeight: FontWeight.w500,
                               ),
+                            ),
+                            const SizedBox(height: 4),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: SentenceNoteBar(sentence: sentence),
                             ),
                           ],
                         ),

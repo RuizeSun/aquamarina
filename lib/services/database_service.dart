@@ -43,7 +43,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 5,
+      version: 6,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -152,6 +152,20 @@ class DatabaseService {
           )
         ''');
 
+        // ── 句子收藏与笔记相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS sentence_notes (
+            sentence_id TEXT PRIMARY KEY,
+            set_id TEXT,
+            english TEXT NOT NULL,
+            chinese TEXT NOT NULL,
+            note TEXT,
+            is_favorited INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''');
+
         // 索引
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_book_entries_book_id ON word_book_entries(book_id)',
@@ -252,6 +266,21 @@ class DatabaseService {
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_vocab_test_history_date ON vocab_test_history(date)',
           );
+        }
+        // 5 → 6：新增 sentence_notes 表（句子收藏与笔记）
+        if (oldVersion < 6) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS sentence_notes (
+              sentence_id TEXT PRIMARY KEY,
+              set_id TEXT,
+              english TEXT NOT NULL,
+              chinese TEXT NOT NULL,
+              note TEXT,
+              is_favorited INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT,
+              updated_at TEXT
+            )
+          ''');
         }
       },
     );

@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
+import '../widgets/sentence_note_bar.dart';
 
 class SentenceSetEditPage extends StatefulWidget {
   final SentenceSet? existingSet;
@@ -279,6 +280,7 @@ class _SentenceSetEditPageState extends State<SentenceSetEditPage> {
                                 ),
                               ),
                             ),
+                            SentenceNoteBar(sentence: s),
                             IconButton(
                               icon: Icon(
                                 Icons.remove_circle_outline,

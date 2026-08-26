@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
-import '../models/word_note.dart';
 import '../services/dictionary_service.dart';
+import '../services/sentence_note_service.dart';
 import '../services/word_note_service.dart';
+import 'saved_filter_bar.dart';
+import 'saved_models.dart';
+import 'sentence_detail_sheet.dart';
 import 'word_detail_page.dart';
 
-/// 我的笔记页：查看所有做过笔记的单词
+/// 我的笔记页：查看所有做过笔记的单词与句子，支持筛选与排序
 class NotesPage extends StatefulWidget {
   const NotesPage({super.key});
 
@@ -15,10 +18,11 @@ class NotesPage extends StatefulWidget {
 
 class _NotesPageState extends State<NotesPage> {
   final _searchController = TextEditingController();
-  List<WordNote> _notes = [];
-  Map<String, WordEntry> _entryCache = {};
+  List<SavedEntry> _entries = [];
   bool _isLoading = true;
   String _query = '';
+  SavedType? _filterType;
+  SavedSort _sort = SavedSort.time;
 
   @override
   void initState() {
@@ -35,22 +39,40 @@ class _NotesPageState extends State<NotesPage> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
-    final notes = _query.trim().isEmpty
+    final wordNotes = _query.trim().isEmpty
         ? await WordNoteService.getNotes()
         : await WordNoteService.searchNotes(_query);
+    final sentenceNotes = _query.trim().isEmpty
+        ? await SentenceNoteService.getNotes()
+        : await SentenceNoteService.searchNotes(_query);
 
-    // 批量查询词典释义
-    final words = notes.map((n) => n.word).toList();
+    final words = wordNotes.map((n) => n.word).toList();
     final entries = words.isEmpty
         ? <String, WordEntry>{}
         : await DictionaryService.searchEnExactBatch(words);
 
+    final merged = <SavedEntry>[
+      for (final w in wordNotes)
+        SavedEntry.fromWord(
+          w,
+          subtitle: _cleanTranslation(entries[w.word.toLowerCase()]?.translation),
+        ),
+      for (final s in sentenceNotes) SavedEntry.fromSentence(s),
+    ];
+
+    final filtered = filterSavedEntries(merged, _filterType);
+    final sorted = sortSavedEntries(filtered, _sort);
+
     if (!mounted) return;
     setState(() {
-      _notes = notes;
-      _entryCache = entries;
+      _entries = sorted;
       _isLoading = false;
     });
+  }
+
+  String? _cleanTranslation(String? translation) {
+    if (translation == null || translation.isEmpty) return null;
+    return translation.replaceAll('\\n', ' ');
   }
 
   void _onSearchChanged(String value) {
@@ -58,26 +80,43 @@ class _NotesPageState extends State<NotesPage> {
     _loadData();
   }
 
-  Future<void> _openWordDetail(WordNote note) async {
-    final result = await DictionaryService.searchAllExact(note.word);
-    if (!mounted) return;
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => WordDetailPage(result: result, word: note.word),
-      ),
-    );
-    // 可能从详情页修改/删除了笔记，返回后刷新列表
-    await _loadData();
+  void _onFilterChanged(SavedType? type) {
+    setState(() => _filterType = type);
+    _loadData();
   }
 
-  /// 删除笔记
-  Future<void> _deleteNote(WordNote note) async {
+  void _onSortChanged(SavedSort sort) {
+    setState(() => _sort = sort);
+    _loadData();
+  }
+
+  Future<void> _openEntry(SavedEntry entry) async {
+    if (entry.type == SavedType.word) {
+      final wordNote = entry.wordNote!;
+      final result = await DictionaryService.searchAllExact(wordNote.word);
+      if (!mounted) return;
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) =>
+              WordDetailPage(result: result, word: wordNote.word),
+        ),
+      );
+      await _loadData();
+    } else {
+      await showSentenceDetailSheet(context, entry.sentenceNote!,
+          onChanged: _loadData);
+    }
+  }
+
+  /// 删除笔记（单词或句子）
+  Future<void> _deleteNote(SavedEntry entry) async {
     if (!mounted) return;
+    final label = entry.type == SavedType.word ? '「${entry.title}」' : '该句';
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除笔记'),
-        content: Text('确定要删除「${note.word}」的笔记吗？'),
+        content: Text('确定要删除$label的笔记吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -95,21 +134,26 @@ class _NotesPageState extends State<NotesPage> {
     );
     if (confirm != true) return;
 
-    // 保存空笔记即删除笔记（若该词仅收藏无笔记，会保留收藏标记）
-    await WordNoteService.saveNote(note.word, '');
+    if (entry.type == SavedType.word) {
+      await WordNoteService.saveNote(entry.title, '');
+    } else {
+      await SentenceNoteService.saveNote(
+        SentenceNoteService.toSentence(entry.sentenceNote!),
+        '',
+      );
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text('已删除「${note.word}」的笔记'),
+          content: Text('已删除笔记'),
           duration: const Duration(seconds: 1),
           behavior: SnackBarBehavior.floating,
         ),
       );
     await _loadData();
   }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -120,12 +164,12 @@ class _NotesPageState extends State<NotesPage> {
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
             child: SizedBox(
               width: double.infinity,
               child: SearchBar(
                 controller: _searchController,
-                hintText: '搜索笔记单词或内容…',
+                hintText: '搜索笔记的单词或句子…',
                 leading: const Icon(Icons.search),
                 trailing: [
                   if (_searchController.text.isNotEmpty)
@@ -141,12 +185,21 @@ class _NotesPageState extends State<NotesPage> {
               ),
             ),
           ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: SavedFilterBar(
+              filterType: _filterType,
+              sort: _sort,
+              onFilterChanged: _onFilterChanged,
+              onSortChanged: _onSortChanged,
+            ),
+          ),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _notes.isEmpty
+                : _entries.isEmpty
                 ? _buildEmptyState(theme, colorScheme)
-                : _buildNoteList(),
+                : _buildNotesList(),
           ),
         ],
       ),
@@ -166,14 +219,16 @@ class _NotesPageState extends State<NotesPage> {
           ),
           const SizedBox(height: 16),
           Text(
-            isSearching ? '未找到匹配的笔记' : '还没有单词笔记',
+            isSearching ? '未找到匹配的笔记' : '还没有笔记',
             style: theme.textTheme.titleMedium?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 8),
           Text(
-            isSearching ? '换个关键词试试吧' : '去词典查词，在单词详情页添加笔记',
+            isSearching
+                ? '换个关键词试试吧'
+                : '去词典给单词记笔记，或在句型练习中给句子记笔记',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
@@ -183,22 +238,20 @@ class _NotesPageState extends State<NotesPage> {
     );
   }
 
-  Widget _buildNoteList() {
+  Widget _buildNotesList() {
     return RefreshIndicator(
       onRefresh: _loadData,
       child: ListView.separated(
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.symmetric(vertical: 8),
-        itemCount: _notes.length,
+        itemCount: _entries.length,
         separatorBuilder: (_, _) => const SizedBox(height: 8),
         itemBuilder: (context, index) {
-          final note = _notes[index];
-          final entry = _entryCache[note.word.toLowerCase()];
+          final entry = _entries[index];
           return _NoteCard(
-            note: note,
             entry: entry,
-            onTap: () => _openWordDetail(note),
-            onDelete: () => _deleteNote(note),
+            onTap: () => _openEntry(entry),
+            onDelete: () => _deleteNote(entry),
           );
         },
       ),
@@ -206,15 +259,14 @@ class _NotesPageState extends State<NotesPage> {
   }
 }
 
-/// 笔记卡片
+
+/// 笔记卡片（单词或句子）
 class _NoteCard extends StatelessWidget {
-  final WordNote note;
-  final WordEntry? entry;
+  final SavedEntry entry;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
   const _NoteCard({
-    required this.note,
     required this.entry,
     required this.onTap,
     required this.onDelete,
@@ -224,7 +276,8 @@ class _NoteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final translation = entry?.translation;
+    final isWord = entry.type == SavedType.word;
+    final subtitle = entry.subtitle;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -238,17 +291,24 @@ class _NoteCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.edit_note, size: 18, color: colorScheme.primary),
+                  Icon(
+                    isWord ? Icons.edit_note : Icons.format_quote,
+                    size: 18,
+                    color: colorScheme.primary,
+                  ),
                   const SizedBox(width: 8),
-                  Text(
-                    note.word,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: colorScheme.primary,
+                  Expanded(
+                    child: Text(
+                      entry.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: colorScheme.primary,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  const Spacer(),
-                  if (note.isFavorited) ...[
+                  if (entry.isFavorited) ...[
                     Icon(
                       Icons.star_rounded,
                       size: 16,
@@ -268,11 +328,11 @@ class _NoteCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (translation != null && translation.isNotEmpty)
+              if (subtitle != null && subtitle.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    translation.replaceAll('\\n', ' '),
+                    subtitle,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),
@@ -283,7 +343,7 @@ class _NoteCard extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
-                  note.note ?? '',
+                  entry.note ?? '',
                   style: theme.textTheme.bodyMedium,
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
