@@ -339,7 +339,6 @@ class _WordBookListPageState extends State<WordBookListPage> {
             Navigator.of(context).pop();
           }
         },
-        onLongPress: () => _deleteBook(book),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
