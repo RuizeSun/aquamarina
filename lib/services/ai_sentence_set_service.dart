@@ -69,11 +69,12 @@ class SentenceSetService extends ChangeNotifier {
   }
 
   // ===== 句式集 CRUD =====
-  Future<void> addSet(SentenceSet set) async {
+  Future<SentenceSet> addSet(SentenceSet set) async {
     final s = set.copyWith(id: const Uuid().v4(), createdAt: DateTime.now());
     _sets.add(s);
     await _saveSets();
     notifyListeners();
+    return s;
   }
 
   Future<void> updateSet(SentenceSet set) async {
@@ -176,6 +177,108 @@ class SentenceSetService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ===== 句式集导出 / 导入 =====
+
+  /// 导出单个句式集为 JSON 字符串
+  ///
+  /// 包含句式集元数据（名称/描述）与全部句子（英文原句/中文翻译/多余词）。
+  /// 可通过 [importSetFromJson] 重新导入。
+  Future<String> exportSetToJson(String setId) async {
+    final set = getSet(setId);
+    if (set == null) {
+      throw SentenceSetException('句式集不存在或已被删除');
+    }
+    final sentences = await getSentences(setId);
+
+    return jsonEncode({
+      'app': 'aquamarina',
+      'type': 'sentence_set',
+      'version': 1,
+      'created_at': DateTime.now().toIso8601String(),
+      'set': {
+        'name': set.name,
+        'description': set.description,
+        'sentences': sentences.map((s) => {
+          'english': s.english,
+          'chinese': s.chinese,
+          'extra_words': s.extraWords,
+        }).toList(),
+      },
+    });
+  }
+
+  /// 从 JSON 字符串导入单个句式集
+  ///
+  /// 返回新创建的句式集 ID。名称冲突时自动添加序号（类似 Windows 重命名）。
+  /// JSON 格式不合法或不是句式集文件时抛出 [SentenceSetException]。
+  Future<String> importSetFromJson(String jsonStr) async {
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(jsonStr);
+    } catch (_) {
+      throw const SentenceSetException('文件不是有效的 JSON 格式');
+    }
+
+    if (decoded is! Map<String, dynamic>) {
+      throw const SentenceSetException('句式集文件格式错误：顶层不是对象');
+    }
+    if (decoded['app'] != 'aquamarina' || decoded['type'] != 'sentence_set') {
+      throw const SentenceSetException('不是有效的 Aquamarina 句式集文件');
+    }
+    final setData = decoded['set'];
+    if (setData is! Map<String, dynamic>) {
+      throw const SentenceSetException('句式集文件缺少 set 数据');
+    }
+
+    final name = setData['name'] as String?;
+    if (name == null || name.trim().isEmpty) {
+      throw const SentenceSetException('句式集文件缺少名称');
+    }
+
+    // 名称冲突时自动加序号
+    final uniqueName = generateUniqueSetName(name.trim());
+    final newSet = await addSet(
+      SentenceSet(
+        name: uniqueName,
+        description: (setData['description'] as String?)?.trim(),
+      ),
+    );
+    final setId = newSet.id!;
+
+    final sentencesRaw = setData['sentences'];
+    if (sentencesRaw is List) {
+      final sentences = <Sentence>[];
+      for (final raw in sentencesRaw) {
+        if (raw is Map<String, dynamic>) {
+          final english = (raw['english'] as String?)?.trim();
+          final chinese = (raw['chinese'] as String?)?.trim();
+          if (english != null &&
+              english.isNotEmpty &&
+              chinese != null &&
+              chinese.isNotEmpty) {
+            final extraRaw = raw['extra_words'];
+            final extraWords = extraRaw is List
+                ? extraRaw.whereType<String>().toList()
+                : <String>[];
+            sentences.add(
+              Sentence(
+                setId: setId,
+                english: english,
+                chinese: chinese,
+                extraWords: extraWords,
+              ),
+            );
+          }
+        }
+      }
+      if (sentences.isNotEmpty) {
+        await addSentences(setId, sentences);
+      }
+    }
+
+    return setId;
+  }
+
   // ===== 内部方法 =====
   Future<void> _saveSets() async {
     final prefs = await SharedPreferences.getInstance();
@@ -213,4 +316,13 @@ class SentenceSetService extends ChangeNotifier {
                 .toList(),
     );
   }
+}
+
+/// 句式集操作异常
+class SentenceSetException implements Exception {
+  final String message;
+  const SentenceSetException(this.message);
+
+  @override
+  String toString() => message;
 }
