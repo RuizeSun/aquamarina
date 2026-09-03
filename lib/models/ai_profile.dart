@@ -69,6 +69,143 @@ AiProfile createProfileFromTemplate(AiProfileTemplate template) {
   }
 }
 
+/// 计费方式：按 token（缓存命中/未命中/输出三档单价）或按请求（固定价）
+enum AiPricingMode {
+  /// 按 token 计费
+  perToken,
+
+  /// 按请求固定价计费
+  perRequest,
+}
+
+/// 单价单位：每 token / 每 1K / 每 1M
+enum AiPriceUnit {
+  perToken('每 token', 1),
+  perThousand('每 1K tokens', 1000),
+  perMillion('每 1M tokens', 1000000);
+
+  final String label;
+  final int divisor;
+
+  const AiPriceUnit(this.label, this.divisor);
+
+  /// 从序列化名解析，未知时回退到「每 1M tokens」
+  static AiPriceUnit fromName(String? name) => values.firstWhere(
+    (e) => e.name == name,
+    orElse: () => AiPriceUnit.perMillion,
+  );
+}
+
+/// AI 调用的计费与货币设置（仅 OpenAI 兼容 / DeepSeek 类型可用）
+///
+/// 挂载到 [AiProfile.pricing]。请求发生时价格会被快照进用量记录，
+/// 因此后续修改价格不影响历史统计金额。
+class AiUsagePricing {
+  final AiPricingMode mode;
+
+  /// 单价单位（按 token 计费时使用）
+  final AiPriceUnit unit;
+
+  /// 缓存命中输入单价（按 [unit] 计价）
+  final double? cacheHitPrice;
+
+  /// 未命中缓存输入单价（按 [unit] 计价）
+  final double? cacheMissPrice;
+
+  /// 输出单价（按 [unit] 计价）
+  final double? outputPrice;
+
+  /// 每请求固定价（按请求计费时使用）
+  final double? requestPrice;
+
+  /// 币种符号，如 $ ¥ €
+  final String currencySymbol;
+
+  /// 金额小数位数（0-4）
+  final int currencyDecimals;
+
+  /// 是否启用千位分隔符
+  final bool currencyGrouping;
+
+  const AiUsagePricing({
+    this.mode = AiPricingMode.perToken,
+    this.unit = AiPriceUnit.perMillion,
+    this.cacheHitPrice,
+    this.cacheMissPrice,
+    this.outputPrice,
+    this.requestPrice,
+    this.currencySymbol = '¥',
+    this.currencyDecimals = 2,
+    this.currencyGrouping = true,
+  });
+
+  bool get isPerRequest => mode == AiPricingMode.perRequest;
+
+  AiUsagePricing copyWith({
+    AiPricingMode? mode,
+    AiPriceUnit? unit,
+    double? cacheHitPrice,
+    double? cacheMissPrice,
+    double? outputPrice,
+    double? requestPrice,
+    String? currencySymbol,
+    int? currencyDecimals,
+    bool? currencyGrouping,
+    bool clearCacheHitPrice = false,
+    bool clearCacheMissPrice = false,
+    bool clearOutputPrice = false,
+    bool clearRequestPrice = false,
+  }) {
+    return AiUsagePricing(
+      mode: mode ?? this.mode,
+      unit: unit ?? this.unit,
+      cacheHitPrice: clearCacheHitPrice
+          ? null
+          : (cacheHitPrice ?? this.cacheHitPrice),
+      cacheMissPrice: clearCacheMissPrice
+          ? null
+          : (cacheMissPrice ?? this.cacheMissPrice),
+      outputPrice: clearOutputPrice
+          ? null
+          : (outputPrice ?? this.outputPrice),
+      requestPrice: clearRequestPrice
+          ? null
+          : (requestPrice ?? this.requestPrice),
+      currencySymbol: currencySymbol ?? this.currencySymbol,
+      currencyDecimals: currencyDecimals ?? this.currencyDecimals,
+      currencyGrouping: currencyGrouping ?? this.currencyGrouping,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'mode': mode.name,
+    'unit': unit.name,
+    if (cacheHitPrice != null) 'cache_hit_price': cacheHitPrice,
+    if (cacheMissPrice != null) 'cache_miss_price': cacheMissPrice,
+    if (outputPrice != null) 'output_price': outputPrice,
+    if (requestPrice != null) 'request_price': requestPrice,
+    'currency_symbol': currencySymbol,
+    'currency_decimals': currencyDecimals,
+    'currency_grouping': currencyGrouping,
+  };
+
+  factory AiUsagePricing.fromJson(Map<String, dynamic> json) {
+    return AiUsagePricing(
+      mode: json['mode'] == AiPricingMode.perRequest.name
+          ? AiPricingMode.perRequest
+          : AiPricingMode.perToken,
+      unit: AiPriceUnit.fromName(json['unit'] as String?),
+      cacheHitPrice: (json['cache_hit_price'] as num?)?.toDouble(),
+      cacheMissPrice: (json['cache_miss_price'] as num?)?.toDouble(),
+      outputPrice: (json['output_price'] as num?)?.toDouble(),
+      requestPrice: (json['request_price'] as num?)?.toDouble(),
+      currencySymbol: json['currency_symbol'] as String? ?? '¥',
+      currencyDecimals: json['currency_decimals'] as int? ?? 2,
+      currencyGrouping: json['currency_grouping'] as bool? ?? true,
+    );
+  }
+}
+
 /// AI 配置文件
 class AiProfile {
   final String id;
@@ -94,6 +231,9 @@ class AiProfile {
   /// DeepSeek 余额停止使用阈值（元），为 null 时不限制
   final double? balanceThreshold;
 
+  /// AI 调用的计费与货币设置（仅 OpenAI 兼容 / DeepSeek 可用），为 null 时不启用计费
+  final AiUsagePricing? pricing;
+
   const AiProfile({
     required this.id,
     required this.name,
@@ -107,6 +247,7 @@ class AiProfile {
     this.reasoningEffort,
     this.isDefault = false,
     this.balanceThreshold,
+    this.pricing,
   });
 
   AiProfile copyWith({
@@ -122,8 +263,10 @@ class AiProfile {
     String? reasoningEffort,
     bool? isDefault,
     double? balanceThreshold,
+    AiUsagePricing? pricing,
     bool clearApiKey = false,
     bool clearBalanceThreshold = false,
+    bool clearPricing = false,
   }) {
     return AiProfile(
       id: id ?? this.id,
@@ -140,6 +283,7 @@ class AiProfile {
       balanceThreshold: clearBalanceThreshold
           ? null
           : (balanceThreshold ?? this.balanceThreshold),
+      pricing: clearPricing ? null : (pricing ?? this.pricing),
     );
   }
 
@@ -165,6 +309,7 @@ class AiProfile {
     if (reasoningEffort != null) 'reasoning_effort': reasoningEffort,
     'is_default': isDefault,
     if (balanceThreshold != null) 'balance_threshold': balanceThreshold,
+    if (pricing != null) 'pricing': pricing!.toJson(),
   };
 
   /// 从 JSON 反序列化
@@ -185,6 +330,11 @@ class AiProfile {
       reasoningEffort: json['reasoning_effort'] as String?,
       isDefault: json['is_default'] as bool? ?? false,
       balanceThreshold: (json['balance_threshold'] as num?)?.toDouble(),
+      pricing: json['pricing'] is Map<String, dynamic>
+          ? AiUsagePricing.fromJson(
+              json['pricing'] as Map<String, dynamic>,
+            )
+          : null,
     );
   }
 }

@@ -3,6 +3,7 @@ import 'sections/about_section.dart';
 import 'sections/appearance_section.dart';
 import 'sections/ai_profile_section.dart';
 import 'sections/ai_sentence_section.dart';
+import 'sections/ai_usage_stats_section.dart';
 import 'sections/logging_section.dart';
 import 'sections/data_management_section.dart';
 import 'sections/tts_section.dart';
@@ -102,6 +103,20 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             const SettingsSectionHeader(title: 'AI 句子练习设置'),
             const AiSentenceSettingsSection(),
+            const SizedBox(height: 8),
+          ],
+        );
+      },
+    ),
+    SettingsCategory(
+      title: 'AI 用量统计',
+      icon: Icons.query_stats,
+      builder: () {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SettingsSectionHeader(title: 'AI 用量统计'),
+            const AiUsageStatsSection(),
             const SizedBox(height: 8),
           ],
         );

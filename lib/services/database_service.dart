@@ -43,7 +43,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 6,
+      version: 7,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -216,6 +216,36 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_vocab_test_history_date ON vocab_test_history(date)',
         );
+        // ── AI 调用用量统计相关 ──
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS ai_usage_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            profile_id TEXT,
+            profile_name TEXT,
+            profile_type TEXT,
+            model TEXT,
+            request_mode TEXT NOT NULL DEFAULT 'chat',
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            pricing_mode TEXT,
+            price_unit TEXT,
+            cache_hit_price REAL,
+            cache_miss_price REAL,
+            output_price REAL,
+            request_price REAL,
+            currency_symbol TEXT,
+            currency_decimals INTEGER NOT NULL DEFAULT 2,
+            currency_grouping INTEGER NOT NULL DEFAULT 1,
+            cost REAL
+          )
+        ''');
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage_records(created_at)',
+        );
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -281,6 +311,38 @@ class DatabaseService {
               updated_at TEXT
             )
           ''');
+        }
+        // 6 → 7：新增 ai_usage_records 表（AI 调用用量与计费统计）
+        if (oldVersion < 7) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS ai_usage_records (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              created_at TEXT NOT NULL,
+              profile_id TEXT,
+              profile_name TEXT,
+              profile_type TEXT,
+              model TEXT,
+              request_mode TEXT NOT NULL DEFAULT 'chat',
+              prompt_tokens INTEGER NOT NULL DEFAULT 0,
+              cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+              cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+              completion_tokens INTEGER NOT NULL DEFAULT 0,
+              total_tokens INTEGER NOT NULL DEFAULT 0,
+              pricing_mode TEXT,
+              price_unit TEXT,
+              cache_hit_price REAL,
+              cache_miss_price REAL,
+              output_price REAL,
+              request_price REAL,
+              currency_symbol TEXT,
+              currency_decimals INTEGER NOT NULL DEFAULT 2,
+              currency_grouping INTEGER NOT NULL DEFAULT 1,
+              cost REAL
+            )
+          ''');
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage_records(created_at)',
+          );
         }
       },
     );

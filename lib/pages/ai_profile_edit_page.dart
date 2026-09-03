@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/ai_profile.dart';
 import '../services/ai_profile_service.dart';
+import '../services/ai_usage_service.dart';
 
 /// AI 配置文件编辑页
 class AiProfileEditPage extends StatefulWidget {
@@ -30,6 +31,18 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
   late TextEditingController _maxTokensController;
   late TextEditingController _temperatureController;
   late TextEditingController _balanceThresholdController;
+
+  // 计费与货币设置
+  late bool _pricingEnabled;
+  late AiPricingMode _pricingMode;
+  late AiPriceUnit _priceUnit;
+  late TextEditingController _cacheHitPriceController;
+  late TextEditingController _cacheMissPriceController;
+  late TextEditingController _outputPriceController;
+  late TextEditingController _requestPriceController;
+  late TextEditingController _currencySymbolController;
+  int _currencyDecimals = 2;
+  bool _currencyGrouping = true;
 
   late AiProfileType _type;
   late bool _enableThinking;
@@ -67,6 +80,31 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
       text: p?.balanceThreshold != null ? '${p!.balanceThreshold}' : '',
     );
 
+    // 计费与货币设置
+    final pricing = p?.pricing;
+    _pricingEnabled = pricing != null;
+    _pricingMode = pricing?.mode ?? AiPricingMode.perToken;
+    _priceUnit = pricing?.unit ?? AiPriceUnit.perMillion;
+    _cacheHitPriceController = TextEditingController(
+      text: pricing?.cacheHitPrice != null ? '${pricing!.cacheHitPrice}' : '',
+    );
+    _cacheMissPriceController = TextEditingController(
+      text: pricing?.cacheMissPrice != null
+          ? '${pricing!.cacheMissPrice}'
+          : '',
+    );
+    _outputPriceController = TextEditingController(
+      text: pricing?.outputPrice != null ? '${pricing!.outputPrice}' : '',
+    );
+    _requestPriceController = TextEditingController(
+      text: pricing?.requestPrice != null ? '${pricing!.requestPrice}' : '',
+    );
+    _currencySymbolController = TextEditingController(
+      text: pricing?.currencySymbol ?? '¥',
+    );
+    _currencyDecimals = pricing?.currencyDecimals ?? 2;
+    _currencyGrouping = pricing?.currencyGrouping ?? true;
+
     _type = p?.type ?? AiProfileType.openai;
     _enableThinking = p?.enableThinking ?? false;
     _reasoningEffort = p?.reasoningEffort;
@@ -100,6 +138,11 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     _maxTokensController.dispose();
     _temperatureController.dispose();
     _balanceThresholdController.dispose();
+    _cacheHitPriceController.dispose();
+    _cacheMissPriceController.dispose();
+    _outputPriceController.dispose();
+    _requestPriceController.dispose();
+    _currencySymbolController.dispose();
     super.dispose();
   }
 
@@ -281,6 +324,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
       reasoningEffort: _reasoningEffort,
       isDefault: widget.profile?.isDefault ?? false,
       balanceThreshold: _balanceThreshold,
+      pricing: (_type != AiProfileType.aquamarina && _pricingEnabled)
+          ? _buildPricing()
+          : null,
     );
 
     try {
@@ -303,6 +349,27 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  /// 从输入框组装计费配置（按请求时忽略按 token 单价）。
+  AiUsagePricing _buildPricing() {
+    double? parse(TextEditingController c) {
+      final t = c.text.trim();
+      return t.isEmpty ? null : double.tryParse(t);
+    }
+
+    final symbol = _currencySymbolController.text.trim();
+    return AiUsagePricing(
+      mode: _pricingMode,
+      unit: _priceUnit,
+      cacheHitPrice: parse(_cacheHitPriceController),
+      cacheMissPrice: parse(_cacheMissPriceController),
+      outputPrice: parse(_outputPriceController),
+      requestPrice: parse(_requestPriceController),
+      currencySymbol: symbol.isEmpty ? '¥' : symbol,
+      currencyDecimals: _currencyDecimals,
+      currencyGrouping: _currencyGrouping,
+    );
   }
 
   /// 构建模型输入字段（下拉选择或文本输入）
@@ -346,6 +413,167 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
         prefixIcon: const Icon(Icons.smart_toy),
       ),
       validator: (v) => (v == null || v.trim().isEmpty) ? '请输入模型名称' : null,
+    );
+  }
+
+  /// 计费与货币设置的分区 UI（仅非 Aquamarina 显示）
+  Widget _buildPricingSection() {
+    final symbol =
+        _currencySymbolController.text.trim().isEmpty ? '¥' : _currencySymbolController.text.trim();
+
+    Widget priceField({
+      required String label,
+      required String hint,
+      required TextEditingController controller,
+    }) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: TextFormField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: hint,
+            border: const OutlineInputBorder(),
+            prefixText: '$symbol ',
+            isDense: true,
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('启用计费统计'),
+          subtitle: const Text('开启后按请求时的用量与价格估算费用'),
+          secondary: const Icon(Icons.receipt_long_outlined),
+          value: _pricingEnabled,
+          onChanged: (v) => setState(() => _pricingEnabled = v),
+        ),
+        if (_pricingEnabled) ...[
+          const Divider(height: 24),
+          Text('计费方式', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          SegmentedButton<AiPricingMode>(
+            segments: const [
+              ButtonSegment(
+                value: AiPricingMode.perToken,
+                label: Text('按 token'),
+                icon: Icon(Icons.data_usage),
+              ),
+              ButtonSegment(
+                value: AiPricingMode.perRequest,
+                label: Text('按请求'),
+                icon: Icon(Icons.mail_outline),
+              ),
+            ],
+            selected: {_pricingMode},
+            onSelectionChanged: (s) =>
+                setState(() => _pricingMode = s.first),
+            showSelectedIcon: false,
+          ),
+          const SizedBox(height: 16),
+          if (_pricingMode == AiPricingMode.perRequest)
+            priceField(
+              label: '每请求价格',
+              hint: '例如 0.05',
+              controller: _requestPriceController,
+            )
+          else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Text('单价（每单位）',
+                      style: Theme.of(context).textTheme.labelLarge),
+                ),
+                DropdownButton<AiPriceUnit>(
+                  value: _priceUnit,
+                  underline: const SizedBox.shrink(),
+                  items: AiPriceUnit.values
+                      .map((u) =>
+                          DropdownMenuItem(value: u, child: Text(u.label)))
+                      .toList(),
+                  onChanged: (u) =>
+                      setState(() => _priceUnit = u ?? _priceUnit),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            priceField(
+              label: '缓存命中输入单价',
+              hint: '如 DeepSeek 2.0',
+              controller: _cacheHitPriceController,
+            ),
+            priceField(
+              label: '未命中缓存输入单价',
+              hint: '如 DeepSeek 8.0',
+              controller: _cacheMissPriceController,
+            ),
+            priceField(
+              label: '输出单价',
+              hint: '例如 16.0',
+              controller: _outputPriceController,
+            ),
+          ],
+          const Divider(height: 8),
+          Text('币种与格式', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 8),
+          TextFormField(
+            controller: _currencySymbolController,
+            maxLength: 6,
+            decoration: const InputDecoration(
+              labelText: '币种符号',
+              hintText: r'$ ¥ € 等',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.attach_money),
+              isDense: true,
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text('小数位数', style: Theme.of(context).textTheme.bodyMedium),
+              ),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 0, label: Text('0')),
+                  ButtonSegment(value: 2, label: Text('2')),
+                  ButtonSegment(value: 4, label: Text('4')),
+                ],
+                selected: {_currencyDecimals},
+                onSelectionChanged: (s) =>
+                    setState(() => _currencyDecimals = s.first),
+                showSelectedIcon: false,
+                style: const ButtonStyle(visualDensity: VisualDensity.compact),
+              ),
+            ],
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('千位分隔符'),
+            value: _currencyGrouping,
+            onChanged: (v) => setState(() => _currencyGrouping = v),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.4),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              '金额示例：${AiUsageService.formatMoney(1234567.5, symbol: symbol, decimals: _currencyDecimals, grouping: _currencyGrouping)}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -704,6 +932,13 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                 },
               ),
               const SizedBox(height: 8),
+            ],
+
+            // ---- 计费与货币设置（Aquamarina 官方无 usage，不参与计费） ----
+            if (!isAquamarina) ...[
+              const Divider(),
+              _SectionHeader(title: '计费与货币设置'),
+              _buildPricingSection(),
             ],
           ],
         ),
