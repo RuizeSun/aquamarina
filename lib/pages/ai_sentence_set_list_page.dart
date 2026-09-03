@@ -173,7 +173,10 @@ class _SentenceSetListPageState extends State<SentenceSetListPage> {
 
     setState(() => _isImporting = true);
     try {
-      final jsonStr = await file.readAsString();
+      // 注意：不要用 file.readAsString() —— 移动端（Android）选中的 XFile 是
+      // “字节版”，其 readAsString 会把每个字节当码位逐字节解码，导致中文乱码。
+      // 改为读取原始字节并显式按 UTF-8 解码。
+      final jsonStr = decodeSentenceSetFileBytes(await file.readAsBytes());
       final setId = await _setService.importSetFromJson(jsonStr);
       final set = _setService.getSet(setId);
       if (!mounted) return;

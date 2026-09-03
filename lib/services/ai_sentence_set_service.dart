@@ -318,6 +318,32 @@ class SentenceSetService extends ChangeNotifier {
   }
 }
 
+/// 将句式集文件的原始字节解码为 UTF-8 文本。
+///
+/// 说明：移动端（尤其 Android）通过 file_selector 选中的文件是“字节版”
+/// XFile，其 [XFile.readAsString] 会把每个字节当成一个码位逐字节解码，
+/// 导致 UTF-8/GBK 中文统统变成乱码。因此这里统一改为读取原始字节后按
+/// UTF-8 显式解码，并剥离 UTF-8 BOM。
+///
+/// 若文件不是 UTF-8 编码（如 GBK/ANSI），会抛出带提示的
+/// [SentenceSetException]，而不是静默导入乱码数据。
+String decodeSentenceSetFileBytes(List<int> bytes) {
+  // 剥离 UTF-8 BOM（EF BB BF），避免开头 U+FEFF 导致 JSON 解析失败。
+  if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+    bytes = bytes.sublist(3);
+  }
+
+  try {
+    // 严格解码：非法字节序列会抛 FormatException，绝不产生静默乱码。
+    return utf8.decode(bytes);
+  } on FormatException {
+    throw const SentenceSetException(
+      '句式集文件不是 UTF-8 编码，中文内容无法解析。'
+      '请用支持 UTF-8 的编辑器打开并“另存为 UTF-8”后重新导入。',
+    );
+  }
+}
+
 /// 句式集操作异常
 class SentenceSetException implements Exception {
   final String message;
