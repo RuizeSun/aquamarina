@@ -994,6 +994,29 @@ class LearningService {
     return UserWordRecord.fromMap(maps.first);
   }
 
+  /// 批量查询多个单词的学习记录（一次 IN 查询）。
+  /// 返回 Map，key 为单词（小写），value 为对应记录；无记录的单词对应 null。
+  static Future<Map<String, UserWordRecord?>> getRecordsBatch(
+    List<String> words,
+  ) async {
+    final cleaned = words.map((w) => w.trim().toLowerCase()).toSet().toList();
+    if (cleaned.isEmpty) return {};
+    final db = await DatabaseService.database;
+
+    final placeholders = cleaned.map((_) => '?').join(',');
+    final maps = await db.rawQuery(
+      'SELECT * FROM user_word_records WHERE word IN ($placeholders)',
+      cleaned,
+    );
+
+    final result = <String, UserWordRecord?>{ for (final w in cleaned) w: null };
+    for (final m in maps) {
+      final word = (m['word'] as String).toLowerCase();
+      result[word] = UserWordRecord.fromMap(m);
+    }
+    return result;
+  }
+
   // ─── 词汇测试历史记录 ─────────────────────────
 
   /// 保存一次词汇测试结果到历史记录表

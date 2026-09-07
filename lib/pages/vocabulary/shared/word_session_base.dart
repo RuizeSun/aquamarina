@@ -424,21 +424,24 @@ abstract class WordSessionBaseState<T extends WordSessionPage> extends State<T>
       // 保存失败也继续
     }
 
-    // 逐个查询每个词的最新学习记录，构建总结数据
+    // 批量查询本批词的最新学习记录，构建总结数据（一次 IN 查询替代逐词查询）
     final items = <String, WordSummaryItem>{};
-    for (final word in results.keys) {
-      UserWordRecord? record;
-      try {
-        record = await LearningService.getRecord(word);
-      } catch (e) {
-        record = null;
-      }
+    final wordToIndex = <String, int>{
+      for (int i = 0; i < words.length; i++)
+        words[i].trim().toLowerCase(): i,
+    };
+    Map<String, UserWordRecord?> records;
+    try {
+      records = await LearningService.getRecordsBatch(results.keys.toList());
+    } catch (_) {
+      records = <String, UserWordRecord?>{};
+    }
 
+    for (final word in results.keys) {
+      final record = records[word.trim().toLowerCase()];
       // 找一个包含该词的缓存索引用于显示释义
-      final index = words.indexWhere(
-        (w) => w.trim().toLowerCase() == word.toLowerCase(),
-      );
-      final entry = index >= 0 ? entryCache[index] : null;
+      final index = wordToIndex[word.trim().toLowerCase()];
+      final entry = index != null ? entryCache[index] : null;
       final meaning = extractFirstMeaning(entry?.translation);
 
       items[word] = WordSummaryItem(
