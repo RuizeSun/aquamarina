@@ -59,8 +59,15 @@ class LogService {
   static const String _prefsLevelKey = 'log_min_level';
   static const int _maxEntries = 2000;
 
-  /// 日志缓冲区（环形）
-  final List<LogEntry> _buffer = [];
+  /// 环形日志缓冲区：固定容量 [_maxEntries]，[_start] 指向最旧条目。
+  /// 写满后覆盖最旧条目，避免每次 `removeAt(0)` 带来的 O(n) 数组搬移。
+  final List<LogEntry?> _buffer = List.filled(_maxEntries, null);
+
+  /// 缓冲区中有效条目的数量（0.._maxEntries）。
+  int _len = 0;
+
+  /// 最旧条目所在的数组下标。
+  int _start = 0;
 
   /// 当前最低日志等级
   LogLevel _minLevel = LogLevel.debug;
@@ -74,7 +81,14 @@ class LogService {
   );
 
   /// 获取当前缓冲区中所有日志的副本（按时间正序）
-  List<LogEntry> get entries => List.unmodifiable(_buffer);
+  List<LogEntry> get entries {
+    final out = <LogEntry>[];
+    for (int i = 0; i < _len; i++) {
+      final e = _buffer[(_start + i) % _maxEntries];
+      if (e != null) out.add(e);
+    }
+    return List.unmodifiable(out);
+  }
 
   // ── 初始化 ──────────────────────────────────────────
 
@@ -126,14 +140,17 @@ class LogService {
       message: message,
     );
 
-    // 环形缓冲区
-    if (_buffer.length >= _maxEntries) {
-      _buffer.removeAt(0);
+    // 环形缓冲区写入（写满后覆盖最旧条目）
+    if (_len >= _maxEntries) {
+      _buffer[_start] = entry;
+      _start = (_start + 1) % _maxEntries;
+    } else {
+      _buffer[(_start + _len) % _maxEntries] = entry;
+      _len++;
     }
-    _buffer.add(entry);
 
     // 通知监听者
-    logCount.value = _buffer.length;
+    logCount.value = _len;
 
     // 同时输出到 debugPrint（IDE 控制台可见）
     debugPrint(entry.format());
@@ -143,7 +160,9 @@ class LogService {
 
   /// 清空日志缓冲区
   void clear() {
-    _buffer.clear();
+    _buffer.fillRange(0, _maxEntries, null);
+    _len = 0;
+    _start = 0;
     logCount.value = 0;
     info('LogService', '日志已清空');
   }
@@ -153,10 +172,10 @@ class LogService {
     final sb = StringBuffer();
     sb.writeln('=== Aquamarina 日志导出 ===');
     sb.writeln('导出时间: ${DateTime.now()}');
-    sb.writeln('日志条数: ${_buffer.length}');
+    sb.writeln('日志条数: $_len');
     sb.writeln('最低等级: ${_minLevel.label}');
     sb.writeln('============================\n');
-    for (final entry in _buffer) {
+    for (final entry in entries) {
       sb.writeln(entry.format());
     }
     return sb.toString();
@@ -177,7 +196,7 @@ class LogService {
   ///
   /// 返回 `true` 表示导出成功。
   Future<bool> exportAndShare() async {
-    if (_buffer.isEmpty) return false;
+    if (_len == 0) return false;
 
     final content = _buildLogContent();
     final fileName = _buildLogFileName();
