@@ -43,7 +43,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 7,
+      version: 8,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -175,6 +175,9 @@ class DatabaseService {
         );
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_records_next_review ON user_word_records(next_review_date)',
+        );
+        await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_records_status_review ON user_word_records(is_mastered, next_review_date)',
         );
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_words_scheduled ON wrong_words(scheduled_date)',
@@ -342,6 +345,26 @@ class DatabaseService {
           ''');
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage_records(created_at)',
+          );
+        }
+        // 7 → 8：为既有库补齐学习相关的业务索引（幂等，可安全重复执行）。
+        // 全新安装会走 onCreate 的“索引”块；此处保证从旧版本升级上来的库
+        // 同样具备这些索引，从而让“待复习/复习计划/每日统计”等热查询走索引。
+        if (oldVersion < 8) {
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_book_entries_book_id ON word_book_entries(book_id)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_book_entries_word ON word_book_entries(word)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_records_next_review ON user_word_records(next_review_date)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_records_status_review ON user_word_records(is_mastered, next_review_date)',
+          );
+          await db.execute(
+            'CREATE INDEX IF NOT EXISTS idx_wrong_words_scheduled ON wrong_words(scheduled_date)',
           );
         }
       },
