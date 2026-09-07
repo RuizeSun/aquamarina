@@ -2,30 +2,25 @@ import '../../../models/word_entry.dart';
 import '../../../services/dictionary_service.dart';
 import '../../../services/learning_service.dart';
 
-/// 分批次加载单词释义，每批最多并发 5 个请求。
-/// 返回 Map<int, WordEntry?>，key 为单词在 words 列表中的索引。
+/// 批量加载单词释义，只执行一次 IN 查询。
+/// 返回 Map，key 为单词在 words 列表中的索引，value 为释义；
+/// 未命中词典的单词对应 null。
 Future<Map<int, WordEntry?>> loadEntries({
   required List<String> words,
-  DictionaryService Function()? dictionaryService,
 }) async {
   final cache = <int, WordEntry?>{};
-  for (int i = 0; i < words.length; i += 5) {
-    final end = i + 5 > words.length ? words.length : i + 5;
-    final batch = words.sublist(i, end);
-    final batchFutures = batch.asMap().entries.map((e) async {
-      final entry = await DictionaryService.searchEnExact(e.value);
-      return MapEntry(i + e.key, entry);
-    });
-    final batchResults = await Future.wait(batchFutures);
-    for (final r in batchResults) {
-      cache[r.key] = r.value;
-    }
+  if (words.isEmpty) return cache;
+
+  // 一次 IN 查询批量取出全部释义，替代逐词 N 条独立 SQL
+  final found = await DictionaryService.searchEnExactBatch(words);
+  for (int i = 0; i < words.length; i++) {
+    cache[i] = found[words[i].trim().toLowerCase()];
   }
   return cache;
 }
 
 /// 加载全局干扰项池（从已学单词中随机取 count 个）
-/// 优化：释义分批按需加载，控制并发数 ≤5
+/// 优化：一次性批量查询释义，替代逐词 N 条独立 SQL
 Future<Map<String, String>> loadDistractorPool({
   required List<String> excludeWords,
   int count = 10,
@@ -36,24 +31,14 @@ Future<Map<String, String>> loadDistractorPool({
       excludeWords: excludeWords,
       count: count,
     );
-    // 干扰项释义也分批加载，控制并发
     final distractorKeys = distractors.keys.toList();
-    for (int i = 0; i < distractorKeys.length; i += 5) {
-      final end = i + 5 > distractorKeys.length ? distractorKeys.length : i + 5;
-      final batch = distractorKeys.sublist(i, end);
-      final batchResults = await Future.wait(
-        batch.map((w) async {
-          final entry = await DictionaryService.searchEnExact(w);
-          if (entry?.translation != null && entry!.translation!.isNotEmpty) {
-            return MapEntry(w, entry.translation!);
-          }
-          return MapEntry(w, '');
-        }),
-      );
-      for (final r in batchResults) {
-        if (r.value.isNotEmpty) {
-          pool[r.key] = r.value;
-        }
+    if (distractorKeys.isEmpty) return pool;
+
+    final found = await DictionaryService.searchEnExactBatch(distractorKeys);
+    for (final w in distractorKeys) {
+      final entry = found[w.trim().toLowerCase()];
+      if (entry?.translation != null && entry!.translation!.isNotEmpty) {
+        pool[w] = entry.translation!;
       }
     }
   } catch (_) {
