@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
+import '../../services/dictionary_service.dart';
 import '../../services/word_book_service.dart';
+import '../word_detail_page.dart';
 import 'import_words_dialog.dart';
 
 class WordBookCreatePage extends StatefulWidget {
@@ -17,12 +19,14 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
   final _descriptionController = TextEditingController();
   final _authorController = TextEditingController();
   final _importController = TextEditingController();
+  final _wordSearchController = TextEditingController();
   int _coverColor = 0xFF00BFA5;
   bool _isImporting = false;
 
   // 编辑模式下已存在的词汇列表
   List<String> _existingWords = [];
   bool _loadingWords = false;
+  String _wordSearchQuery = '';
 
   static const _colorOptions = [
     0xFF00BFA5, // 青绿
@@ -36,6 +40,15 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
   ];
 
   bool get _isEditing => widget.existingBook != null;
+
+  /// 根据搜索关键词过滤已存在词汇（大小写不敏感）
+  List<String> get _filteredExistingWords {
+    final query = _wordSearchQuery.trim().toLowerCase();
+    if (query.isEmpty) return _existingWords;
+    return _existingWords
+        .where((w) => w.toLowerCase().contains(query))
+        .toList();
+  }
 
   @override
   void initState() {
@@ -68,6 +81,7 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
     _descriptionController.dispose();
     _authorController.dispose();
     _importController.dispose();
+    _wordSearchController.dispose();
     super.dispose();
   }
 
@@ -265,6 +279,31 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
     _loadExistingWords();
   }
 
+  /// 打开单词详情页，展示完整释义
+  Future<void> _openWordDetail(String word) async {
+    final entry = await DictionaryService.searchEnExact(word);
+    if (!mounted) return;
+    if (entry == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('未找到「$word」的释义'),
+          duration: const Duration(seconds: 1),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => WordDetailPage(
+          result: CombinedResult(enEntry: entry),
+          word: word,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -401,7 +440,9 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
                   Text('词表管理', style: theme.textTheme.titleSmall),
                   const Spacer(),
                   Text(
-                    '${_existingWords.length} 词',
+                    _wordSearchQuery.trim().isEmpty
+                        ? '${_existingWords.length} 词'
+                        : '${_filteredExistingWords.length} / ${_existingWords.length} 词',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: colorScheme.onSurfaceVariant,
                     ),
@@ -427,44 +468,104 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
                     textAlign: TextAlign.center,
                   ),
                 )
-              else
-                ..._existingWords.map(
-                  (word) => Container(
-                    margin: const EdgeInsets.only(bottom: 4),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
+              else ...[
+                // 搜索框：客户端过滤词表
+                TextField(
+                  controller: _wordSearchController,
+                  decoration: InputDecoration(
+                    hintText: '搜索词汇...',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: _wordSearchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            tooltip: '清空搜索',
+                            onPressed: () {
+                              _wordSearchController.clear();
+                              setState(() => _wordSearchQuery = '');
+                            },
+                          )
+                        : null,
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
+                  ),
+                  onChanged: (value) {
+                    setState(() => _wordSearchQuery = value);
+                  },
+                ),
+                const SizedBox(height: 8),
+                if (_filteredExistingWords.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
                       color: colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.abc, size: 16, color: colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            word,
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w500,
+                    child: Text(
+                      '未找到匹配的词汇',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                else
+                  ..._filteredExistingWords.map(
+                    (word) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Material(
+                        color: colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(8),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => _openWordDetail(word),
+                          child: Padding(
+                            padding: const EdgeInsets.only(
+                              left: 12,
+                              top: 4,
+                              bottom: 4,
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.abc,
+                                  size: 16,
+                                  color: colorScheme.primary,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    word,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.chevron_right,
+                                  size: 20,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                                IconButton(
+                                  icon: Icon(
+                                    Icons.remove_circle_outline,
+                                    size: 20,
+                                    color: colorScheme.error,
+                                  ),
+                                  onPressed: () => _removeWord(word),
+                                  tooltip: '移除此词',
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ],
                             ),
                           ),
                         ),
-                        IconButton(
-                          icon: Icon(
-                            Icons.remove_circle_outline,
-                            size: 20,
-                            color: colorScheme.error,
-                          ),
-                          onPressed: () => _removeWord(word),
-                          tooltip: '移除此词',
-                          visualDensity: VisualDensity.compact,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+              ],
             ],
           ],
         ),
