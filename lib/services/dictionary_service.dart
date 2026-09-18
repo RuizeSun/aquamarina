@@ -19,6 +19,12 @@ class CombinedResult {
 }
 
 class DictionaryService {
+  /// 单条 SQL 中 `IN (...)` 的最大绑定参数个数。
+  ///
+  /// SQLite 默认上限为 32766（旧构建为 999），超出会直接报错；
+  /// 分批查询既能规避上限，也避免一次性绑定过多参数带来的解析与规划开销。
+  static const int _maxQueryChunkSize = 900;
+
   // ─── 数据库实例与并发锁 ────────────────────────────────
   static Database? _enDb; // ECDict (英英/英汉)
   static Database? _cnDb; // CEDict (汉英)
@@ -250,22 +256,28 @@ class DictionaryService {
   }
 
   /// 批量精确查询英英/英汉词典
-  /// 使用 WHERE word IN (...) 一次查询多个单词，替代逐词循环
+  ///
+  /// 使用 WHERE word IN (...) 一次查询多个单词，替代逐词循环；
+  /// 单词数超过 [_maxQueryChunkSize] 时自动分批查询后合并结果，
+  /// 粘贴数万单词时也不会因参数过多而失败。
   static Future<Map<String, WordEntry>> searchEnExactBatch(
     List<String> words,
   ) async {
     if (words.isEmpty) return {};
     final cleaned = words.map((w) => w.trim().toLowerCase()).toSet().toList();
     final db = await enDb;
-    final placeholders = cleaned.map((_) => '?').join(',');
-    final maps = await db.rawQuery(
-      'SELECT * FROM dictionary WHERE word IN ($placeholders) COLLATE NOCASE',
-      cleaned,
-    );
     final result = <String, WordEntry>{};
-    for (final m in maps) {
-      final entry = WordEntry.fromMap(m);
-      result[entry.word.toLowerCase()] = entry;
+    for (var start = 0; start < cleaned.length; start += _maxQueryChunkSize) {
+      final chunk = cleaned.skip(start).take(_maxQueryChunkSize).toList();
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final maps = await db.rawQuery(
+        'SELECT * FROM dictionary WHERE word IN ($placeholders) COLLATE NOCASE',
+        chunk,
+      );
+      for (final m in maps) {
+        final entry = WordEntry.fromMap(m);
+        result[entry.word.toLowerCase()] = entry;
+      }
     }
     return result;
   }

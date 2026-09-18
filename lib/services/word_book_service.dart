@@ -6,6 +6,12 @@ import 'dictionary_service.dart';
 import 'log_service.dart';
 
 class WordBookService {
+  /// 单条 SQL 中 `IN (...)` 的最大绑定参数个数（与 DictionaryService 一致）。
+  ///
+  /// SQLite 默认上限为 32766（旧构建为 999），超出会直接报错；
+  /// 分批查询可保证粘贴数万单词时依然稳定。
+  static const int _maxQueryChunkSize = 900;
+
   /// 获取所有词书
   static Future<List<WordBook>> getAllBooks() async {
     final db = await DatabaseService.database;
@@ -169,17 +175,23 @@ class WordBookService {
 
   /// 过滤已学单词：查询 user_word_records 表，区分已学与未学
   /// 返回 { learnedWords, newWords }
+  ///
+  /// 单词数超过 [_maxQueryChunkSize] 时分批查询后合并已学集合。
   static Future<({List<String> learnedWords, List<String> newWords})>
   filterLearnedWords(List<String> words) async {
     final db = await DatabaseService.database;
     final cleaned = words.map((w) => w.trim().toLowerCase()).toList();
 
-    final placeholders = cleaned.map((_) => '?').join(',');
-    final maps = await db.rawQuery(
-      'SELECT word FROM user_word_records WHERE word IN ($placeholders)',
-      cleaned,
-    );
-    final learnedSet = maps.map((m) => m['word'] as String).toSet();
+    final learnedSet = <String>{};
+    for (var start = 0; start < cleaned.length; start += _maxQueryChunkSize) {
+      final chunk = cleaned.skip(start).take(_maxQueryChunkSize).toList();
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final maps = await db.rawQuery(
+        'SELECT word FROM user_word_records WHERE word IN ($placeholders)',
+        chunk,
+      );
+      learnedSet.addAll(maps.map((m) => m['word'] as String));
+    }
 
     final learnedWords = <String>[];
     final newWords = <String>[];

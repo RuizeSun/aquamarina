@@ -4,6 +4,7 @@ import '../../services/dictionary_service.dart';
 import '../../services/word_book_service.dart';
 import '../word_detail_page.dart';
 import 'import_words_dialog.dart';
+import 'shared/word_book_word_list.dart';
 
 class WordBookCreatePage extends StatefulWidget {
   final WordBook? existingBook;
@@ -276,7 +277,15 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
   Future<void> _removeWord(String word) async {
     if (widget.existingBook?.id == null) return;
     await WordBookService.removeWordFromBook(widget.existingBook!.id!, word);
-    _loadExistingWords();
+    if (!mounted) return;
+    // 单词已从数据库删除，本地同步移除即可，
+    // 无需重新查询整本书（避免再次整表刷新带来的卡顿）
+    final target = word.trim().toLowerCase();
+    setState(() {
+      _existingWords = _existingWords
+          .where((w) => w.toLowerCase() != target)
+          .toList(growable: false);
+    });
   }
 
   /// 打开单词详情页，展示完整释义
@@ -308,6 +317,14 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    // 每帧只过滤一次，避免在计数行与词表之间重复计算
+    final filteredWords = _filteredExistingWords;
+    // 词表行交给 SliverList 懒加载：仅在确有内容时才创建该 Sliver
+    final showWordRows =
+        _isEditing &&
+        !_loadingWords &&
+        _existingWords.isNotEmpty &&
+        filteredWords.isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -325,248 +342,220 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 封面颜色选择
-            Text('封面颜色', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: _colorOptions.map((color) {
-                final selected = _coverColor == color;
-                return GestureDetector(
-                  onTap: () => setState(() => _coverColor = color),
-                  child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      color: Color(color),
-                      borderRadius: BorderRadius.circular(12),
-                      border: selected
-                          ? Border.all(color: colorScheme.onSurface, width: 3)
-                          : null,
-                      boxShadow: selected
-                          ? [
-                              BoxShadow(
-                                color: Color(color).withValues(alpha: 0.4),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2),
-                              ),
-                            ]
-                          : null,
-                    ),
-                    child: selected
-                        ? Icon(Icons.check, color: Colors.white)
-                        : null,
-                  ),
-                );
-              }).toList(),
-            ),
-            const SizedBox(height: 24),
-
-            // 标题
-            TextField(
-              controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: '词书标题 *',
-                hintText: '例如：四级核心词汇',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // 描述
-            TextField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: '描述（可选）',
-                hintText: '词书简介...',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 2,
-            ),
-            const SizedBox(height: 16),
-
-            // 作者
-            TextField(
-              controller: _authorController,
-              decoration: const InputDecoration(
-                labelText: '作者（可选）',
-                hintText: '你的名字',
-                border: OutlineInputBorder(),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 16),
-
-            // 导入/追加词汇
-            Text(
-              _isEditing ? '追加词汇' : '导入词汇',
-              style: theme.textTheme.titleSmall,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '一行一个单词，将从本地词典中校验',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _importController,
-              decoration: InputDecoration(
-                hintText: _isEditing
-                    ? '输入新单词，一行一个...'
-                    : 'apple\nbanana\ncat\n...',
-                border: const OutlineInputBorder(),
-                contentPadding: const EdgeInsets.all(16),
-              ),
-              maxLines: 6,
-              minLines: 3,
-              textInputAction: TextInputAction.newline,
-            ),
-
-            // 编辑模式下显示已有词汇列表
-            if (_isEditing) ...[
-              const SizedBox(height: 24),
-              Row(
+      body: Material(
+        // 页面级墨迹层：所有词表行的 Ink 装饰与水波都绘制在这一层
+        type: MaterialType.transparency,
+        child: CustomScrollView(
+          slivers: [
+            // 表单区（封面颜色 / 标题 / 描述 / 作者 / 导入 / 搜索 / 各种提示）
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverList.list(
                 children: [
-                  Text('词表管理', style: theme.textTheme.titleSmall),
-                  const Spacer(),
-                  Text(
-                    _wordSearchQuery.trim().isEmpty
-                        ? '${_existingWords.length} 词'
-                        : '${_filteredExistingWords.length} / ${_existingWords.length} 词',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (_loadingWords)
-                const Center(child: CircularProgressIndicator())
-              else if (_existingWords.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    '词书为空，在上方输入词汇后保存即可添加',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                )
-              else ...[
-                // 搜索框：客户端过滤词表
-                TextField(
-                  controller: _wordSearchController,
-                  decoration: InputDecoration(
-                    hintText: '搜索词汇...',
-                    prefixIcon: const Icon(Icons.search),
-                    suffixIcon: _wordSearchQuery.isNotEmpty
-                        ? IconButton(
-                            icon: const Icon(Icons.clear),
-                            tooltip: '清空搜索',
-                            onPressed: () {
-                              _wordSearchController.clear();
-                              setState(() => _wordSearchQuery = '');
-                            },
-                          )
-                        : null,
-                    isDense: true,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                  onChanged: (value) {
-                    setState(() => _wordSearchQuery = value);
-                  },
-                ),
-                const SizedBox(height: 8),
-                if (_filteredExistingWords.isEmpty)
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '未找到匹配的词汇',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  )
-                else
-                  ..._filteredExistingWords.map(
-                    (word) => Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Material(
-                        color: colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(8),
-                        clipBehavior: Clip.antiAlias,
-                        child: InkWell(
-                          onTap: () => _openWordDetail(word),
-                          child: Padding(
-                            padding: const EdgeInsets.only(
-                              left: 12,
-                              top: 4,
-                              bottom: 4,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.abc,
-                                  size: 16,
-                                  color: colorScheme.primary,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    word,
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w500,
+                  // 封面颜色选择
+                  Text('封面颜色', style: theme.textTheme.titleSmall),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: _colorOptions.map((color) {
+                      final selected = _coverColor == color;
+                      return GestureDetector(
+                        onTap: () => setState(() => _coverColor = color),
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: Color(color),
+                            borderRadius: BorderRadius.circular(12),
+                            border: selected
+                                ? Border.all(
+                                    color: colorScheme.onSurface,
+                                    width: 3,
+                                  )
+                                : null,
+                            boxShadow: selected
+                                ? [
+                                    BoxShadow(
+                                      color: Color(
+                                        color,
+                                      ).withValues(alpha: 0.4),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
                                     ),
-                                  ),
-                                ),
-                                Icon(
-                                  Icons.chevron_right,
-                                  size: 20,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                                IconButton(
-                                  icon: Icon(
-                                    Icons.remove_circle_outline,
-                                    size: 20,
-                                    color: colorScheme.error,
-                                  ),
-                                  onPressed: () => _removeWord(word),
-                                  tooltip: '移除此词',
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                              ],
-                            ),
+                                  ]
+                                : null,
+                          ),
+                          child: selected
+                              ? Icon(Icons.check, color: Colors.white)
+                              : null,
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // 标题
+                  TextField(
+                    controller: _titleController,
+                    decoration: const InputDecoration(
+                      labelText: '词书标题 *',
+                      hintText: '例如：四级核心词汇',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 描述
+                  TextField(
+                    controller: _descriptionController,
+                    decoration: const InputDecoration(
+                      labelText: '描述（可选）',
+                      hintText: '词书简介...',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                  const SizedBox(height: 16),
+
+                  // 作者
+                  TextField(
+                    controller: _authorController,
+                    decoration: const InputDecoration(
+                      labelText: '作者（可选）',
+                      hintText: '你的名字',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+
+                  const SizedBox(height: 24),
+                  const Divider(),
+                  const SizedBox(height: 16),
+
+                  // 导入/追加词汇
+                  Text(
+                    _isEditing ? '追加词汇' : '导入词汇',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '一行一个单词，将从本地词典中校验',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: _importController,
+                    decoration: InputDecoration(
+                      hintText: _isEditing
+                          ? '输入新单词，一行一个...'
+                          : 'apple\nbanana\ncat\n...',
+                      border: const OutlineInputBorder(),
+                      contentPadding: const EdgeInsets.all(16),
+                    ),
+                    maxLines: 6,
+                    minLines: 3,
+                    textInputAction: TextInputAction.newline,
+                  ),
+
+                  // 编辑模式下显示已有词汇列表
+                  if (_isEditing) ...[
+                    const SizedBox(height: 24),
+                    Row(
+                      children: [
+                        Text('词表管理', style: theme.textTheme.titleSmall),
+                        const Spacer(),
+                        Text(
+                          _wordSearchQuery.trim().isEmpty
+                              ? '${_existingWords.length} 词'
+                              : '${filteredWords.length} / ${_existingWords.length} 词',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                  ),
-              ],
-            ],
+                    const SizedBox(height: 8),
+                    if (_loadingWords)
+                      const Center(child: CircularProgressIndicator())
+                    else if (_existingWords.isEmpty)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '词书为空，在上方输入词汇后保存即可添加',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      )
+                    else ...[
+                      // 搜索框：客户端过滤词表
+                      TextField(
+                        controller: _wordSearchController,
+                        decoration: InputDecoration(
+                          hintText: '搜索词汇...',
+                          prefixIcon: const Icon(Icons.search),
+                          suffixIcon: _wordSearchQuery.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  tooltip: '清空搜索',
+                                  onPressed: () {
+                                    _wordSearchController.clear();
+                                    setState(() => _wordSearchQuery = '');
+                                  },
+                                )
+                              : null,
+                          isDense: true,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onChanged: (value) {
+                          setState(() => _wordSearchQuery = value);
+                        },
+                      ),
+                      // 搜索无结果时的空状态（词表行由下方的 SliverList 承载）
+                      if (filteredWords.isEmpty) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            '未找到匹配的词汇',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ],
+                  // 搜索框与词表行之间保留 8px 间距（词表行由下方的 SliverList 承载）
+                  if (showWordRows) const SizedBox(height: 8),
+                  // 没有词表行时补足页面底部留白，保持与原布局一致的间距
+                  if (!showWordRows) const SizedBox(height: 16),
+                ],
+              ),
+            ),
+            // 词表行：懒加载，只有可视区域内的行才会被构建与布局
+            if (showWordRows)
+              WordBookWordList(
+                words: filteredWords,
+                onTapWord: _openWordDetail,
+                onRemoveWord: _removeWord,
+              ),
           ],
         ),
       ),
