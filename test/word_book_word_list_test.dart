@@ -10,6 +10,9 @@ void main() {
     List<String> words, {
     ValueChanged<String>? onTapWord,
     ValueChanged<String>? onRemoveWord,
+    bool selectionMode = false,
+    Set<String> selectedWords = const {},
+    ValueChanged<String>? onToggleWord,
   }) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -22,6 +25,9 @@ void main() {
                   words: words,
                   onTapWord: onTapWord ?? (_) {},
                   onRemoveWord: onRemoveWord ?? (_) {},
+                  selectionMode: selectionMode,
+                  selectedWords: selectedWords,
+                  onToggleWord: onToggleWord,
                 ),
               ],
             ),
@@ -68,5 +74,33 @@ void main() {
     await tester.tap(find.byIcon(Icons.remove_circle_outline).first);
     await tester.pump();
     expect(removed, ['apple']);
+  });
+
+  testWidgets('多选模式下点击整行切换选中，且隐藏删除按钮', (tester) async {
+    final toggled = <String>[];
+    final tapped = <String>[];
+    final removed = <String>[];
+    await pumpWordList(
+      tester,
+      ['apple', 'banana'],
+      onTapWord: tapped.add,
+      onRemoveWord: removed.add,
+      selectionMode: true,
+      selectedWords: {'apple'},
+      onToggleWord: toggled.add,
+    );
+
+    // 选中态用实心勾选框，未选中用空心
+    expect(find.byIcon(Icons.check_box), findsOneWidget);
+    expect(find.byIcon(Icons.check_box_outline_blank), findsOneWidget);
+    // 多选模式下不提供「移除单词」，避免误触
+    expect(find.byIcon(Icons.remove_circle_outline), findsNothing);
+
+    await tester.tap(find.text('banana'));
+    await tester.pump();
+    expect(toggled, ['banana']);
+    // 多选模式下点击不再跳转单词详情
+    expect(tapped, isEmpty);
+    expect(removed, isEmpty);
   });
 }

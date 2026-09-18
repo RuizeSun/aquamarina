@@ -23,6 +23,17 @@ class WordBookWordList extends StatelessWidget {
   /// 点击行尾的删除按钮（从词书中移除该词）。
   final ValueChanged<String> onRemoveWord;
 
+  /// 是否处于多选模式（用于「按词书调用 AI 生成句式集」的选词）。
+  ///
+  /// 开启后：行首显示勾选框，点击整行切换选中状态，行尾的删除按钮隐藏。
+  final bool selectionMode;
+
+  /// 多选模式下已选中的单词（[selectionMode] 为 false 时忽略）。
+  final Set<String> selectedWords;
+
+  /// 多选模式下点击某一行（切换选中状态）。
+  final ValueChanged<String>? onToggleWord;
+
   /// 列表内边距，默认与编辑词书页其他区块左右对齐。
   final EdgeInsetsGeometry padding;
 
@@ -31,6 +42,9 @@ class WordBookWordList extends StatelessWidget {
     required this.words,
     required this.onTapWord,
     required this.onRemoveWord,
+    this.selectionMode = false,
+    this.selectedWords = const {},
+    this.onToggleWord,
     this.padding = const EdgeInsets.fromLTRB(16, 0, 16, 16),
   });
 
@@ -51,21 +65,36 @@ class WordBookWordList extends StatelessWidget {
 
   Widget _buildRow(String word, ThemeData theme, ColorScheme colorScheme) {
     final borderRadius = BorderRadius.circular(8);
+    final selected = selectionMode && selectedWords.contains(word);
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Ink(
         decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerHighest,
+          color: selected
+              ? colorScheme.primaryContainer.withValues(alpha: 0.6)
+              : colorScheme.surfaceContainerHighest,
           borderRadius: borderRadius,
         ),
         child: InkWell(
-          onTap: () => onTapWord(word),
+          onTap: selectionMode
+              ? () => onToggleWord?.call(word)
+              : () => onTapWord(word),
           borderRadius: borderRadius,
           child: Padding(
             padding: const EdgeInsets.only(left: 12, top: 4, bottom: 4),
             child: Row(
               children: [
-                Icon(Icons.abc, size: 16, color: colorScheme.primary),
+                if (selectionMode)
+                  Icon(
+                    selected ? Icons.check_box : Icons.check_box_outline_blank,
+                    size: 20,
+                    color: selected
+                        ? colorScheme.primary
+                        : colorScheme.onSurfaceVariant,
+                  )
+                else
+                  Icon(Icons.abc, size: 16, color: colorScheme.primary),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -75,21 +104,26 @@ class WordBookWordList extends StatelessWidget {
                     ),
                   ),
                 ),
-                Icon(
-                  Icons.chevron_right,
-                  size: 20,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-                IconButton(
-                  icon: Icon(
-                    Icons.remove_circle_outline,
+                if (selectionMode)
+                  // 多选模式下不提供删除，避免误触破坏词书
+                  const SizedBox(width: 8)
+                else ...[
+                  Icon(
+                    Icons.chevron_right,
                     size: 20,
-                    color: colorScheme.error,
+                    color: colorScheme.onSurfaceVariant,
                   ),
-                  onPressed: () => onRemoveWord(word),
-                  tooltip: '移除此词',
-                  visualDensity: VisualDensity.compact,
-                ),
+                  IconButton(
+                    icon: Icon(
+                      Icons.remove_circle_outline,
+                      size: 20,
+                      color: colorScheme.error,
+                    ),
+                    onPressed: () => onRemoveWord(word),
+                    tooltip: '移除此词',
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ],
               ],
             ),
           ),

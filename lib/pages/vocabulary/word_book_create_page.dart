@@ -3,6 +3,7 @@ import '../../models/word_book.dart';
 import '../../services/dictionary_service.dart';
 import '../../services/word_book_service.dart';
 import '../word_detail_page.dart';
+import 'ai_sentence_set_generate_page.dart';
 import 'import_words_dialog.dart';
 import 'shared/word_book_word_list.dart';
 
@@ -28,6 +29,10 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
   List<String> _existingWords = [];
   bool _loadingWords = false;
   String _wordSearchQuery = '';
+
+  // 多选模式（用于按词书调用 AI 生成句式集）
+  bool _selectionMode = false;
+  final Set<String> _selectedWords = {};
 
   static const _colorOptions = [
     0xFF00BFA5, // 青绿
@@ -285,7 +290,139 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
       _existingWords = _existingWords
           .where((w) => w.toLowerCase() != target)
           .toList(growable: false);
+      _selectedWords.removeWhere((w) => w.toLowerCase() == target);
     });
+  }
+
+  // ===== 多选（AI 生成句式集） =====
+
+  void _toggleSelectionMode() {
+    setState(() {
+      _selectionMode = !_selectionMode;
+      if (!_selectionMode) _selectedWords.clear();
+    });
+  }
+
+  void _toggleWordSelection(String word) {
+    setState(() {
+      if (_selectedWords.contains(word)) {
+        _selectedWords.remove(word);
+      } else {
+        _selectedWords.add(word);
+      }
+    });
+  }
+
+  /// 全选 / 取消全选：只作用于当前搜索过滤后的词表，
+  /// 便于「搜索一段前缀 → 全选 → 生成」的用法。
+  void _toggleSelectAll(List<String> filtered, bool select) {
+    setState(() {
+      if (select) {
+        _selectedWords.addAll(filtered);
+      } else {
+        _selectedWords.removeAll(filtered);
+      }
+    });
+  }
+
+  /// 带着选中的单词进入 AI 生成句式集页面
+  Future<void> _generateFromSelection() async {
+    if (_selectedWords.isEmpty) return;
+    // 按词书原始顺序排列，便于与提示词、生成结果核对
+    final ordered = _existingWords
+        .where(_selectedWords.contains)
+        .toList(growable: false);
+    final bookTitle = _titleController.text.trim().isEmpty
+        ? '未命名词书'
+        : _titleController.text.trim();
+
+    final outcome = await Navigator.of(context)
+        .push<SentenceSetGenerationOutcome>(
+          MaterialPageRoute(
+            builder: (_) =>
+                AiSentenceSetGeneratePage(bookTitle: bookTitle, words: ordered),
+          ),
+        );
+    if (!mounted || outcome == null) return;
+
+    setState(() {
+      _selectionMode = false;
+      _selectedWords.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '已创建句式集「${outcome.setName}」，共 ${outcome.sentenceCount} 句',
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// 多选模式的底部操作条
+  Widget _buildSelectionBar(ThemeData theme, ColorScheme colorScheme) {
+    final filtered = _filteredExistingWords;
+    final allSelected =
+        filtered.isNotEmpty && filtered.every(_selectedWords.contains);
+
+    return SafeArea(
+      child: Material(
+        color: colorScheme.surfaceContainerHigh,
+        elevation: 8,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: filtered.isEmpty
+                        ? null
+                        : () => _toggleSelectAll(filtered, !allSelected),
+                    child: Text(allSelected ? '取消全选' : '全选'),
+                  ),
+                  Expanded(
+                    child: Text(
+                      _selectedWords.isEmpty
+                          ? '点击词条以选择单词'
+                          : '已选 ${_selectedWords.length} 个单词',
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: _selectedWords.isEmpty
+                            ? colorScheme.onSurfaceVariant
+                            : colorScheme.primary,
+                        fontWeight: _selectedWords.isEmpty
+                            ? FontWeight.normal
+                            : FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _toggleSelectionMode,
+                    child: const Text('退出选择'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _selectedWords.isEmpty
+                      ? null
+                      : _generateFromSelection,
+                  icon: const Icon(Icons.auto_awesome, size: 18),
+                  label: const Text('AI 生成句式集'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   /// 打开单词详情页，展示完整释义
@@ -330,6 +467,17 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
       appBar: AppBar(
         title: Text(_isEditing ? '编辑词书' : '创建词书'),
         actions: [
+          // 选词入口：仅编辑已有词书且词表非空时可用。
+          // 图标与词表区的「AI 生成句式集」卡片一致，明确指向 AI 功能。
+          if (_isEditing && _existingWords.isNotEmpty && !_isImporting)
+            IconButton(
+              icon: Icon(
+                _selectionMode ? Icons.close : Icons.auto_awesome,
+                color: _selectionMode ? null : colorScheme.primary,
+              ),
+              tooltip: _selectionMode ? '退出选择' : 'AI 生成句式集（先选择单词）',
+              onPressed: _toggleSelectionMode,
+            ),
           TextButton(
             onPressed: _isImporting ? null : _onSave,
             child: _isImporting
@@ -342,6 +490,9 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
           ),
         ],
       ),
+      bottomNavigationBar: _selectionMode
+          ? _buildSelectionBar(theme, colorScheme)
+          : null,
       body: Material(
         // 页面级墨迹层：所有词表行的 Ink 装饰与水波都绘制在这一层
         type: MaterialType.transparency,
@@ -477,6 +628,74 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
                       ],
                     ),
                     const SizedBox(height: 8),
+                    // AI 生成句式集入口：用带图标与说明的卡片，而不是一个含义
+                    // 不明的多选图标，让用户一眼看出这是 AI 功能
+                    if (!_selectionMode && _existingWords.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Material(
+                          color: colorScheme.primaryContainer.withValues(
+                            alpha: 0.45,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(12),
+                            onTap: _toggleSelectionMode,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: colorScheme.primary.withValues(
+                                        alpha: 0.15,
+                                      ),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Icon(
+                                      Icons.auto_awesome,
+                                      size: 20,
+                                      color: colorScheme.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'AI 生成句式集',
+                                          style: theme.textTheme.titleSmall
+                                              ?.copyWith(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '选择本词书中的单词，按 CEFR 难度'
+                                          '（入门 ~ 自由运用）调用 AI 生成练习句式',
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                color: colorScheme
+                                                    .onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Icon(
+                                    Icons.chevron_right,
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     if (_loadingWords)
                       const Center(child: CircularProgressIndicator())
                     else if (_existingWords.isEmpty)
@@ -555,6 +774,9 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
                 words: filteredWords,
                 onTapWord: _openWordDetail,
                 onRemoveWord: _removeWord,
+                selectionMode: _selectionMode,
+                selectedWords: _selectedWords,
+                onToggleWord: _toggleWordSelection,
               ),
           ],
         ),

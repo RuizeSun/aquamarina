@@ -157,7 +157,7 @@ class AiUsageService {
 
     final cost = pricing == null
         ? null
-        : _computeCost(
+        : computeCost(
             pricing,
             cacheHitTokens: cacheHitTokens,
             cacheMissTokens: cacheMissTokens,
@@ -198,7 +198,13 @@ class AiUsageService {
 
 
   /// 计算一次请求的费用（按该配置的价格快照）。
-  double? _computeCost(
+  ///
+  /// 公开为静态方法，供「生成前的消耗预估」等场景复用，
+  /// 保证预估与实际记账始终走同一套公式（不会出现两处算法漂移）。
+  ///
+  /// 注意：按请求计费（`perRequest`）时返回的是**单次请求**的固定价，
+  /// 多次请求的费用由调用方自行乘以请求数。
+  static double? computeCost(
     AiUsagePricing pricing, {
     required int cacheHitTokens,
     required int cacheMissTokens,
