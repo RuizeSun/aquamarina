@@ -497,9 +497,35 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
           ),
         ],
       ),
-      bottomNavigationBar: _selectionMode
-          ? _buildSelectionBar(theme, colorScheme)
-          : null,
+      // 多选底部操作栏：进入 / 退出选择时以「高度展开 + 上滑 + 淡入」动画出现，
+      // 避免整条栏突然出现造成的界面跳动。
+      bottomNavigationBar: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 260),
+        reverseDuration: const Duration(milliseconds: 200),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, animation) => SizeTransition(
+          sizeFactor: animation,
+          // 从顶部展开（垂直方向），配合上滑形成「从底部升起」的观感
+          alignment: Alignment.topCenter,
+          child: FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, 1),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
+            ),
+          ),
+        ),
+        child: _selectionMode
+            ? KeyedSubtree(
+                key: const ValueKey('selection-bar'),
+                child: _buildSelectionBar(theme, colorScheme),
+              )
+            : const SizedBox.shrink(key: ValueKey('selection-bar-hidden')),
+      ),
       body: Material(
         // 页面级墨迹层：所有词表行的 Ink 装饰与水波都绘制在这一层
         type: MaterialType.transparency,
