@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import '../models/ai_sentence.dart';
@@ -23,13 +24,21 @@ class AiSentenceService {
   final AiService _aiService;
   final SentenceEvalCacheService _cacheService;
 
+  /// 数据库访问入口（生产环境为业务数据库，测试可注入 sqflite ffi 内存库）
+  final Future<Database> Function() _openDatabase;
+
   AiSentenceService({
     AiProfileService? profileService,
     AiService? aiService,
     SentenceEvalCacheService? cacheService,
+    @visibleForTesting Future<Database> Function()? openDatabase,
   }) : _profileService = profileService ?? AiProfileService(),
        _aiService = aiService ?? AiService(),
-       _cacheService = cacheService ?? SentenceEvalCacheService.instance;
+       _cacheService = cacheService ?? SentenceEvalCacheService.instance,
+       _openDatabase = openDatabase ?? (() => DatabaseService.database);
+
+  /// 业务数据库访问入口（错题本 / 已练习标记等本地数据）
+  Future<Database> get _db => _openDatabase();
 
   // ===== 设置项（SharedPreferences 保留） =====
   Future<int> getSentenceLimit() async {
@@ -94,7 +103,7 @@ class AiSentenceService {
 
   /// 获取某个句式集中已练习过的句子 ID 列表
   Future<Set<String>> getPracticedSentenceIds(String setId) async {
-    final db = await DatabaseService.database;
+    final db = await _db;
     final maps = await db.query(
       'practiced_sentence_ids',
       columns: ['sentence_id'],
@@ -106,7 +115,7 @@ class AiSentenceService {
 
   /// 标记某个句子为已练习
   Future<void> markSentencePracticed(String setId, String sentenceId) async {
-    final db = await DatabaseService.database;
+    final db = await _db;
     await db.insert('practiced_sentence_ids', {
       'set_id': setId,
       'sentence_id': sentenceId,
@@ -115,16 +124,30 @@ class AiSentenceService {
 
   // ===== 错题本 CRUD（SQLite） =====
 
-  /// 获取所有错题（按时间倒序）
+  /// 错题记录的业务主键：优先使用句子 ID；无 ID（临时构造的句子）时
+  /// 回退到英文原文生成稳定 key（与句子收藏/笔记的约定保持一致），
+  /// 避免不同句子共用空键而被误合并或误删除。
+  static String wrongSentenceKey({
+    required String? sentenceId,
+    required String english,
+  }) {
+    final id = sentenceId ?? '';
+    return id.isNotEmpty ? id : 'bytext:$english';
+  }
+
+  /// 获取所有错题（按最近一次答错时间倒序）
   Future<List<WrongSentenceRecord>> getWrongSentences() async {
-    final db = await DatabaseService.database;
-    final maps = await db.query('wrong_sentences', orderBy: 'created_at DESC');
+    final db = await _db;
+    final maps = await db.query(
+      'wrong_sentences',
+      orderBy: 'COALESCE(last_wrong_at, created_at) DESC, created_at DESC',
+    );
     return maps.map((m) => _rowToWrongSentence(m)).toList();
   }
 
-  /// 获取错题数量
+  /// 获取错题数量（同一句子只计一条）
   Future<int> getWrongSentenceCount() async {
-    final db = await DatabaseService.database;
+    final db = await _db;
     final count =
         Sqflite.firstIntValue(
           await db.rawQuery('SELECT COUNT(*) FROM wrong_sentences'),
@@ -133,19 +156,58 @@ class AiSentenceService {
     return count;
   }
 
-  /// 添加错题（如果已存在相同 sentenceId 则跳过）
+  /// 加入错题本（同一句子自动合并为一条记录）
+  ///
+  /// - 首次答错：插入新记录，`wrong_count = 1`
+  /// - 再次答错：合并到已有记录，累计 `wrong_count`，得分 / 回答 / 模式 /
+  ///   答错时间更新为最近一次，首次收录时间（`created_at`）保持不变
   Future<void> addWrongSentence(WrongSentenceRecord record) async {
-    final db = await DatabaseService.database;
-    await db.insert(
+    final db = await _db;
+    final key = wrongSentenceKey(
+      sentenceId: record.sentenceId,
+      english: record.english,
+    );
+    final row = _wrongSentenceToRow(record)..['sentence_id'] = key;
+
+    final existing = await db.query(
       'wrong_sentences',
-      _wrongSentenceToRow(record),
-      conflictAlgorithm: ConflictAlgorithm.ignore,
+      columns: ['id', 'created_at', 'wrong_count'],
+      where: 'sentence_id = ?',
+      whereArgs: [key],
+      orderBy: 'created_at DESC',
+      limit: 1,
+    );
+
+    if (existing.isEmpty) {
+      await db.insert(
+        'wrong_sentences',
+        row,
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      return;
+    }
+
+    await db.update(
+      'wrong_sentences',
+      {
+        'set_id': row['set_id'],
+        'english': row['english'],
+        'chinese': row['chinese'],
+        'score': row['score'],
+        'user_answer': row['user_answer'],
+        'mode': row['mode'],
+        'wrong_count':
+            ((existing.first['wrong_count'] as num?)?.toInt() ?? 1) + 1,
+        'last_wrong_at': row['last_wrong_at'],
+      },
+      where: 'id = ?',
+      whereArgs: [existing.first['id']],
     );
   }
 
-  /// 从错题本中移除
+  /// 从错题本中移除（[sentenceId] 为 [wrongSentenceKey] 生成的主键）
   Future<void> removeWrongSentence(String sentenceId) async {
-    final db = await DatabaseService.database;
+    final db = await _db;
     await db.delete(
       'wrong_sentences',
       where: 'sentence_id = ?',
@@ -155,7 +217,7 @@ class AiSentenceService {
 
   /// 清空错题本
   Future<void> clearWrongSentences() async {
-    final db = await DatabaseService.database;
+    final db = await _db;
     await db.delete('wrong_sentences');
   }
 
@@ -230,6 +292,10 @@ class AiSentenceService {
           ? PracticeMode.beginner
           : PracticeMode.advanced,
       createdAt: DateTime.parse(row['created_at'] as String),
+      wrongCount: (row['wrong_count'] as num?)?.toInt() ?? 1,
+      lastWrongAt: row['last_wrong_at'] != null
+          ? DateTime.tryParse(row['last_wrong_at'] as String)
+          : null,
     );
   }
 
@@ -244,6 +310,8 @@ class AiSentenceService {
       'user_answer': r.userAnswer,
       'mode': r.mode == PracticeMode.beginner ? 0 : 1,
       'created_at': r.createdAt.toIso8601String(),
+      'wrong_count': r.wrongCount,
+      'last_wrong_at': r.latestWrongAt.toIso8601String(),
     };
   }
 

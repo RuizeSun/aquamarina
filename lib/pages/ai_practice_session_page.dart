@@ -400,13 +400,18 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
   // ===== 处理完成的一个句子（加入错题本 / 标记已练习） =====
   Future<void> _handleCompletedSentence(PracticeRecord record) async {
     final threshold = await _sentenceService.getWrongScoreThreshold();
+    // 错题本以句子为粒度：无 ID 的句子用英文原文生成稳定键
+    final wrongKey = AiSentenceService.wrongSentenceKey(
+      sentenceId: record.sentence.id,
+      english: record.sentence.english,
+    );
 
     if (record.result.score <= threshold) {
-      // 得分 ≤ 阈值：加入错题本
+      // 得分 ≤ 阈值：加入错题本（同一句子已存在时自动合并）
       await _sentenceService.addWrongSentence(
         WrongSentenceRecord(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          sentenceId: record.sentence.id ?? '',
+          sentenceId: wrongKey,
           setId: record.sentence.setId,
           english: record.sentence.english,
           chinese: record.sentence.chinese,
@@ -419,7 +424,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     } else {
       // 得分 > 阈值：如果是在错题本练习中，从错题本移除（已掌握）
       if (widget.isWrongBookPractice) {
-        await _sentenceService.removeWrongSentence(record.sentence.id ?? '');
+        await _sentenceService.removeWrongSentence(wrongKey);
       }
       // 如果是句式集练习且得分高，标记为已练习（用于"不重复练习"）
       if (!widget.isWrongBookPractice) {

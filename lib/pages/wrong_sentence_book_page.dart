@@ -247,10 +247,31 @@ class _WrongSentenceBookPageState extends State<WrongSentenceBookPage> {
                     ),
                   ),
                 ),
+                // 同一句子多次答错：合并为一条并展示累计次数
+                if (record.wrongCount > 1) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colorScheme.error.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '错 ${record.wrongCount} 次',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
                 const Spacer(),
-                // 时间
+                // 时间（最近一次答错时间）
                 Text(
-                  _formatDate(record.createdAt),
+                  _formatDate(record.latestWrongAt),
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),

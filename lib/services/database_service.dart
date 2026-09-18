@@ -35,6 +35,32 @@ class DatabaseService {
       'CREATE INDEX IF NOT EXISTS idx_sentence_eval_cache_created_at '
       'ON sentence_eval_cache(created_at)';
 
+  /// 错题本建表语句（v10）。
+  ///
+  /// 同一句子只保留一条记录：`wrong_count` 记录累计答错次数，
+  /// `last_wrong_at` 记录最近一次答错时间（`created_at` 为首次收录时间）。
+  static const String wrongSentencesTableSql = '''
+          CREATE TABLE IF NOT EXISTS wrong_sentences (
+            id TEXT PRIMARY KEY,
+            sentence_id TEXT NOT NULL,
+            set_id TEXT NOT NULL,
+            english TEXT NOT NULL,
+            chinese TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            user_answer TEXT NOT NULL,
+            mode INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            wrong_count INTEGER NOT NULL DEFAULT 1,
+            last_wrong_at TEXT
+          )
+        ''';
+
+  /// 错题本按句子的唯一索引（v10）：从数据库层面保证同一句子只有一条错题记录，
+  /// 同时让「按句子查询错题」走索引。
+  static const String wrongSentencesUniqueIndexSql =
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_wrong_sentences_sentence_unique '
+      'ON wrong_sentences(sentence_id)';
+
   /// 初始化 Future，防止并发重复初始化
   /// 初始化失败时重置，允许后续调用重试
   static Future<Database>? _dbInitFuture;
@@ -71,7 +97,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 9,
+      version: 10,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -147,19 +173,7 @@ class DatabaseService {
           )
         ''');
 
-        await db.execute('''
-          CREATE TABLE IF NOT EXISTS wrong_sentences (
-            id TEXT PRIMARY KEY,
-            sentence_id TEXT NOT NULL,
-            set_id TEXT NOT NULL,
-            english TEXT NOT NULL,
-            chinese TEXT NOT NULL,
-            score INTEGER NOT NULL,
-            user_answer TEXT NOT NULL,
-            mode INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-          )
-        ''');
+        await db.execute(wrongSentencesTableSql);
 
         await db.execute('''
           CREATE TABLE IF NOT EXISTS practiced_sentence_ids (
@@ -219,6 +233,7 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_sentences_set_id ON wrong_sentences(set_id)',
         );
+        await db.execute(wrongSentencesUniqueIndexSql);
         await db.execute(sentenceEvalCacheIndexSql);
 
         // ── 学习时长统计相关 ──
@@ -404,8 +419,80 @@ class DatabaseService {
           await db.execute(sentenceEvalCacheTableSql);
           await db.execute(sentenceEvalCacheIndexSql);
         }
+        // 9 → 10：错题本同一句子的重复记录合并为一条
+        if (oldVersion < 10) {
+          await migrateWrongSentencesToV10(db);
+        }
       },
     );
+  }
+
+  /// v9 → v10 迁移：错题本支持「同一句子只保留一条记录」。
+  ///
+  /// 1. 补列：`wrong_count`（累计错误次数）、`last_wrong_at`（最近一次答错时间）
+  /// 2. 归一化：无句子 ID 的历史记录用英文原文生成稳定键（`bytext:...`），
+  ///    避免不同句子共用空键而被误合并 / 误删除
+  /// 3. 合并：同一句子的多条记录累计错误次数，保留最近一次（得分/回答/模式/时间），
+  ///    `created_at` 回正为最早一次（首次收录时间）
+  /// 4. 建唯一索引，从数据库层面防止再次产生重复
+  ///
+  /// 抽成独立方法以便单元测试直接对旧库结构验证迁移结果。
+  static Future<void> migrateWrongSentencesToV10(Database db) async {
+    // 兼容极旧版本库：确保表结构存在（已存在时为 no-op，不会覆盖数据）
+    await db.execute(wrongSentencesTableSql);
+    await _ensureColumn(
+      db,
+      'wrong_sentences',
+      'wrong_count',
+      'INTEGER NOT NULL DEFAULT 1',
+    );
+    await _ensureColumn(db, 'wrong_sentences', 'last_wrong_at', 'TEXT');
+
+    // 无 ID 的句子：与收藏 / 笔记一致，用英文原文生成稳定键
+    await db.execute(
+      "UPDATE wrong_sentences SET sentence_id = 'bytext:' || english "
+      "WHERE sentence_id = ''",
+    );
+    // 旧记录的最近一次答错时间回填为收录时间
+    await db.execute(
+      'UPDATE wrong_sentences SET last_wrong_at = created_at '
+      'WHERE last_wrong_at IS NULL',
+    );
+    // 同一句子：错误次数取记录条数（与已累计次数取较大值，重复执行不丢次数）；
+    // 最近答错时间取最大；created_at 统一为最早一次（首次收录时间）
+    await db.execute('''
+      UPDATE wrong_sentences SET
+        wrong_count = MAX(
+          (
+            SELECT COUNT(*) FROM wrong_sentences AS d
+            WHERE d.sentence_id = wrong_sentences.sentence_id
+          ),
+          (
+            SELECT COALESCE(MAX(d.wrong_count), 1)
+            FROM wrong_sentences AS d
+            WHERE d.sentence_id = wrong_sentences.sentence_id
+          )
+        ),
+        last_wrong_at = (
+          SELECT MAX(d.created_at) FROM wrong_sentences AS d
+          WHERE d.sentence_id = wrong_sentences.sentence_id
+        ),
+        created_at = (
+          SELECT MIN(d.created_at) FROM wrong_sentences AS d
+          WHERE d.sentence_id = wrong_sentences.sentence_id
+        )
+    ''');
+    // 删除重复记录：每个句子只保留一条。
+    // 同一句子的记录已统一 created_at，故按 id 取最大者 ——
+    // 错题 id 为毫秒时间戳字符串，最大即最近一次答错，保留的得分/回答也最新。
+    await db.execute('''
+      DELETE FROM wrong_sentences WHERE EXISTS (
+        SELECT 1 FROM wrong_sentences AS newer
+        WHERE newer.sentence_id = wrong_sentences.sentence_id
+          AND newer.id > wrong_sentences.id
+      )
+    ''');
+    await db.execute(wrongSentencesUniqueIndexSql);
   }
 
   /// 检查表中是否存在指定列，缺失则添加（幂等，可安全重复调用）
