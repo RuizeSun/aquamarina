@@ -4,6 +4,7 @@ import 'sections/appearance_section.dart';
 import 'sections/ai_profile_section.dart';
 import 'sections/ai_sentence_section.dart';
 import 'sections/ai_usage_stats_section.dart';
+import 'sections/sentence_cache_section.dart';
 import 'sections/logging_section.dart';
 import 'sections/data_management_section.dart';
 import 'sections/tts_section.dart';
@@ -103,6 +104,9 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             const SettingsSectionHeader(title: 'AI 句子练习设置'),
             const AiSentenceSettingsSection(),
+            const SizedBox(height: 8),
+            const SettingsSectionHeader(title: '练习缓存'),
+            const SentenceCacheSection(),
             const SizedBox(height: 8),
           ],
         );

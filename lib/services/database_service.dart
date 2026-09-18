@@ -7,6 +7,34 @@ import 'log_service.dart';
 class DatabaseService {
   static Database? _db;
 
+  /// 句型练习批改结果缓存的建表语句（v9 新增）。
+  ///
+  /// 抽成常量以便 `onCreate` / `onUpgrade` 共用同一份 DDL（避免结构漂移），
+  /// 单元测试也可直接引用它创建内存测试库。
+  static const String sentenceEvalCacheTableSql = '''
+          CREATE TABLE IF NOT EXISTS sentence_eval_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode INTEGER NOT NULL DEFAULT 0,
+            sentence_english TEXT NOT NULL,
+            sentence_chinese TEXT NOT NULL,
+            user_answer TEXT NOT NULL,
+            score INTEGER NOT NULL,
+            markup TEXT NOT NULL DEFAULT '',
+            comment TEXT NOT NULL DEFAULT '',
+            profile_name TEXT,
+            model TEXT,
+            hit_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            last_hit_at TEXT,
+            UNIQUE(mode, sentence_english, sentence_chinese, user_answer)
+          )
+        ''';
+
+  /// 缓存表按创建时间的索引（清理「N 天前缓存」时走索引）
+  static const String sentenceEvalCacheIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_sentence_eval_cache_created_at '
+      'ON sentence_eval_cache(created_at)';
+
   /// 初始化 Future，防止并发重复初始化
   /// 初始化失败时重置，允许后续调用重试
   static Future<Database>? _dbInitFuture;
@@ -43,7 +71,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 8,
+      version: 9,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -141,6 +169,9 @@ class DatabaseService {
           )
         ''');
 
+        // 句型练习批改结果缓存（相同句子 + 相同回答 + 相同模式可复用）
+        await db.execute(sentenceEvalCacheTableSql);
+
         // ── 单词收藏与笔记相关 ──
         await db.execute('''
           CREATE TABLE IF NOT EXISTS word_notes (
@@ -188,6 +219,7 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_wrong_sentences_set_id ON wrong_sentences(set_id)',
         );
+        await db.execute(sentenceEvalCacheIndexSql);
 
         // ── 学习时长统计相关 ──
         await db.execute('''
@@ -366,6 +398,11 @@ class DatabaseService {
           await db.execute(
             'CREATE INDEX IF NOT EXISTS idx_wrong_words_scheduled ON wrong_words(scheduled_date)',
           );
+        }
+        // 8 → 9：新增 sentence_eval_cache 表（句型练习批改结果缓存）
+        if (oldVersion < 9) {
+          await db.execute(sentenceEvalCacheTableSql);
+          await db.execute(sentenceEvalCacheIndexSql);
         }
       },
     );

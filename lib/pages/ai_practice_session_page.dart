@@ -76,6 +76,9 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
 
   // 评测结果
   AiSentenceResult? _lastResult;
+
+  /// 当前结果是否来自本地缓存（命中缓存时不调用 AI）
+  bool _fromCache = false;
   List<PracticeRecord> _completedRecords = [];
   bool _isEvaluating = false;
 
@@ -94,6 +97,11 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
 
   int get _totalSentences => _sessionSentences.length;
   int get _remainingSentences => _totalSentences - _currentSentenceIndex - 1;
+
+  /// 当前题目的用户回答（入门版为已选词块，高阶版为输入文本）
+  String get _currentAnswer => widget.practiceMode == PracticeMode.beginner
+      ? _selectedWords.join(' ')
+      : _inputController.text.trim();
 
   @override
   void initState() {
@@ -159,6 +167,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       _currentSentenceIndex = 0;
       _completedRecords = [];
       _lastResult = null;
+      _fromCache = false;
       _selectedWords.clear();
       _inputController.clear();
       _phase = _PracticePhase.answering;
@@ -231,22 +240,33 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
   }
 
   // ===== 提交评测 =====
-  Future<void> _submitAnswer() async {
-    final String userAnswer;
-    if (widget.practiceMode == PracticeMode.beginner) {
-      userAnswer = _selectedWords.join(' ');
-      if (userAnswer.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('请先选择单词组成句子')));
-        return;
-      }
-    } else {
-      userAnswer = _inputController.text.trim();
-      if (userAnswer.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('请输入你的回答')));
+  Future<void> _submitAnswer({bool ignoreCache = false}) async {
+    final userAnswer = _currentAnswer;
+    if (userAnswer.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.practiceMode == PracticeMode.beginner
+                ? '请先选择单词组成句子'
+                : '请输入你的回答',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final sentence = _currentSentence!;
+
+    // 1. 先查本地缓存：相同句子 + 相同回答 + 相同模式时直接复用，不调用 AI
+    if (!ignoreCache) {
+      final cached = await _sentenceService.lookupCachedResult(
+        sentence: sentence,
+        userAnswer: userAnswer,
+        mode: widget.practiceMode,
+      );
+      if (!mounted) return;
+      if (cached != null) {
+        _applyResult(cached, userAnswer, fromCache: true);
         return;
       }
     }
@@ -261,7 +281,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     try {
       // 流式接收 AI 批改内容，边接收边显示
       await for (final chunk in _sentenceService.evaluateStream(
-        sentence: _currentSentence!,
+        sentence: sentence,
         userAnswer: userAnswer,
         mode: widget.practiceMode,
         shuffledWords: widget.practiceMode == PracticeMode.beginner
@@ -287,20 +307,16 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       final data = jsonDecode(jsonStr) as Map<String, dynamic>;
       final result = AiSentenceResult.fromJson(data);
 
-      setState(() {
-        _lastResult = result;
-        _completedRecords.add(
-          PracticeRecord(
-            sentence: _currentSentence!,
-            userAnswer: userAnswer,
-            result: result,
-            mode: widget.practiceMode,
-          ),
-        );
-        _isEvaluating = false;
-        _phase = _PracticePhase.result;
-      });
-      _animController.forward(from: 0);
+      // 2. 写入缓存，供相同句子与相同回答复用（失败不影响本次结果）
+      await _sentenceService.storeCachedResult(
+        sentence: sentence,
+        userAnswer: userAnswer,
+        mode: widget.practiceMode,
+        result: result,
+      );
+      if (!mounted) return;
+
+      _applyResult(result, userAnswer, fromCache: false);
     } on AiServiceException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -332,6 +348,53 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
         SnackBar(content: Text('批改失败：$e'), backgroundColor: Colors.red),
       );
     }
+  }
+
+  // ===== 应用批改结果 =====
+  /// 展示批改结果并计入本次练习记录
+  ///
+  /// [fromCache] 为 true 表示结果来自本地缓存（未调用 AI），结果页会给出提示。
+  void _applyResult(
+    AiSentenceResult result,
+    String userAnswer, {
+    required bool fromCache,
+  }) {
+    setState(() {
+      _lastResult = result;
+      _fromCache = fromCache;
+      _completedRecords.add(
+        PracticeRecord(
+          sentence: _currentSentence!,
+          userAnswer: userAnswer,
+          result: result,
+          mode: widget.practiceMode,
+        ),
+      );
+      _isEvaluating = false;
+      _streamingText = '';
+      _phase = _PracticePhase.result;
+    });
+    _animController.forward(from: 0);
+  }
+
+  /// 忽略缓存重新批改当前题目（用于缓存结果不理想时强制走一次 AI）
+  Future<void> _regradeCurrent() async {
+    final sentence = _currentSentence;
+    final userAnswer = _currentAnswer;
+    if (sentence == null || userAnswer.isEmpty) return;
+
+    // 移除上一条记录：重新批改后会用新结果替换
+    if (_completedRecords.isNotEmpty) {
+      _completedRecords.removeLast();
+    }
+    // 删除该条缓存，确保重新组装后的结果被写入
+    await _sentenceService.removeCachedResult(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: widget.practiceMode,
+    );
+    if (!mounted) return;
+    _submitAnswer(ignoreCache: true);
   }
 
   // ===== 处理完成的一个句子（加入错题本 / 标记已练习） =====
@@ -380,6 +443,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       setState(() {
         _currentSentenceIndex = nextIndex;
         _lastResult = null;
+        _fromCache = false;
         _selectedWords.clear();
         _inputController.clear();
         _phase = _PracticePhase.answering;
@@ -736,6 +800,10 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
                     children: [
                       // 评分
                       _buildScoreBadge(theme, colorScheme, result.score),
+                      if (_fromCache) ...[
+                        const SizedBox(height: 12),
+                        _buildCacheBadge(theme, colorScheme),
+                      ],
                       const SizedBox(height: 16),
 
                       // 正确答案
@@ -917,6 +985,42 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
           ],
         ),
       ),
+    );
+  }
+
+  /// 构建缓存命中提示（含「重新批改」入口）
+  Widget _buildCacheBadge(ThemeData theme, ColorScheme colorScheme) {
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 4,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: colorScheme.tertiaryContainer.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.bolt, size: 14, color: colorScheme.tertiary),
+              const SizedBox(width: 4),
+              Text(
+                '命中本地缓存（未调用 AI）',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: colorScheme.onTertiaryContainer,
+                ),
+              ),
+            ],
+          ),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.refresh, size: 16),
+          label: const Text('重新批改'),
+          onPressed: _isEvaluating ? null : _regradeCurrent,
+        ),
+      ],
     );
   }
 

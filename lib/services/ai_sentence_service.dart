@@ -7,6 +7,7 @@ import '../services/ai_profile_service.dart';
 import '../services/ai_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
+import 'sentence_eval_cache_service.dart';
 
 /// AI 句子评测服务
 class AiSentenceService {
@@ -20,10 +21,15 @@ class AiSentenceService {
 
   final AiProfileService _profileService;
   final AiService _aiService;
+  final SentenceEvalCacheService _cacheService;
 
-  AiSentenceService({AiProfileService? profileService, AiService? aiService})
-    : _profileService = profileService ?? AiProfileService(),
-      _aiService = aiService ?? AiService();
+  AiSentenceService({
+    AiProfileService? profileService,
+    AiService? aiService,
+    SentenceEvalCacheService? cacheService,
+  }) : _profileService = profileService ?? AiProfileService(),
+       _aiService = aiService ?? AiService(),
+       _cacheService = cacheService ?? SentenceEvalCacheService.instance;
 
   // ===== 设置项（SharedPreferences 保留） =====
   Future<int> getSentenceLimit() async {
@@ -153,6 +159,62 @@ class AiSentenceService {
     await db.delete('wrong_sentences');
   }
 
+  // ===== 批改结果缓存（SQLite） =====
+  //
+  // 命中规则：相同句子（中文 + 英文）+ 相同用户回答 + 相同练习模式。
+  // 具体实现见 SentenceEvalCacheService。
+
+  /// 查询本地缓存的批改结果；未命中返回 null（调用方继续走 AI 批改）
+  Future<AiSentenceResult?> lookupCachedResult({
+    required Sentence sentence,
+    required String userAnswer,
+    required PracticeMode mode,
+  }) {
+    return _cacheService.lookup(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: mode,
+    );
+  }
+
+  /// 写入批改结果缓存（缓存关闭或写入失败时静默跳过）
+  Future<void> storeCachedResult({
+    required Sentence sentence,
+    required String userAnswer,
+    required PracticeMode mode,
+    required AiSentenceResult result,
+    String? profileName,
+    String? model,
+  }) {
+    // 未显式传入时，用已加载的默认配置补齐元信息（不触发额外 I/O）
+    if (profileName == null && model == null && _profileService.loaded) {
+      final profile = _profileService.defaultProfile;
+      profileName = profile?.name;
+      model = profile?.model;
+    }
+    return _cacheService.store(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: mode,
+      result: result,
+      profileName: profileName,
+      model: model,
+    );
+  }
+
+  /// 删除某条缓存（用于「重新批改」时强制走一次 AI）
+  Future<void> removeCachedResult({
+    required Sentence sentence,
+    required String userAnswer,
+    required PracticeMode mode,
+  }) {
+    return _cacheService.remove(
+      sentence: sentence,
+      userAnswer: userAnswer,
+      mode: mode,
+    );
+  }
+
   // ===== 内部方法 =====
 
   static WrongSentenceRecord _rowToWrongSentence(Map<String, dynamic> row) {
@@ -268,7 +330,18 @@ class AiSentenceService {
     required PracticeMode mode,
     List<String>? shuffledWords,
     CancelToken? cancelToken,
+    bool useCache = true,
   }) async {
+    // 先查缓存：相同句子 + 相同回答 + 相同模式时直接复用，不再调用 AI
+    if (useCache) {
+      final cached = await lookupCachedResult(
+        sentence: sentence,
+        userAnswer: userAnswer,
+        mode: mode,
+      );
+      if (cached != null) return cached;
+    }
+
     logInfo('AiSentenceService', '评测句子 mode=${mode.name}');
     // 获取默认配置
     await _profileService.load();
@@ -344,7 +417,17 @@ class AiSentenceService {
 
     try {
       final data = jsonDecode(jsonStr) as Map<String, dynamic>;
-      return AiSentenceResult.fromJson(data);
+      final result = AiSentenceResult.fromJson(data);
+      // 写入缓存，供相同句子与相同回答复用（失败不影响本次结果）
+      await storeCachedResult(
+        sentence: sentence,
+        userAnswer: userAnswer,
+        mode: mode,
+        result: result,
+        profileName: profile.name,
+        model: profile.model,
+      );
+      return result;
     } catch (e) {
       throw AiServiceException('AI 返回数据格式错误：$e');
     }
