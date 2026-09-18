@@ -37,6 +37,12 @@ class AiService {
       'stream': stream,
     };
 
+    // 流式请求显式要求服务端在最后一个分块返回 usage：
+    // OpenAI 默认不返回，缺少 usage 就无法记录用量 / 学习预估偏差。
+    if (stream && !profile.isAquamarina) {
+      body['stream_options'] = {'include_usage': true};
+    }
+
     // DeepSeek 思考模式：不支持 temperature、top_p 等参数
     if (profile.isDeepSeek && profile.enableThinking) {
       body['thinking'] = {'type': 'enabled'};
@@ -116,6 +122,7 @@ class AiService {
     required List<Map<String, String>> messages,
     AiProfile? profile,
     CancelToken? cancelToken,
+    void Function(AiUsageSnapshot usage)? onUsage,
   }) async {
     final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
@@ -136,7 +143,12 @@ class AiService {
       if (response.statusCode == 200) {
         final data = response.data as Map<String, dynamic>;
         // 记录用量（仅 OpenAI 兼容 / DeepSeek；Aquamarina 内部跳过）
-        _recordUsage(cfg, AiUsageRequestMode.chat, data['usage']);
+        _recordUsage(
+          cfg,
+          AiUsageRequestMode.chat,
+          data['usage'],
+          onUsage: onUsage,
+        );
         final choices = data['choices'] as List<dynamic>;
         if (choices.isNotEmpty) {
           final message = choices[0]['message'] as Map<String, dynamic>;
@@ -165,6 +177,7 @@ class AiService {
     AiProfile? profile,
     bool includeReasoningContent = true,
     CancelToken? cancelToken,
+    void Function(AiUsageSnapshot usage)? onUsage,
   }) {
     final cfg = profile ?? _currentProfile;
     if (cfg == null || cfg.apiKey.isEmpty) {
@@ -203,7 +216,12 @@ class AiService {
               if (line.isEmpty || line.startsWith(':')) continue;
 
               if (line == 'data: [DONE]') {
-                _recordUsage(cfg, AiUsageRequestMode.stream, usageMap);
+                _recordUsage(
+                  cfg,
+                  AiUsageRequestMode.stream,
+                  usageMap,
+                  onUsage: onUsage,
+                );
                 await controller.close();
                 return;
               }
@@ -243,7 +261,12 @@ class AiService {
           }
 
           // 流结束
-          _recordUsage(cfg, AiUsageRequestMode.stream, usageMap);
+          _recordUsage(
+            cfg,
+            AiUsageRequestMode.stream,
+            usageMap,
+            onUsage: onUsage,
+          );
           if (!controller.isClosed) {
             await controller.close();
           }
@@ -282,8 +305,9 @@ class AiService {
   void _recordUsage(
     AiProfile profile,
     AiUsageRequestMode requestMode,
-    dynamic usageData,
-  ) {
+    dynamic usageData, {
+    void Function(AiUsageSnapshot usage)? onUsage,
+  }) {
     if (profile.isAquamarina) return;
     try {
       int numToInt(Map<dynamic, dynamic> map, String key) {
@@ -331,6 +355,17 @@ class AiService {
         }
 
         if (total <= 0) total = prompt + completion;
+
+        // 把解析出的真实用量回传给上层（预估矫正等），无 usage 时不回调
+        onUsage?.call(
+          AiUsageSnapshot(
+            promptTokens: prompt,
+            cacheHitTokens: cacheHit,
+            cacheMissTokens: cacheMiss,
+            completionTokens: completion,
+            totalTokens: total,
+          ),
+        );
       } else {
         // 无 usage：仍记录一次请求（tokens 记 0），保证请求数准确
       }

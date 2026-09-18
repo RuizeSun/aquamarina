@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aquamarina/models/ai_profile.dart';
 import 'package:aquamarina/models/sentence_difficulty.dart';
 import 'package:aquamarina/pages/vocabulary/ai_sentence_set_generate_page.dart';
+import 'package:aquamarina/services/ai_estimate_calibration_service.dart';
 import 'package:aquamarina/services/ai_profile_service.dart';
 import 'package:aquamarina/services/ai_sentence_generate_service.dart';
 import 'package:dio/dio.dart';
@@ -22,9 +23,15 @@ class _FakeProfileService extends AiProfileService {
   AiProfile? get defaultProfile => profile;
 }
 
-/// 只替换词典查询（单测里没有词典资源），规模推导 / 预估 / 提示词全部走真实实现
+/// 只替换词典查询（单测里没有词典资源），规模推导 / 预估 / 提示词全部走真实实现。
+///
+/// 注入空的预估矫正样本，避免单测触碰数据库 / 平台通道。
 class _FakeGenerator extends AiSentenceGenerator {
-  _FakeGenerator({super.profileService});
+  _FakeGenerator({AiProfileService? profileService})
+    : super(
+        profileService: profileService,
+        calibrationService: AiEstimateCalibrationService.withSamples(const []),
+      );
 
   @override
   Future<List<WordPromptEntry>> loadWordEntries(List<String> words) async =>
@@ -34,6 +41,7 @@ class _FakeGenerator extends AiSentenceGenerator {
 /// 用受控的 Completer 模拟「AI 正在流式返回」，便于断言生成中的实时反馈
 class _StreamingFakeGenerator extends _FakeGenerator {
   _StreamingFakeGenerator({super.profileService});
+  // 继承空样本矫正服务，无需额外处理
 
   final Completer<void> gate = Completer<void>();
   final List<GeneratedSentence> streamed = [];
@@ -95,7 +103,10 @@ AiProfile _openAiProfile() => const AiProfile(
   ),
 );
 
-Widget _wrap(AiProfile profile, {List<String> words = const ['apple', 'banana']}) {
+Widget _wrap(
+  AiProfile profile, {
+  List<String> words = const ['apple', 'banana'],
+}) {
   final service = _FakeProfileService(profile);
   return MaterialApp(
     home: AiSentenceSetGeneratePage(

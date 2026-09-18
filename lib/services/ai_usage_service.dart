@@ -13,6 +13,24 @@ enum AiUsageRequestMode {
   };
 }
 
+/// 一次请求解析后的 token 用量快照（供「预估矫正」等即时消费场景使用，
+/// 避免调用方再去查询数据库）。
+class AiUsageSnapshot {
+  final int promptTokens;
+  final int cacheHitTokens;
+  final int cacheMissTokens;
+  final int completionTokens;
+  final int totalTokens;
+
+  const AiUsageSnapshot({
+    required this.promptTokens,
+    required this.cacheHitTokens,
+    required this.cacheMissTokens,
+    required this.completionTokens,
+    required this.totalTokens,
+  });
+}
+
 /// 单条 AI 用量请求记录
 class AiUsageRecord {
   final int id;
@@ -82,7 +100,8 @@ class AiUsageRecord {
     int asInt(String key) => (row[key] as num?)?.toInt() ?? 0;
     return AiUsageRecord(
       id: asInt('id'),
-      createdAt: DateTime.tryParse(row['created_at'] as String? ?? '') ??
+      createdAt:
+          DateTime.tryParse(row['created_at'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
       profileId: row['profile_id'] as String?,
       profileName: row['profile_name'] as String? ?? '未知配置',
@@ -196,7 +215,6 @@ class AiUsageService {
     }
   }
 
-
   /// 计算一次请求的费用（按该配置的价格快照）。
   ///
   /// 公开为静态方法，供「生成前的消耗预估」等场景复用，
@@ -242,8 +260,7 @@ class AiUsageService {
       final db = await DatabaseService.database;
       final where = from != null ? 'created_at >= ?' : null;
       final args = from != null ? [from.toIso8601String()] : <Object?>[];
-      final result = await db.rawQuery(
-        '''
+      final result = await db.rawQuery('''
         SELECT
           COUNT(*) AS requests,
           COALESCE(SUM(prompt_tokens), 0) AS prompt,
@@ -254,9 +271,7 @@ class AiUsageService {
           COALESCE(SUM(cost), 0) AS cost
         FROM $table
         ${where != null ? 'WHERE $where' : ''}
-        ''',
-        args,
-      );
+        ''', args);
       final row = result.isNotEmpty ? result.first : null;
       int v(String k) => (row?[k] as num?)?.toInt() ?? 0;
       return AiUsageSummary(
@@ -349,4 +364,3 @@ class AiUsageService {
     return '$sign$symbol$result';
   }
 }
-

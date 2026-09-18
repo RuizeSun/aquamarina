@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../models/ai_profile.dart';
@@ -132,6 +134,9 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         _loading = false;
       });
       _recompute();
+      // 历史矫正样本在后台加载，完成后刷新预估；
+      // 不阻塞首屏，加载失败时退化为原始经验估算。
+      unawaited(_loadCalibrationSamples());
       await _loadBalance(profile);
     } on AiSentenceGenerateException catch (e) {
       if (!mounted) return;
@@ -140,6 +145,13 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         _loading = false;
       });
     }
+  }
+
+  /// 后台加载预估矫正样本，完成后刷新预估明细
+  Future<void> _loadCalibrationSamples() async {
+    await _generator.calibrationService.load();
+    if (!mounted) return;
+    _recompute();
   }
 
   Future<void> _loadBalance(AiProfile profile) async {
@@ -165,8 +177,7 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
     }
   }
 
-  String _defaultSetName() =>
-      '${widget.bookTitle} · ${_difficulty.label}句式';
+  String _defaultSetName() => '${widget.bookTitle} · ${_difficulty.label}句式';
 
   String _defaultDescription() {
     final count = _entries.isEmpty ? widget.words.length : _entries.length;
@@ -210,7 +221,9 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
     if (profile == null || estimate == null || _generating) return;
 
     if (_tooManyWords) {
-      _showSnack('单次最多生成 ${AiSentenceGenerator.maxWordsPerGeneration} 个单词的句式集，请减少选择');
+      _showSnack(
+        '单次最多生成 ${AiSentenceGenerator.maxWordsPerGeneration} 个单词的句式集，请减少选择',
+      );
       return;
     }
 
@@ -387,9 +400,9 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
   }
 
   Future<void> _openSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const SettingsPage()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const SettingsPage()));
     if (!mounted) return;
     // 从设置页返回后重新解析配置（用户可能刚新建/切换了默认配置）
     setState(() {
@@ -456,9 +469,7 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
             return ChoiceChip(
               label: Text(d.displayName),
               selected: selected,
-              onSelected: _generating
-                  ? null
-                  : (_) => _onDifficultyChanged(d),
+              onSelected: _generating ? null : (_) => _onDifficultyChanged(d),
             );
           }).toList(),
         ),
@@ -496,7 +507,7 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
               colorScheme,
               Icons.error_outline,
               '单次最多生成 ${AiSentenceGenerator.maxWordsPerGeneration} 个单词的句式集，'
-                  '当前已选 ${widget.words.length} 个，请返回减少选择。',
+              '当前已选 ${widget.words.length} 个，请返回减少选择。',
               color: colorScheme.error,
             ),
           ),
@@ -613,7 +624,8 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
     );
   }
 
-  Widget _buildBlockedState(ThemeData theme, ColorScheme colorScheme) {    return Center(
+  Widget _buildBlockedState(ThemeData theme, ColorScheme colorScheme) {
+    return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
@@ -659,7 +671,11 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
           children: [
             Row(
               children: [
-                Icon(Icons.menu_book_outlined, size: 18, color: colorScheme.primary),
+                Icon(
+                  Icons.menu_book_outlined,
+                  size: 18,
+                  color: colorScheme.primary,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   '已选 ${words.length} 个单词',
@@ -723,7 +739,9 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
       child: ListTile(
         leading: Icon(Icons.memory, color: colorScheme.primary),
         title: Text('${profile.name} · ${profile.model}'),
-        subtitle: Text('$thinkingText · $pricingText · max_tokens ${profile.maxTokens}'),
+        subtitle: Text(
+          '$thinkingText · $pricingText · max_tokens ${profile.maxTokens}',
+        ),
       ),
     );
   }
@@ -779,12 +797,41 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         ),
       );
     }
+    if (estimate.calibrationApplied) {
+      warnings.add(
+        _warningBox(
+          theme,
+          colorScheme,
+          Icons.auto_graph_outlined,
+          '已根据 ${estimate.calibrationSamples} 条相近历史请求'
+          '（同模型、同温度、思考模式与强度、相近长度与难度）自动校正预估：'
+          '输入 ×${estimate.calibrationPromptFactor.toStringAsFixed(2)}、'
+          '输出 ×${estimate.calibrationCompletionFactor.toStringAsFixed(2)}。'
+          '使用次数越多，样本越充分，预估越接近实际用量。',
+        ),
+      );
+    } else if (estimate.calibrationHasSamples) {
+      warnings.add(
+        _warningBox(
+          theme,
+          colorScheme,
+          Icons.auto_graph_outlined,
+          '已收集到 ${estimate.calibrationSamples} 条相近历史请求，'
+          '但样本权重尚不足以校正（避免少量样本带偏）。继续使用会自动变准。',
+        ),
+      );
+    }
     final balance = _balance;
     final cost = estimate.cost;
     if (profile.isDeepSeek) {
       if (_balanceError != null) {
         warnings.add(
-          _warningBox(theme, colorScheme, Icons.account_balance_wallet_outlined, _balanceError!),
+          _warningBox(
+            theme,
+            colorScheme,
+            Icons.account_balance_wallet_outlined,
+            _balanceError!,
+          ),
         );
       } else if (balance != null && cost != null && balance < cost) {
         warnings.add(
@@ -820,7 +867,11 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
           children: [
             Row(
               children: [
-                Icon(Icons.calculate_outlined, size: 18, color: colorScheme.primary),
+                Icon(
+                  Icons.calculate_outlined,
+                  size: 18,
+                  color: colorScheme.primary,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   '消耗预估',
@@ -856,8 +907,14 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
   }) {
     final rows = <Widget>[
       _infoRow('难度', '${_difficulty.label}（CEFR ${_difficulty.cefr}）'),
-      _infoRow('规模', '${widget.words.length} 词 × ${estimate.sentencesPerWord} 句 = ${estimate.totalSentences} 句'),
-      _infoRow('请求次数', '${estimate.requestCount} 次（每次最多 ${estimate.wordsPerRequest} 词）'),
+      _infoRow(
+        '规模',
+        '${widget.words.length} 词 × ${estimate.sentencesPerWord} 句 = ${estimate.totalSentences} 句',
+      ),
+      _infoRow(
+        '请求次数',
+        '${estimate.requestCount} 次（每次最多 ${estimate.wordsPerRequest} 词）',
+      ),
       _infoRow(
         '输入 tokens',
         estimate.cacheDiscountApplied
@@ -868,7 +925,7 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
       _infoRow(
         '输出 tokens',
         '约 ${_group(estimate.completionTokens)}'
-        '${estimate.thinkingEnabled ? '（含思考开销）' : ''}',
+            '${estimate.thinkingEnabled ? '（含思考开销）' : ''}',
       ),
       _infoRow('合计 tokens', '约 ${_group(estimate.totalTokens)}'),
       _infoRow(
@@ -876,6 +933,7 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         estimate.formatCost() ?? '无法预估（未配置价格）',
         emphasize: estimate.pricingConfigured,
       ),
+      _infoRow('历史矫正', _calibrationSummary(estimate)),
     ];
     if (estimate.isPerRequest && estimate.pricingConfigured) {
       rows.add(_infoRow('计费方式', '按请求固定价 × ${estimate.requestCount} 次'));
@@ -890,7 +948,12 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
       );
     }
     if (_profile?.isDeepSeek ?? false) {
-      rows.add(_infoRow('当前余额', _balance != null ? '¥${_balance!.toStringAsFixed(2)}' : '—'));
+      rows.add(
+        _infoRow(
+          '当前余额',
+          _balance != null ? '¥${_balance!.toStringAsFixed(2)}' : '—',
+        ),
+      );
       if (_balance != null) {
         final cost = estimate.cost;
         final remaining = cost == null ? _balance! : _balance! - cost;
@@ -967,7 +1030,9 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
-        border: color != null ? Border.all(color: effective.withValues(alpha: 0.5)) : null,
+        border: color != null
+            ? Border.all(color: effective.withValues(alpha: 0.5))
+            : null,
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -985,12 +1050,24 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
     );
   }
 
+  /// 历史矫正的一行摘要（预估明细用）
+  String _calibrationSummary(SentenceGenerationEstimate estimate) {
+    if (estimate.calibrationApplied) {
+      return '已校正（输入 ×${estimate.calibrationPromptFactor.toStringAsFixed(2)}'
+          ' / 输出 ×${estimate.calibrationCompletionFactor.toStringAsFixed(2)}'
+          '，${estimate.calibrationSamples} 条相近样本）';
+    }
+    if (estimate.calibrationHasSamples) {
+      return '样本权重不足，暂不校正（${estimate.calibrationSamples} 条）';
+    }
+    return '暂无相近历史，将随使用自动学习';
+  }
+
   /// 千位分隔（预估值为量级展示，无需按币种格式设置）
-  static String _group(int value) =>
-      AiUsageService.formatMoney(
-        value.toDouble(),
-        symbol: '',
-        decimals: 0,
-        grouping: true,
-      );
+  static String _group(int value) => AiUsageService.formatMoney(
+    value.toDouble(),
+    symbol: '',
+    decimals: 0,
+    grouping: true,
+  );
 }

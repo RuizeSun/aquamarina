@@ -61,6 +61,34 @@ class DatabaseService {
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_wrong_sentences_sentence_unique '
       'ON wrong_sentences(sentence_id)';
 
+  /// 「AI 生成句式集」预估矫正样本表（v11）。
+  ///
+  /// 每次实际请求结束后记录「预估 vs 实际」的 token 用量，以及影响用量的上下文
+  /// （模型 / 温度 / 思考模式 / 思考强度 / 难度 / 每词句数 / 本批句子数）。
+  /// 下次预估时按这些维度加权统计历史偏差，对预估做矫正。
+  static const String aiEstimateSamplesTableSql = '''
+          CREATE TABLE IF NOT EXISTS ai_estimate_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            model TEXT NOT NULL,
+            temperature REAL,
+            enable_thinking INTEGER NOT NULL DEFAULT 0,
+            reasoning_effort TEXT,
+            difficulty TEXT,
+            sentences_per_word INTEGER NOT NULL DEFAULT 1,
+            sentence_count INTEGER NOT NULL DEFAULT 0,
+            estimated_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            estimated_completion_tokens INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0
+          )
+        ''';
+
+  /// 矫正样本按「模型 + 创建时间」查询的索引（按模型筛选近期样本时走索引）
+  static const String aiEstimateSamplesIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_ai_estimate_samples_model_time '
+      'ON ai_estimate_samples(model, created_at)';
+
   /// 初始化 Future，防止并发重复初始化
   /// 初始化失败时重置，允许后续调用重试
   static Future<Database>? _dbInitFuture;
@@ -97,7 +125,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 10,
+      version: 11,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -296,6 +324,10 @@ class DatabaseService {
         await db.execute(
           'CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage_records(created_at)',
         );
+
+        // ── AI 生成句式集「消耗预估」矫正样本 ──
+        await db.execute(aiEstimateSamplesTableSql);
+        await db.execute(aiEstimateSamplesIndexSql);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -422,6 +454,11 @@ class DatabaseService {
         // 9 → 10：错题本同一句子的重复记录合并为一条
         if (oldVersion < 10) {
           await migrateWrongSentencesToV10(db);
+        }
+        // 10 → 11：新增 ai_estimate_samples 表（AI 生成句式集的预估矫正样本）
+        if (oldVersion < 11) {
+          await db.execute(aiEstimateSamplesTableSql);
+          await db.execute(aiEstimateSamplesIndexSql);
         }
       },
     );

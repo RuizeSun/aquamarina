@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 
 import '../models/ai_profile.dart';
 import '../models/sentence_difficulty.dart';
 import '../models/word_entry.dart';
+import 'ai_estimate_calibration_service.dart';
 import 'ai_profile_service.dart';
 import 'ai_service.dart';
 import 'ai_token_estimator.dart';
@@ -84,6 +87,23 @@ class SentenceGenerationEstimate {
   final int currencyDecimals;
   final bool currencyGrouping;
 
+  /// 未矫正的原始输入 / 输出 token 估算（展示与诊断用）
+  final int rawPromptTokens;
+  final int rawCompletionTokens;
+
+  /// 是否应用了历史样本矫正（样本不足时保持原经验公式）
+  final bool calibrationApplied;
+
+  /// 参与矫正的相近历史请求条数（0 表示样本不足）
+  final int calibrationSamples;
+
+  /// 矫正置信度 0~1：样本越多越高，矫正越接近真实偏差
+  final double calibrationConfidence;
+
+  /// 实际采用的输入 / 输出矫正系数
+  final double calibrationPromptFactor;
+  final double calibrationCompletionFactor;
+
   const SentenceGenerationEstimate({
     required this.requestCount,
     required this.wordsPerRequest,
@@ -100,7 +120,17 @@ class SentenceGenerationEstimate {
     this.currencySymbol = '¥',
     this.currencyDecimals = 2,
     this.currencyGrouping = true,
+    this.rawPromptTokens = 0,
+    this.rawCompletionTokens = 0,
+    this.calibrationApplied = false,
+    this.calibrationSamples = 0,
+    this.calibrationConfidence = 0,
+    this.calibrationPromptFactor = 1,
+    this.calibrationCompletionFactor = 1,
   });
+
+  /// 是否已有相近历史样本（可能因权重不足而未真正矫正）
+  bool get calibrationHasSamples => calibrationSamples > 0;
 
   int get totalTokens => promptTokens + completionTokens;
 
@@ -146,12 +176,21 @@ class SentenceGenerationResult {
 /// Aquamarina 官方配置走专用端点、无 usage 返回，无法做 token 与费用预估，
 /// 因此 [resolveProfile] 会直接拒绝该类型的配置。
 class AiSentenceGenerator {
-  AiSentenceGenerator({AiProfileService? profileService, AiService? aiService})
-    : _profileService = profileService ?? AiProfileService(),
-      _aiService = aiService ?? AiService();
+  AiSentenceGenerator({
+    AiProfileService? profileService,
+    AiService? aiService,
+    AiEstimateCalibrationService? calibrationService,
+  }) : _profileService = profileService ?? AiProfileService(),
+       _aiService = aiService ?? AiService(),
+       calibrationService =
+           calibrationService ?? AiEstimateCalibrationService.instance;
 
   final AiProfileService _profileService;
   final AiService _aiService;
+
+  /// 消耗预估矫正服务：生成结束时回写「预估 / 实际」样本，
+  /// 预估时读取近期同维度样本修正经验公式的系统性偏差。
+  final AiEstimateCalibrationService calibrationService;
 
   /// 单次请求最多要求 AI 返回的句子数（避免长回复被 max_tokens 截断）。
   static const int maxSentencesPerRequest = 12;
@@ -312,13 +351,40 @@ class AiSentenceGenerator {
       );
     }
 
+    // 矫正前的经验公式估算值
+    final rawPromptTokens = promptTokens;
+    final rawCompletionTokens = completionTokens;
+
     final pricing = profile.pricing;
-    final cacheHitTokens = estimateCacheHitTokens(
+    var cacheHitTokens = estimateCacheHitTokens(
       profile: profile,
       batches: batches.length,
       difficulty: difficulty,
       sentencesPerWord: perWord,
     );
+    final rawCacheHitTokens = cacheHitTokens;
+
+    // 多维度历史矫正：同模型是硬门槛，温度 / 思考模式 / effort / 难度 /
+    // 句子长度越接近权重越高，越近期权重越高；样本越多矫正越接近真实偏差。
+    final thinkingEnabled = profile.isDeepSeek && profile.enableThinking;
+    final calibration = calibrationService.calibrationFor(
+      AiEstimateContext(
+        model: profile.model,
+        temperature: profile.temperature,
+        thinking: thinkingEnabled,
+        reasoningEffort: profile.reasoningEffort,
+        difficulty: difficulty,
+        // 以典型满批的句子数作为「相似长度」维度
+        sentenceCount: entries.isEmpty
+            ? 0
+            : math.min(entries.length, wordsPerRequest) * perWord,
+      ),
+    );
+    if (calibration.applied) {
+      promptTokens = calibration.correctPrompt(rawPromptTokens);
+      completionTokens = calibration.correctCompletion(rawCompletionTokens);
+      cacheHitTokens = calibration.correctPrompt(rawCacheHitTokens);
+    }
 
     double? cost;
     if (pricing != null) {
@@ -345,8 +411,8 @@ class AiSentenceGenerator {
       promptTokens: promptTokens,
       cacheHitTokens: cacheHitTokens,
       completionTokens: completionTokens,
-      thinkingEnabled: profile.isDeepSeek && profile.enableThinking,
-      thinkingMultiplier: profile.isDeepSeek && profile.enableThinking
+      thinkingEnabled: thinkingEnabled,
+      thinkingMultiplier: thinkingEnabled
           ? thinkingOutputMultiplier(profile.reasoningEffort)
           : null,
       cost: cost,
@@ -355,6 +421,13 @@ class AiSentenceGenerator {
       currencySymbol: pricing?.currencySymbol ?? '¥',
       currencyDecimals: pricing?.currencyDecimals ?? 2,
       currencyGrouping: pricing?.currencyGrouping ?? true,
+      rawPromptTokens: rawPromptTokens,
+      rawCompletionTokens: rawCompletionTokens,
+      calibrationApplied: calibration.applied,
+      calibrationSamples: calibration.matchedSamples,
+      calibrationConfidence: calibration.confidence,
+      calibrationPromptFactor: calibration.promptFactor,
+      calibrationCompletionFactor: calibration.completionFactor,
     );
   }
 
@@ -456,14 +529,27 @@ class AiSentenceGenerator {
     var failed = 0;
     var lastError = '';
 
+    final thinkingEnabled = profile.isDeepSeek && profile.enableThinking;
+
     onProgress?.call(0, batches.length);
     for (var i = 0; i < batches.length; i++) {
       if (cancelToken?.isCancelled ?? false) break;
+      final batch = batches[i];
       final messages = buildMessages(
-        entries: batches[i],
+        entries: batch,
         difficulty: difficulty,
         sentencesPerWord: perWord,
       );
+
+      // 记录本批「生成前的预估」，请求结束后与服务端返回的实际用量配对，
+      // 作为后续预估矫正的样本。
+      final estimatedPromptTokens = AiTokenEstimator.estimateMessages(messages);
+      final estimatedCompletionTokens = completionTokensFor(
+        sentenceCount: batch.length * perWord,
+        difficulty: difficulty,
+        profile: profile,
+      );
+      AiUsageSnapshot? usage;
 
       // 流式场景下边收边解析，已完整的句子立即回调给界面；
       // 同时保留这些句子，即使本批后续中断也不浪费已消耗的 token。
@@ -479,6 +565,7 @@ class AiSentenceGenerator {
             profile: profile,
             includeReasoningContent: false,
             cancelToken: cancelToken,
+            onUsage: (value) => usage = value,
           )) {
             raw.write(chunk);
             parser.addChunk(chunk);
@@ -500,6 +587,7 @@ class AiSentenceGenerator {
             messages: messages,
             profile: profile,
             cancelToken: cancelToken,
+            onUsage: (value) => usage = value,
           );
           final parsed = parseGeneratedSentences(response);
           for (final sentence in parsed) {
@@ -519,6 +607,26 @@ class AiSentenceGenerator {
         failed++;
         lastError = 'AI 返回内容中没有可用句子';
         logError('AiSentenceGenerator', '第 ${i + 1} 批未解析出句子');
+      } else {
+        // 成功批次且拿到真实 usage 时回写矫正样本（异步，不阻塞生成）
+        final actualUsage = usage;
+        if (actualUsage != null) {
+          unawaited(
+            calibrationService.recordSample(
+              model: profile.model,
+              temperature: profile.temperature,
+              thinking: thinkingEnabled,
+              reasoningEffort: profile.reasoningEffort,
+              difficulty: difficulty,
+              sentencesPerWord: perWord,
+              sentenceCount: batch.length * perWord,
+              estimatedPromptTokens: estimatedPromptTokens,
+              estimatedCompletionTokens: estimatedCompletionTokens,
+              promptTokens: actualUsage.promptTokens,
+              completionTokens: actualUsage.completionTokens,
+            ),
+          );
+        }
       }
       generated.addAll(batchSentences);
       onProgress?.call(i + 1, batches.length);
@@ -551,7 +659,10 @@ class AiSentenceGenerator {
     required int sentencesPerWord,
   }) {
     return [
-      {'role': 'system', 'content': buildSystemPrompt(difficulty, sentencesPerWord)},
+      {
+        'role': 'system',
+        'content': buildSystemPrompt(difficulty, sentencesPerWord),
+      },
       {'role': 'user', 'content': buildUserPrompt(entries, sentencesPerWord)},
     ];
   }
