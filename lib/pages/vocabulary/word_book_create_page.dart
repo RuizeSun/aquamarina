@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
 import '../../services/dictionary_service.dart';
 import '../../services/word_book_service.dart';
+import '../ai_sentence_set_list_page.dart';
 import '../word_detail_page.dart';
 import 'ai_sentence_set_generate_page.dart';
 import 'import_words_dialog.dart';
@@ -358,6 +359,12 @@ class _WordBookCreatePageState extends State<WordBookCreatePage> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+
+    // 生成完成后直接进入句式集管理界面，方便查看 / 编辑刚生成的句式集
+    if (!mounted) return;
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const SentenceSetListPage()));
   }
 
   /// 多选模式的底部操作条
