@@ -406,6 +406,14 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
       english: record.sentence.english,
     );
 
+    // 句式集练习：不论对错都计入「已练习」（练习进度按「练过即算」展示）
+    if (!widget.isWrongBookPractice) {
+      await _sentenceService.markSentenceAttempted(
+        record.sentence.setId,
+        record.sentence.id ?? '',
+      );
+    }
+
     if (record.result.score <= threshold) {
       // 得分 ≤ 阈值：加入错题本（同一句子已存在时自动合并）
       await _sentenceService.addWrongSentence(

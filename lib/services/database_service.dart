@@ -89,6 +89,24 @@ class DatabaseService {
       'CREATE INDEX IF NOT EXISTS idx_ai_estimate_samples_model_time '
       'ON ai_estimate_samples(model, created_at)';
 
+  /// 已练习（练过即计入，不论对错）句子表的建表语句（v12 新增）。
+  ///
+  /// 与 `practiced_sentence_ids` 的区别：后者只记录「得分超过阈值」的句子，
+  /// 用于「不重复练习」跳过；本表记录所有练习过的句子，用于展示练习进度。
+  static const String attemptedSentenceIdsTableSql = '''
+          CREATE TABLE IF NOT EXISTS attempted_sentence_ids (
+            set_id TEXT NOT NULL,
+            sentence_id TEXT NOT NULL,
+            PRIMARY KEY (set_id, sentence_id)
+          )
+        ''';
+
+  /// v11 → v12 迁移用的回填语句：把历史上「已答对」的句子补进已练习表
+  /// （答对必然练过）。幂等，可安全重复执行。
+  static const String attemptedSentenceIdsBackfillSql =
+      'INSERT OR IGNORE INTO attempted_sentence_ids (set_id, sentence_id) '
+      'SELECT set_id, sentence_id FROM practiced_sentence_ids';
+
   /// 初始化 Future，防止并发重复初始化
   /// 初始化失败时重置，允许后续调用重试
   static Future<Database>? _dbInitFuture;
@@ -125,7 +143,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 11,
+      version: 12,
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
@@ -210,6 +228,9 @@ class DatabaseService {
             PRIMARY KEY (set_id, sentence_id)
           )
         ''');
+
+        // 已练习（练过即计入）句子：用于展示练习进度
+        await db.execute(attemptedSentenceIdsTableSql);
 
         // 句型练习批改结果缓存（相同句子 + 相同回答 + 相同模式可复用）
         await db.execute(sentenceEvalCacheTableSql);
@@ -459,6 +480,12 @@ class DatabaseService {
         if (oldVersion < 11) {
           await db.execute(aiEstimateSamplesTableSql);
           await db.execute(aiEstimateSamplesIndexSql);
+        }
+        // 11 → 12：新增 attempted_sentence_ids 表（练习进度：练过即计入），
+        // 并把历史上「已答对」的句子回填进去（答对必然练过）。
+        if (oldVersion < 12) {
+          await db.execute(attemptedSentenceIdsTableSql);
+          await db.execute(attemptedSentenceIdsBackfillSql);
         }
       },
     );

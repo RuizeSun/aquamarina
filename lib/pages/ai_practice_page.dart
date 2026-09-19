@@ -8,6 +8,8 @@ import '../services/ai_profile_service.dart';
 import 'ai_sentence_set_list_page.dart';
 import 'ai_practice_session_page.dart';
 import 'wrong_sentence_book_page.dart';
+import 'sentence_overview_page.dart';
+import 'shared/dashboard_widgets.dart';
 
 /// 全局路由观察者，用于检测子页面弹出后刷新数据
 final RouteObserver<ModalRoute<void>> routeObserver =
@@ -40,11 +42,12 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
   int _wrongSentenceCount = 0;
 
   // 进度状态
+  /// 已练习过的句子数（练过即计入，不论对错）
+  int _attemptedCount = 0;
+
+  /// 已答对（得分超过阈值）的句子数
   int _practicedCount = 0;
   int _totalCount = 0;
-
-  // 不重复练习开关
-  bool _skipRepeated = false;
 
   @override
   void initState() {
@@ -128,7 +131,6 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
     _extraWordCount = await _sentenceService.getExtraWordCount();
     _sentenceLimit = await _sentenceService.getSentenceLimit();
     _practiceMode = await _sentenceService.getPracticeMode();
-    _skipRepeated = await _sentenceService.getSkipRepeated();
   }
 
   Future<void> _refreshProgress() async {
@@ -144,18 +146,20 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
     // 获取错题数量
     final wrongCount = await _sentenceService.getWrongSentenceCount();
     // 获取当前句式集进度
+    int attempted = 0;
     int practiced = 0;
     int total = 0;
     if (_selectedSet != null) {
+      final setId = _selectedSet!.id!;
       total = _selectedSet!.sentenceCount;
-      final practicedIds = await _sentenceService.getPracticedSentenceIds(
-        _selectedSet!.id!,
-      );
-      practiced = practicedIds.length;
+      // 进度按「练过即算」，已答对数单独统计（「不重复练习」的跳过依据）
+      attempted = (await _sentenceService.getAttemptedSentenceIds(setId)).length;
+      practiced = (await _sentenceService.getPracticedSentenceIds(setId)).length;
     }
     if (mounted) {
       setState(() {
         _wrongSentenceCount = wrongCount;
+        _attemptedCount = attempted;
         _practicedCount = practiced;
         _totalCount = total;
       });
@@ -365,233 +369,131 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
     }
 
     if (_selectedSet == null) {
-      return _buildNoSetState(theme, colorScheme);
+      return _buildNoSetState();
     }
 
     return _buildDashboard(theme, colorScheme);
   }
 
-  Widget _buildNoSetState(ThemeData theme, ColorScheme colorScheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.format_quote_rounded,
-              size: 80,
-              color: colorScheme.primary.withValues(alpha: 0.3),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '还没有句型集',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '请先创建或从在线资源库中添加一个句型集',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _openSetSelector,
-              icon: const Icon(Icons.add),
-              label: const Text('添加句型集'),
-            ),
-          ],
-        ),
-      ),
+  Widget _buildNoSetState() {
+    return DashboardEmptyState(
+      icon: Icons.format_quote_rounded,
+      title: '还没有句式集',
+      message: '请先创建或从在线资源库中添加一个句式集',
+      actionIcon: Icons.add,
+      actionLabel: '添加句式集',
+      onAction: _openSetSelector,
     );
   }
 
   // ===== 仪表盘 =====
   Widget _buildDashboard(ThemeData theme, ColorScheme colorScheme) {
     final modeLabel = _practiceMode == PracticeMode.beginner ? '入门版' : '高阶版';
+    final total = _totalCount;
+    final attempted = _attemptedCount;
+    final practiced = _practicedCount;
+    final progress = total > 0 ? attempted / total : 0.0;
+    final hasWrong = _wrongSentenceCount > 0;
 
-    return SafeArea(
+    return RefreshIndicator(
+      onRefresh: _refreshAll,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: DashboardMetrics.pagePadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ---- 句式集区域 ----
-            Text('句式集', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Card(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: _openSetSelector,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: colorScheme.secondaryContainer,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          Icons.format_quote,
-                          color: colorScheme.onSecondaryContainer,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _selectedSet?.name ?? '请选择句式集',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (_selectedSet != null)
-                              Text(
-                                '${_selectedSet!.sentenceCount} 句 · $modeLabel',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right),
-                    ],
-                  ),
-                ),
-              ),
+            // ---- 当前句式集 ----
+            DashboardSelectorCard(
+              icon: Icons.format_quote,
+              iconBackgroundColor: colorScheme.secondaryContainer,
+              iconForegroundColor: colorScheme.onSecondaryContainer,
+              title: _selectedSet?.name ?? '请选择句式集',
+              subtitle: _selectedSet == null
+                  ? null
+                  : '${_selectedSet!.sentenceCount} 句 · $modeLabel',
+              switchTooltip: '切换句式集',
+              onTap: _openSetSelector,
             ),
+            DashboardMetrics.sectionSpacer,
 
-            // 句式集练习进度（仅不重复练习开启时显示）
-            if (_selectedSet != null && _totalCount > 0 && _skipRepeated) ...[
-              const SizedBox(height: 12),
-              _buildProgressRow(
-                theme: theme,
-                colorScheme: colorScheme,
-                icon: Icons.menu_book_rounded,
-                label: '句式集练习',
-                current: _practicedCount,
-                total: _totalCount,
-              ),
-            ],
-
-            const SizedBox(height: 20),
-
-            // ---- 错题本区域 ----
-            Row(
+            // ---- 句型总览 ----
+            DashboardButtonRow(
               children: [
-                Icon(Icons.error_outline, color: colorScheme.error, size: 20),
-                const SizedBox(width: 6),
-                Text('错题本', style: theme.textTheme.titleMedium),
+                DashboardEntryButton(
+                  icon: Icons.format_list_bulleted,
+                  label: '句型总览',
+                  onPressed: _selectedSet == null
+                      ? null
+                      : _openSentenceOverview,
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-            Card(
-              color: colorScheme.errorContainer.withValues(alpha: 0.3),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: _openWrongBook,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: colorScheme.error.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          Icons.format_list_numbered,
-                          color: colorScheme.error,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '错题本',
-                              style: theme.textTheme.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              _wrongSentenceCount > 0
-                                  ? '$_wrongSentenceCount 道错题待练习'
-                                  : '暂无错题',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Icon(Icons.chevron_right, size: 20),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+            DashboardMetrics.sectionSpacer,
 
-            const SizedBox(height: 12),
+            // ---- 句式集练习进度 ----
+            if (_selectedSet != null && total > 0) ...[
+              DashboardProgressCard(
+                icon: Icons.menu_book_rounded,
+                title: '练习进度',
+                valueText: '$attempted / $total',
+                progress: progress,
+              ),
+              DashboardMetrics.sectionSpacer,
+            ],
 
-            // ---- 两个练习按钮 ----
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: FilledButton.icon(
-                onPressed: _selectedSet != null
-                    ? () => _startPractice(isWrongBook: false)
-                    : null,
-                icon: const Icon(Icons.play_arrow_rounded),
-                label: const Text('句式集练习', style: TextStyle(fontSize: 18)),
-                style: FilledButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+            // ---- 练习概览 ----
+            const DashboardSectionTitle('练习概览'),
+            DashboardMetrics.itemSpacer,
+            Row(
+              children: [
+                Expanded(
+                  child: DashboardStatCard(
+                    icon: hasWrong ? Icons.error_outline : Icons.check_circle,
+                    label: '错题本',
+                    valueText: '$_wrongSentenceCount 句',
+                    tone: hasWrong
+                        ? DashboardStatTone.alert
+                        : DashboardStatTone.normal,
+                    onTap: _openWrongBook,
                   ),
                 ),
-              ),
+                DashboardMetrics.itemGapSpacer,
+                Expanded(
+                  child: DashboardStatCard(
+                    icon: Icons.task_alt,
+                    label: '已答对',
+                    valueText: '$practiced 句',
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: OutlinedButton.icon(
-                onPressed: _wrongSentenceCount > 0
-                    ? () => _startPractice(isWrongBook: true)
-                    : null,
-                icon: const Icon(Icons.replay),
-                label: const Text('错题本练习', style: TextStyle(fontSize: 18)),
-                style: OutlinedButton.styleFrom(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
+            DashboardMetrics.sectionSpacer,
+
+            // ---- 主操作按钮 ----
+            DashboardButtonRow(
+              children: [
+                DashboardPrimaryButton(
+                  icon: Icons.play_arrow_rounded,
+                  label: '句式集练习',
+                  onPressed: _selectedSet == null
+                      ? null
+                      : () => _startPractice(isWrongBook: false),
                 ),
-              ),
+                DashboardPrimaryButton(
+                  icon: Icons.replay,
+                  label: '错题本练习',
+                  onPressed: hasWrong
+                      ? () => _startPractice(isWrongBook: true)
+                      : null,
+                ),
+              ],
             ),
 
             const SizedBox(height: 24),
 
             // 设置提示
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
+            DashboardPanel(
               child: Row(
                 children: [
                   Icon(
@@ -617,45 +519,26 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
     );
   }
 
-  /// 构建进度行
-  Widget _buildProgressRow({
-    required ThemeData theme,
-    required ColorScheme colorScheme,
-    required IconData icon,
-    required String label,
-    required int current,
-    required int total,
-  }) {
-    final progress = total > 0 ? current / total : 0.0;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Icon(icon, size: 20, color: colorScheme.primary),
-            const SizedBox(width: 8),
-            Text(label, style: theme.textTheme.bodyMedium),
-            const Spacer(),
-            Text(
-              '$current / $total',
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: colorScheme.primary,
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 80,
-              child: LinearProgressIndicator(
-                value: progress,
-                borderRadius: BorderRadius.circular(4),
-                minHeight: 6,
-              ),
-            ),
-          ],
-        ),
+  /// 下拉刷新：重新加载句式集、练习设置与进度
+  Future<void> _refreshAll() async {
+    await _setService.load();
+    await _loadSettings();
+    await _refreshProgress();
+  }
+
+  /// 打开句型总览页（查看当前句式集的全部句子）
+  Future<void> _openSentenceOverview() async {
+    final set = _selectedSet;
+    final setId = set?.id;
+    if (set == null || setId == null) return;
+    await Navigator.of(context).push<dynamic>(
+      MaterialPageRoute(
+        builder: (_) => SentenceOverviewPage(setId: setId, setName: set.name),
       ),
     );
+    // 返回后刷新进度（句子可能在编辑页中被增删）
+    await _setService.load();
+    await _refreshProgress();
   }
 
   /// 打开错题本查看页面

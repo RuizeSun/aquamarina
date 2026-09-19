@@ -91,9 +91,14 @@ class SentenceSetService extends ChangeNotifier {
     // 同时删除该句式集下的所有句子及其关联数据（避免遗留孤儿记录）
     final db = await DatabaseService.database;
     await db.delete('sentences', where: 'set_id = ?', whereArgs: [id]);
-    // 清理已练标记与错题本中该句式集的记录
+    // 清理已练标记（练过 / 已答对）与错题本中该句式集的记录
     await db.delete(
       'practiced_sentence_ids',
+      where: 'set_id = ?',
+      whereArgs: [id],
+    );
+    await db.delete(
+      'attempted_sentence_ids',
       where: 'set_id = ?',
       whereArgs: [id],
     );

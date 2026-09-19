@@ -101,7 +101,8 @@ class AiSentenceService {
 
   // ===== 已练习句子追踪（SQLite） =====
 
-  /// 获取某个句式集中已练习过的句子 ID 列表
+  /// 获取某个句式集中「已答对」（得分超过阈值）的句子 ID 列表，
+  /// 供「不重复练习」跳过使用
   Future<Set<String>> getPracticedSentenceIds(String setId) async {
     final db = await _db;
     final maps = await db.query(
@@ -113,10 +114,34 @@ class AiSentenceService {
     return maps.map((m) => m['sentence_id'] as String).toSet();
   }
 
-  /// 标记某个句子为已练习
+  /// 标记某个句子为「已答对」（得分超过阈值，用于「不重复练习」）
   Future<void> markSentencePracticed(String setId, String sentenceId) async {
     final db = await _db;
     await db.insert('practiced_sentence_ids', {
+      'set_id': setId,
+      'sentence_id': sentenceId,
+    }, conflictAlgorithm: ConflictAlgorithm.ignore);
+  }
+
+  /// 获取某个句式集中已练习过的句子 ID 列表（不论对错）
+  ///
+  /// 「练过即计入」：与 [getPracticedSentenceIds] 不同，这里不区分得分，
+  /// 用于展示练习进度；[getPracticedSentenceIds] 仍用于「不重复练习」跳过。
+  Future<Set<String>> getAttemptedSentenceIds(String setId) async {
+    final db = await _db;
+    final maps = await db.query(
+      'attempted_sentence_ids',
+      columns: ['sentence_id'],
+      where: 'set_id = ?',
+      whereArgs: [setId],
+    );
+    return maps.map((m) => m['sentence_id'] as String).toSet();
+  }
+
+  /// 标记某个句子为「已练习」（不论对错，用于练习进度展示）
+  Future<void> markSentenceAttempted(String setId, String sentenceId) async {
+    final db = await _db;
+    await db.insert('attempted_sentence_ids', {
       'set_id': setId,
       'sentence_id': sentenceId,
     }, conflictAlgorithm: ConflictAlgorithm.ignore);

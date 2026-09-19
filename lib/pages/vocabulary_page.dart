@@ -14,6 +14,7 @@ import 'vocabulary/vocab_test_page.dart';
 import 'vocabulary/spelling_page.dart';
 import 'vocabulary/shared/data_loader.dart';
 import 'vocabulary/shared/word_utils.dart';
+import 'shared/dashboard_widgets.dart';
 
 class VocabularyPage extends StatefulWidget {
   const VocabularyPage({super.key});
@@ -335,87 +336,35 @@ class VocabularyPageState extends State<VocabularyPage>
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _loadFailed
-          ? _buildErrorState(theme, colorScheme)
+          ? _buildErrorState()
           : _currentBook == null
-          ? _buildNoBookState(theme, colorScheme)
+          ? _buildNoBookState()
           : _buildDashboard(theme, colorScheme),
     );
   }
 
   /// 数据加载失败时的错误状态 UI
-  Widget _buildErrorState(ThemeData theme, ColorScheme colorScheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.error_outline,
-              size: 80,
-              color: colorScheme.error.withValues(alpha: 0.6),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '数据加载失败',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '请检查数据库状态后重试',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _loadData,
-              icon: const Icon(Icons.refresh),
-              label: const Text('重试'),
-            ),
-          ],
-        ),
-      ),
+  Widget _buildErrorState() {
+    final colorScheme = Theme.of(context).colorScheme;
+    return DashboardEmptyState(
+      icon: Icons.error_outline,
+      iconColor: colorScheme.error.withValues(alpha: 0.6),
+      title: '数据加载失败',
+      message: '请检查数据库状态后重试',
+      actionIcon: Icons.refresh,
+      actionLabel: '重试',
+      onAction: _loadData,
     );
   }
 
-  Widget _buildNoBookState(ThemeData theme, ColorScheme colorScheme) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.menu_book_rounded,
-              size: 80,
-              color: colorScheme.primary.withValues(alpha: 0.3),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '还没有词书',
-              style: theme.textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '请先创建或导入一本词书',
-              style: theme.textTheme.bodyLarge?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: () => _openBookList(),
-              icon: const Icon(Icons.add),
-              label: const Text('添加词书'),
-            ),
-          ],
-        ),
-      ),
+  Widget _buildNoBookState() {
+    return DashboardEmptyState(
+      icon: Icons.menu_book_rounded,
+      title: '还没有词书',
+      message: '请先创建或导入一本词书',
+      actionIcon: Icons.add,
+      actionLabel: '添加词书',
+      onAction: _openBookList,
     );
   }
 
@@ -424,78 +373,78 @@ class VocabularyPageState extends State<VocabularyPage>
     final dueCount =
         (stats?.wrongWordCount ?? 0) + (stats?.dueReviewCount ?? 0);
 
+    // 今日打卡进度
+    final goalLearned = (_goalProgress['learned'] as int?) ?? 0;
+    final goal = (_goalProgress['goal'] as int?) ?? 10;
+    final goalCompleted = (_goalProgress['completed'] as bool?) ?? false;
+    final goalRatio = goal <= 0 ? 0.0 : (goalLearned / goal).clamp(0.0, 1.0);
+
     return RefreshIndicator(
       onRefresh: _loadData,
       child: SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(16),
+        padding: DashboardMetrics.pagePadding,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // 当前词书卡片
-            _buildBookCard(theme, colorScheme),
+            _buildBookCard(),
             const SizedBox(height: 16),
 
             // 单词总览 + 学习统计 + 词汇测试入口
-            Row(
+            DashboardButtonRow(
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const WordOverviewPage(),
-                        ),
-                      );
-                      _loadData();
-                    },
-                    icon: const Icon(Icons.insights),
-                    label: const Text('单词总览'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
+                DashboardEntryButton(
+                  icon: Icons.insights,
+                  label: '单词总览',
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const WordOverviewPage(),
+                      ),
+                    );
+                    _loadData();
+                  },
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => const StatsPage()),
-                      );
-                      _loadData();
-                    },
-                    icon: const Icon(Icons.bar_chart),
-                    label: const Text('学习统计'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
+                DashboardEntryButton(
+                  icon: Icons.bar_chart,
+                  label: '学习统计',
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const StatsPage()),
+                    );
+                    _loadData();
+                  },
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const VocabTestPage()),
-                  );
-                  _loadData();
-                },
-                icon: const Icon(Icons.quiz),
-                label: const Text('词汇测试'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+            DashboardMetrics.itemSpacer,
+            DashboardButtonRow(
+              children: [
+                DashboardEntryButton(
+                  icon: Icons.quiz,
+                  label: '词汇测试',
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const VocabTestPage()),
+                    );
+                    _loadData();
+                  },
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 16),
+            DashboardMetrics.sectionSpacer,
 
             // 今日打卡进度卡片
-            _buildGoalCard(theme, colorScheme),
-            const SizedBox(height: 16),
+            DashboardProgressCard(
+              icon: Icons.event_available,
+              title: '今日打卡进度',
+              completedTitle: '今日已打卡',
+              valueText: '$goalLearned / $goal',
+              progress: goalRatio,
+              completed: goalCompleted,
+            ),
+            DashboardMetrics.sectionSpacer,
 
             // 🔥 连续打卡
             if (_streak > 0)
@@ -521,125 +470,53 @@ class VocabularyPageState extends State<VocabularyPage>
               ),
 
             // 今日统计
-            Text('今日概览', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 12),
+            const DashboardSectionTitle('今日概览'),
+            DashboardMetrics.itemSpacer,
 
             // 今日概览统计：待复习 + 已学习/已复习（一行两卡片）
             Row(
               children: [
-                // 待复习数量
                 Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: dueCount > 0
-                          ? colorScheme.errorContainer
-                          : colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          dueCount > 0
-                              ? Icons.notifications_active
-                              : Icons.check_circle,
-                          color: dueCount > 0
-                              ? colorScheme.error
-                              : colorScheme.primary,
-                          size: 32,
-                        ),
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '今日待复习',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: dueCount > 0
-                                      ? colorScheme.onErrorContainer
-                                      : colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              Text(
-                                '$dueCount 词',
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: dueCount > 0
-                                      ? colorScheme.error
-                                      : colorScheme.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                  child: DashboardStatCard(
+                    icon: dueCount > 0
+                        ? Icons.notifications_active
+                        : Icons.check_circle,
+                    label: '今日待复习',
+                    valueText: '$dueCount 词',
+                    tone: dueCount > 0
+                        ? DashboardStatTone.alert
+                        : DashboardStatTone.normal,
                   ),
                 ),
-                const SizedBox(width: 12),
-                // 已学习/复习数量
+                DashboardMetrics.itemGapSpacer,
                 Expanded(
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.trending_up,
-                          color: colorScheme.primary,
-                          size: 32,
-                        ),
-                        const SizedBox(width: 12),
-                        Flexible(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '今日背词',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              Text(
-                                '${stats?.todayLearnedCount ?? 0} 学 / ${stats?.todayReviewedCount ?? 0} 复',
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  fontWeight: FontWeight.bold,
-                                  color: colorScheme.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                  child: DashboardStatCard(
+                    icon: Icons.trending_up,
+                    label: '今日背词',
+                    valueText:
+                        '${stats?.todayLearnedCount ?? 0} 学 / ${stats?.todayReviewedCount ?? 0} 复',
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            DashboardMetrics.sectionSpacer,
 
             // 复习计划按钮
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const ReviewPlanPage()),
-                  );
-                  _loadData();
-                },
-                icon: const Icon(Icons.event_note),
-                label: const Text('查看复习计划'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+            DashboardButtonRow(
+              children: [
+                DashboardEntryButton(
+                  icon: Icons.event_note,
+                  label: '查看复习计划',
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const ReviewPlanPage()),
+                    );
+                    _loadData();
+                  },
                 ),
-              ),
+              ],
             ),
-            const SizedBox(height: 16),
+            DashboardMetrics.sectionSpacer,
 
             // 操作按钮
             Builder(
@@ -648,28 +525,17 @@ class VocabularyPageState extends State<VocabularyPage>
 
                 return Column(
                   children: [
-                    Row(
+                    DashboardButtonRow(
                       children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: dueCount > 0 ? _startReview : null,
-                            icon: const Icon(Icons.replay),
-                            label: const Text('开始复习'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                          ),
+                        DashboardPrimaryButton(
+                          icon: Icons.replay,
+                          label: '开始复习',
+                          onPressed: dueCount > 0 ? _startReview : null,
                         ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: canLearn ? _startLearning : null,
-                            icon: const Icon(Icons.auto_stories),
-                            label: const Text('开始学习'),
-                            style: FilledButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 16),
-                            ),
-                          ),
+                        DashboardPrimaryButton(
+                          icon: Icons.auto_stories,
+                          label: '开始学习',
+                          onPressed: canLearn ? _startLearning : null,
                         ),
                       ],
                     ),
@@ -691,209 +557,50 @@ class VocabularyPageState extends State<VocabularyPage>
             const SizedBox(height: 24),
 
             // 词书详细信息
-            if (_currentBook != null) ...[
-              Text('词书信息', style: theme.textTheme.titleSmall),
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _infoRow('总词数', '${_currentBook!.wordCount}', colorScheme),
-                    if (_currentBook!.author != null &&
-                        _currentBook!.author!.isNotEmpty)
-                      _infoRow('作者', _currentBook!.author!, colorScheme),
-                    if (_currentBook!.description != null &&
-                        _currentBook!.description!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          _currentBook!.description!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                          ),
+            const DashboardSectionTitle('词书信息', small: true),
+            const SizedBox(height: 8),
+            DashboardPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DashboardInfoRow(
+                    label: '总词数',
+                    value: '${_currentBook!.wordCount}',
+                  ),
+                  if (_currentBook!.author != null &&
+                      _currentBook!.author!.isNotEmpty)
+                    DashboardInfoRow(label: '作者', value: _currentBook!.author!),
+                  if (_currentBook!.description != null &&
+                      _currentBook!.description!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _currentBook!.description!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
-            ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  /// 今日打卡进度卡片
-  Widget _buildGoalCard(ThemeData theme, ColorScheme colorScheme) {
-    final learned = (_goalProgress['learned'] as int?) ?? 0;
-    final goal = (_goalProgress['goal'] as int?) ?? 10;
-    final completed = (_goalProgress['completed'] as bool?) ?? false;
-    final progress = goal <= 0 ? 0.0 : (learned / goal).clamp(0.0, 1.0);
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-      decoration: BoxDecoration(
-        color: completed
-            ? Colors.green.withValues(alpha: 0.12)
-            : colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
-        border: completed
-            ? Border.all(color: Colors.green.withValues(alpha: 0.5))
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(
-                completed ? Icons.check_circle : Icons.event_available,
-                color: completed ? Colors.green : colorScheme.primary,
-                size: 28,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  completed ? '今日已打卡' : '今日打卡进度',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: completed ? Colors.green : colorScheme.primary,
-                  ),
-                ),
-              ),
-              Text(
-                '$learned / $goal',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: completed ? Colors.green : colorScheme.primary,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // 自定义进度条：固定 8 高度，轨道使用与卡片背景不同的浅色。
-          // 原实现使用 LinearProgressIndicator 且轨道背景与卡片背景相同
-          // （surfaceContainerHighest），当进度为 0 时整条进度条完全不可见；
-          // 同时 M3 默认的 trackGap/trackHeight 会让其在布局中占更高空间，
-          // 导致“今日打卡进度”行下方出现一块看似多余的空白。
-          SizedBox(
-            height: 8,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  ColoredBox(
-                    color: colorScheme.onSurface.withValues(alpha: 0.1),
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FractionallySizedBox(
-                      widthFactor: progress,
-                      child: ColoredBox(
-                        color: completed ? Colors.green : colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _infoRow(String label, String value, ColorScheme colorScheme) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Text(
-            '$label: ',
-            style: TextStyle(color: colorScheme.onSurfaceVariant, fontSize: 13),
-          ),
-          Text(
-            value,
-            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBookCard(ThemeData theme, ColorScheme colorScheme) {
+  Widget _buildBookCard() {
     final book = _currentBook!;
 
-    return Card(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: _openBookList,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              // 封面色块
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  color: Color(book.coverColor ?? 0xFF00BFA5),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: const Icon(
-                  Icons.menu_book,
-                  color: Colors.white,
-                  size: 32,
-                ),
-              ),
-              const SizedBox(width: 16),
-
-              // 词书信息
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      book.title,
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (book.description != null &&
-                        book.description!.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: Text(
-                          book.description!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-
-              // 切换按钮
-              IconButton(
-                icon: const Icon(Icons.swap_horiz),
-                onPressed: _openBookList,
-                tooltip: '切换词书',
-              ),
-            ],
-          ),
-        ),
-      ),
+    return DashboardSelectorCard(
+      icon: Icons.menu_book,
+      iconBackgroundColor: Color(book.coverColor ?? 0xFF00BFA5),
+      iconForegroundColor: Colors.white,
+      title: book.title,
+      subtitle: book.description,
+      switchTooltip: '切换词书',
+      onTap: _openBookList,
     );
   }
 
