@@ -31,7 +31,8 @@ Aquamarina 是一款基于 Flutter 的英语学习应用，内置离线英汉双
 
 ### 🎙️ 语音朗读
 
-- 内置 TTS 语音合成，支持系统 TTS 和 Edge TTS 两种引擎
+- 内置 TTS 语音合成，支持系统 TTS、Edge TTS 与小米 MiMo TTS 三种引擎
+- 设置页内置试听测试：可自定义测试文本，一键试听 / 停止（试听不降级，便于定位配置问题）
 - 可调节语速、音量、音色
 
 ### 📊 学习统计与打卡
@@ -84,7 +85,7 @@ flutter run
 
 - **Flutter / Dart**：跨平台 UI 框架
 - **SQLite（sqflite）**：本地业务数据与内置词典数据库
-- **flutter_tts / flutter_edge_tts**：语音合成（系统 TTS + Edge TTS）
+- **flutter_tts / flutter_edge_tts / MiMo TTS API**：语音合成（系统 TTS + Edge TTS + 小米 MiMo TTS）
 - **audioplayers**：音频播放
 - **dio**：AI 批改服务及在线资源库的网络请求
 - **shared_preferences**：本地偏好设置

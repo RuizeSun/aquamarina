@@ -2,6 +2,7 @@ import 'tts_settings.dart';
 import 'tts_engine.dart';
 import 'system_tts_engine.dart';
 import 'edge_tts_engine.dart';
+import 'mimo_tts_engine.dart';
 import 'log_service.dart';
 
 /// 统一的 TTS 服务（单例）
@@ -57,8 +58,11 @@ class TtsService {
 
   /// 朗读文本。
   /// 返回 `true` 表示朗读成功；`false` 表示所有可用引擎都失败（如无网络且无系统语音）。
-  /// Edge TTS 失败时会自动降级到系统 TTS。
-  Future<bool> speak(String text) async {
+  /// 在线引擎（Edge TTS / 小米 MiMo TTS）失败时会自动降级到系统 TTS。
+  ///
+  /// [allowFallback] 为 `false` 时不降级到系统 TTS，直接返回当前引擎的结果，
+  /// 供「语音设置」中的试听自检使用（避免降级掩盖真实故障）。
+  Future<bool> speak(String text, {bool allowFallback = true}) async {
     if (!_settings.enabled || text.isEmpty) return true;
     await _ensureEngine();
     if (_engine == null) return false;
@@ -69,11 +73,14 @@ class TtsService {
     final success = await _engine!.speak(text);
     if (success) return true;
 
-    // Edge TTS 失败（如无网络）时降级到系统 TTS
-    if (_settings.provider == TtsProvider.edge) {
+    // 在线引擎失败（如无网络、API Key 无效）时降级到系统 TTS
+    if (allowFallback && _settings.provider != TtsProvider.system) {
       try {
         // 临时创建系统引擎并朗读（不影响用户设置的 provider）
-        logWarning('TtsService', 'Edge TTS 失败，降级到系统 TTS');
+        logWarning(
+          'TtsService',
+          '${_settings.provider.label} TTS 失败，降级到系统 TTS',
+        );
         final fallback = SystemTtsEngine();
         return await fallback.speak(text);
       } catch (e) {
@@ -116,6 +123,14 @@ class TtsService {
         _engine = SystemTtsEngine();
       case TtsProvider.edge:
         _engine = EdgeTtsEngine();
+      case TtsProvider.mimo:
+        _engine = MimoTtsEngine(
+          baseUrl: _settings.mimoBaseUrl,
+          model: _settings.mimoModel,
+          voice: _settings.effectiveVoiceName ?? MimoTtsEngine.defaultVoice,
+          instruction: _settings.mimoInstruction,
+          styleTag: _settings.mimoStyleTag,
+        );
     }
 
     await _applySettingsToEngine();
@@ -123,11 +138,24 @@ class TtsService {
 
   Future<void> _applySettingsToEngine() async {
     if (_engine == null) return;
+
+    // MiMo 专属配置（Base URL / 模型 / 风格指令 / 音频标签前缀）
+    final engine = _engine;
+    if (engine is MimoTtsEngine) {
+      engine.updateConfig(
+        baseUrl: _settings.mimoBaseUrl,
+        model: _settings.mimoModel,
+        instruction: _settings.mimoInstruction,
+        styleTag: _settings.mimoStyleTag,
+      );
+    }
+
     await _engine!.setVolume(_settings.volume);
     await _engine!.setRate(_settings.rate);
     await _engine!.setPitch(_settings.pitch);
-    if (_settings.voiceName != null && _settings.voiceName!.isNotEmpty) {
-      await _engine!.setVoice(_settings.voiceName!);
+    final voice = _settings.effectiveVoiceName;
+    if (voice != null && voice.isNotEmpty) {
+      await _engine!.setVoice(voice);
     }
   }
 

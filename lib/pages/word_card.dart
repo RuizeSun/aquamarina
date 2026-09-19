@@ -53,7 +53,7 @@ class WordCard extends StatelessWidget {
                     if (!success && context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('朗读失败：请检查网络连接或系统语音设置'),
+                          content: Text('朗读失败：请检查网络、API Key 或系统语音设置'),
                           behavior: SnackBarBehavior.floating,
                         ),
                       );

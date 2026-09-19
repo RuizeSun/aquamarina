@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database_service.dart';
 import 'log_service.dart';
+import 'mimo_tts_credentials.dart';
 import 'theme_mode_service.dart';
 import 'tts_service.dart';
 
@@ -17,7 +18,7 @@ import 'tts_service.dart';
 ///
 ///   - `aquamarina.db`         业务数据库（词书/学习记录/句子等）
 ///   - `preferences.json`      SharedPreferences 全量（带类型标记）
-///   - `secure_storage.json`   AI API Keys（可选，导出时由用户勾选）
+///   - `secure_storage.json`   API Keys（AI 服务 / MiMo TTS，可选，导出时由用户勾选）
 ///   - `backup_meta.json`      元信息（应用名/创建时间等）
 ///
 /// 注意：内置词典数据库（ec_dict.db / ce_dict.db）不属于用户数据，
@@ -126,6 +127,7 @@ class BackupService {
   /// Secure Storage 无法枚举所有 key，因此通过已知的 key 约定导出：
   ///   - `ai_api_key`（旧版 AiConfigService）
   ///   - `ai_api_key_<profileId>`（AiProfileService._secureKeyFor）
+  ///   - `tts_mimo_api_key`（MimoTtsCredentials.storageKey，小米 MiMo TTS）
   /// 若后续新增 key 约定，需同步维护此处。
   static Future<String> _exportSecureStorage() async {
     final map = <String, String>{};
@@ -153,6 +155,13 @@ class BackupService {
         // profiles 数据损坏时忽略，仅导出能读到的 key
       }
     }
+
+    // 小米 MiMo TTS 的 API Key
+    final mimoKey = await _readSecure(MimoTtsCredentials.storageKey);
+    if (mimoKey != null && mimoKey.isNotEmpty) {
+      map[MimoTtsCredentials.storageKey] = mimoKey;
+    }
+
     return jsonEncode(map);
   }
 
