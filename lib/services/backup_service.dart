@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite/sqflite.dart';
 
 import 'database_service.dart';
 import 'log_service.dart';
@@ -269,6 +270,9 @@ class BackupService {
     final dir = await getApplicationSupportDirectory();
     final dbPath = p.join(dir.path, dbFileName);
 
+    // 在触碰现有数据之前，先打开备份数据库做完整性 / 版本 / 必要表校验
+    await _validateImportedDatabase('$dbPath.import_probe', dbBytes);
+
     // 先为现有数据库留一份回滚副本
     final bakPath = '$dbPath.bak';
     if (await File(dbPath).exists()) {
@@ -344,7 +348,75 @@ class BackupService {
     return BackupImportResult(restoredApiKeys: hasSecureEntry);
   }
 
+  /// 在替换现有数据库之前，对备份中的数据库做预检：
+  /// - 能否以只读方式打开
+  /// - Schema 版本不高于当前 App
+  /// - `PRAGMA quick_check` 通过
+  /// - 必要业务表齐全
+  ///
+  /// 校验使用临时副本，失败时不会触碰任何现有数据。
+  static Future<void> _validateImportedDatabase(
+    String probePath,
+    List<int> dbBytes,
+  ) async {
+    final probeFile = File(probePath);
+    if (await probeFile.exists()) {
+      await probeFile.delete();
+    }
+    await probeFile.writeAsBytes(dbBytes, flush: true);
+
+    Database? probe;
+    try {
+      probe = await databaseFactory.openDatabase(
+        probePath,
+        options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+      );
+
+      final version = await probe.getVersion();
+      if (version > DatabaseService.schemaVersion) {
+        throw BackupException(
+          '备份来自更高版本的 App（数据库 v$version），'
+          '请先升级 App 后再导入',
+        );
+      }
+
+      final check = await probe.rawQuery('PRAGMA quick_check');
+      final ok =
+          check.isNotEmpty && check.every((row) => row.values.first == 'ok');
+      if (!ok) {
+        throw const BackupException('备份中的数据库已损坏，拒绝导入');
+      }
+
+      const requiredTables = [
+        'word_books',
+        'word_book_entries',
+        'user_word_records',
+        'daily_activity',
+        'sentences',
+      ];
+      final placeholders = List.filled(requiredTables.length, '?').join(',');
+      final tables = await probe.rawQuery(
+        'SELECT name FROM sqlite_master '
+        'WHERE type = ? AND name IN ($placeholders)',
+        ['table', ...requiredTables],
+      );
+      if (tables.length < requiredTables.length) {
+        throw const BackupException('备份数据库结构不完整，拒绝导入');
+      }
+    } on BackupException {
+      rethrow;
+    } catch (e) {
+      throw BackupException('备份中的数据库无法打开或已损坏：$e');
+    } finally {
+      await probe?.close();
+      if (await probeFile.exists()) {
+        await probeFile.delete();
+      }
+    }
+  }
+
   /// 解析 preferences.json 并校验所有条目结构与类型。
+  ///
   /// 任何异常都以 [FormatException] 抛出，此时不产生任何写入。
   static List<MapEntry<String, Object?>> _parsePreferences(String json) {
     final raw = jsonDecode(json);
