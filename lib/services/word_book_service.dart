@@ -90,8 +90,14 @@ class WordBookService {
   /// 删除词书（级联删除条目）
   static Future<void> deleteBook(int id) async {
     final db = await DatabaseService.database;
-    await db.delete('word_book_entries', where: 'book_id = ?', whereArgs: [id]);
-    await db.delete('word_books', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.delete(
+        'word_book_entries',
+        where: 'book_id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete('word_books', where: 'id = ?', whereArgs: [id]);
+    });
     logInfo('WordBookService', '删除词书: id=$id');
   }
 

@@ -91,19 +91,21 @@ class SentenceSetService extends ChangeNotifier {
     await _saveSets();
     // 同时删除该句式集下的所有句子及其关联数据（避免遗留孤儿记录）
     final db = await DatabaseService.database;
-    await db.delete('sentences', where: 'set_id = ?', whereArgs: [id]);
-    // 清理已练标记（练过 / 已答对）与错题本中该句式集的记录
-    await db.delete(
-      'practiced_sentence_ids',
-      where: 'set_id = ?',
-      whereArgs: [id],
-    );
-    await db.delete(
-      'attempted_sentence_ids',
-      where: 'set_id = ?',
-      whereArgs: [id],
-    );
-    await db.delete('wrong_sentences', where: 'set_id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      await txn.delete('sentences', where: 'set_id = ?', whereArgs: [id]);
+      // 清理已练标记（练过 / 已答对）与错题本中该句式集的记录
+      await txn.delete(
+        'practiced_sentence_ids',
+        where: 'set_id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete(
+        'attempted_sentence_ids',
+        where: 'set_id = ?',
+        whereArgs: [id],
+      );
+      await txn.delete('wrong_sentences', where: 'set_id = ?', whereArgs: [id]);
+    });
     LearningService.invalidateStatsCache();
     notifyListeners();
   }
@@ -123,7 +125,8 @@ class SentenceSetService extends ChangeNotifier {
       'sentences',
       where: 'set_id = ?',
       whereArgs: [setId],
-      orderBy: 'id ASC',
+      // 按 rowid（插入顺序）排序；id 是随机 UUID，按 id 排序会得到随机顺序
+      orderBy: 'rowid ASC',
     );
     return maps.map((m) => _rowToSentence(m)).toList();
   }
@@ -160,8 +163,27 @@ class SentenceSetService extends ChangeNotifier {
 
   Future<void> deleteSentence(String setId, String sentenceId) async {
     final db = await DatabaseService.database;
-    await db.delete('sentences', where: 'id = ?', whereArgs: [sentenceId]);
+    await db.transaction((txn) async {
+      await txn.delete('sentences', where: 'id = ?', whereArgs: [sentenceId]);
+      // 同步清理该句的练习进度与错题，避免删除后进度超过总数 / 错题本残留
+      await txn.delete(
+        'practiced_sentence_ids',
+        where: 'set_id = ? AND sentence_id = ?',
+        whereArgs: [setId, sentenceId],
+      );
+      await txn.delete(
+        'attempted_sentence_ids',
+        where: 'set_id = ? AND sentence_id = ?',
+        whereArgs: [setId, sentenceId],
+      );
+      await txn.delete(
+        'wrong_sentences',
+        where: 'sentence_id = ?',
+        whereArgs: [sentenceId],
+      );
+    });
     await _updateSentenceCount(setId);
+    LearningService.invalidateStatsCache();
     notifyListeners();
   }
 
