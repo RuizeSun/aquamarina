@@ -11,12 +11,19 @@ class FakeS3Storage extends S3StorageService {
 
   final Map<String, Uint8List> objects = {};
 
+  /// 模拟接下来 N 次上传失败（用于崩溃/重试测试）。
+  int failPuts = 0;
+
   @override
   Future<String> putBytes(
     String key,
     Uint8List bytes, {
     void Function(int sent, int total)? onProgress,
   }) async {
+    if (failPuts > 0) {
+      failPuts--;
+      throw const CloudSyncException('模拟上传失败');
+    }
     objects[key] = bytes;
     onProgress?.call(bytes.length, bytes.length);
     return 'etag-${objects.length}';

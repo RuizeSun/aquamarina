@@ -22,6 +22,7 @@ class CloudSyncRunResult {
   int skippedMissingParent = 0;
   int remainingLocalOps = 0;
   final List<String> errors = [];
+  final List<String> conflictDetails = [];
 
   bool get hasErrors => errors.isNotEmpty;
 }
@@ -177,6 +178,11 @@ class CloudSyncEngine {
         result.duplicates += apply.duplicates;
         result.conflicts += apply.conflicts;
         result.skippedMissingParent += apply.skippedMissingParent;
+        if (result.conflictDetails.length < 20) {
+          result.conflictDetails.addAll(
+            apply.conflictDetails.take(20 - result.conflictDetails.length),
+          );
+        }
         if (apply.skippedMissingParent > 0) {
           result.errors.add('chunk 存在缺失父级，将在下次同步重试：${object.key}');
           continue;

@@ -128,6 +128,20 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
                       ),
                     ),
                 ],
+                if (result.conflictDetails.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '冲突明细（前 ${result.conflictDetails.length > 3 ? 3 : result.conflictDetails.length} 条）：',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  for (final detail in result.conflictDetails.take(3))
+                    Text(
+                      '• $detail',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ],
             ),
           ),

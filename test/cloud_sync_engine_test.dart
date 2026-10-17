@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
 import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/cloud_sync_engine.dart';
@@ -149,5 +151,58 @@ void main() {
     expect(entries.length, 1);
     expect(entries.single['book_uuid'], 'book-1');
     expect(await db.query('sync_chunks'), isNotEmpty);
+  });
+
+  test('上传失败保留 oplog，下次同步重试成功', () async {
+    await db.insert('word_notes', {
+      'word': 'apple',
+      'note': 'retry me',
+      'is_favorited': 0,
+      'updated_at': '2026-10-02T00:00:00Z',
+    });
+
+    storage.failPuts = 1;
+    var result = await engine().run(pull: false);
+    expect(result.pushedChunks, 0);
+    expect(result.errors, isNotEmpty);
+    expect(result.remainingLocalOps, 1);
+    expect(await SyncCaptureService.pendingCount(db: db), 1);
+
+    result = await engine().run(pull: false);
+    expect(result.pushedChunks, 1);
+    expect(result.remainingLocalOps, 0);
+    expect(await SyncCaptureService.pendingCount(db: db), 0);
+  });
+
+  test('损坏的 chunk 不会标记已应用，修正后可重试', () async {
+    final ops = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'banana'},
+        data: {
+          'note': 'from B',
+          'is_favorited': 0,
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    final goodBytes = SyncChunkCodec.encode(ops);
+    final key = _chunkKey(config, _deviceB, ops);
+    final corrupted = Uint8List.fromList(goodBytes);
+    corrupted[0] = corrupted[0] ^ 0xFF;
+    storage.objects[key] = corrupted;
+
+    var result = await engine().run(push: false);
+    expect(result.errors, isNotEmpty);
+    expect(await db.query('sync_chunks'), isEmpty);
+    expect(await db.query('word_notes'), isEmpty);
+
+    storage.objects[key] = goodBytes;
+    result = await engine().run(push: false);
+    expect(result.pulledChunks, 1);
+    expect((await db.query('word_notes')).single['note'], 'from B');
   });
 }

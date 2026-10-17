@@ -156,5 +156,5 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 ## 9. 后续阶段
 
-见 `cloud-sync-spec.md`：冲突明细 UI、崩溃注入测试；
-远程 GC 保留策略的进一步收紧（按设备水位线而非仅时间）。
+见 `cloud-sync-spec.md`：远程 GC 保留策略进一步收紧（按设备水位线而非仅时间）、
+大批量数据的性能验证与系统性崩溃注入。
