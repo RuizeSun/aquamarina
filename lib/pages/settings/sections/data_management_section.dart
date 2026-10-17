@@ -177,6 +177,23 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     }
     if (file == null) return; // 用户取消
 
+    // 先按文件大小拒绝超大备份，避免 readAsBytes() 直接把内存打满
+    try {
+      final size = await file.length();
+      if (size > BackupService.maxBackupSize) {
+        if (context.mounted) {
+          _showResultSnackBar(
+            context,
+            '备份文件过大（${(size / 1024 / 1024).toStringAsFixed(1)} MB），拒绝导入',
+            isSuccess: false,
+          );
+        }
+        return;
+      }
+    } catch (_) {
+      // 无法获取大小时继续走后续校验
+    }
+
     logInfo('DataManagement', '开始导入数据备份: ${file.name}');
     final Uint8List bytes;
     try {

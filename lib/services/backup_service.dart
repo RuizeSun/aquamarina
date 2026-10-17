@@ -32,7 +32,9 @@ class BackupService {
   static const String _metaFileName = 'backup_meta.json';
 
   /// 导入的备份文件大小上限（防滥用，正常备份远小于此值）
-  static const int _maxBackupSize = 500 * 1024 * 1024;
+  ///
+  /// 公开给导入页面，在 `readAsBytes()` 之前先检查文件大小，避免大文件直接 OOM。
+  static const int maxBackupSize = 500 * 1024 * 1024;
 
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
 
@@ -187,7 +189,7 @@ class BackupService {
   static Future<BackupImportResult> importBackup(Uint8List bytes) async {
     logInfo('BackupService', '开始导入备份，文件大小: ${bytes.length} 字节');
     // ── 1. 解压与校验 ─────────────────────────────
-    if (bytes.length > _maxBackupSize) {
+    if (bytes.length > maxBackupSize) {
       throw const BackupException('备份文件过大，拒绝导入');
     }
 
@@ -206,7 +208,7 @@ class BackupService {
     if (!_isSqliteHeader(dbBytes)) {
       throw const BackupException('备份中的数据库文件无效，拒绝导入');
     }
-    if (dbBytes.length > _maxBackupSize) {
+    if (dbBytes.length > maxBackupSize) {
       throw const BackupException('备份中的数据库文件过大，拒绝导入');
     }
 
