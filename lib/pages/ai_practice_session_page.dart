@@ -7,6 +7,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/ai_service.dart';
+import '../services/log_service.dart';
 import '../services/study_timer_service.dart';
 import '../widgets/sentence_note_bar.dart';
 
@@ -81,6 +82,9 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
   bool _fromCache = false;
   List<PracticeRecord> _completedRecords = [];
   bool _isEvaluating = false;
+
+  /// 防止退出流程被重复触发（按钮双击 / 系统返回）
+  bool _isExiting = false;
 
   // 流式评测状态
   final StringBuffer _streamBuffer = StringBuffer();
@@ -318,7 +322,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
 
       _applyResult(result, userAnswer, fromCache: false);
     } on AiServiceException catch (e) {
-      if (!mounted) return;
+      if (!mounted || _cancelToken.isCancelled) return;
       setState(() {
         _isEvaluating = false;
         _phase = _PracticePhase.answering;
@@ -339,7 +343,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
         SnackBar(content: Text('批改失败：$e'), backgroundColor: Colors.red),
       );
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || _cancelToken.isCancelled) return;
       setState(() {
         _isEvaluating = false;
         _phase = _PracticePhase.answering;
@@ -466,15 +470,28 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     }
   }
 
-  void _exitPractice() async {
-    // 处理每条练习记录（加入错题本/移除错题本/标记已练习）
-    for (final record in _completedRecords) {
-      await _handleCompletedSentence(record);
-    }
-    // 取消未完成的 AI 请求
+  Future<void> _exitPractice() async {
+    if (_isExiting) return;
+    _isExiting = true;
+
+    // 先取消未完成的 AI 请求，避免退出过程中继续跑批改
     _cancelToken.cancel();
+
+    // 取快照并清空，保证即使被重复调用也只处理一次
+    final records = List<PracticeRecord>.of(_completedRecords);
+    _completedRecords.clear();
+
+    // 处理每条练习记录（加入错题本/移除错题本/标记已练习）
+    for (final record in records) {
+      try {
+        await _handleCompletedSentence(record);
+      } catch (e, stackTrace) {
+        logError('AiPracticeSessionPage', '处理练习记录失败: $e', stackTrace);
+      }
+    }
+
     if (mounted) {
-      Navigator.of(context).pop(_completedRecords);
+      Navigator.of(context).pop(records);
     }
   }
 
