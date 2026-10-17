@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
@@ -19,10 +21,14 @@ class NotesPage extends StatefulWidget {
 class _NotesPageState extends State<NotesPage> {
   final _searchController = TextEditingController();
   List<SavedEntry> _entries = [];
+  List<SavedEntry> _allEntries = [];
   bool _isLoading = true;
   String _query = '';
   SavedType? _filterType;
   SavedSort _sort = SavedSort.time;
+
+  Timer? _searchDebounce;
+  int _loadSeq = 0;
 
   @override
   void initState() {
@@ -32,12 +38,20 @@ class _NotesPageState extends State<NotesPage> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+  List<SavedEntry> _applyView(List<SavedEntry> source) {
+    return sortSavedEntries(filterSavedEntries(source, _filterType), _sort);
+  }
+
+  Future<void> _loadData({bool showLoading = true}) async {
+    final seq = ++_loadSeq;
+    if (showLoading && mounted) {
+      setState(() => _isLoading = true);
+    }
 
     final wordNotes = _query.trim().isEmpty
         ? await WordNoteService.getNotes()
@@ -60,12 +74,10 @@ class _NotesPageState extends State<NotesPage> {
       for (final s in sentenceNotes) SavedEntry.fromSentence(s),
     ];
 
-    final filtered = filterSavedEntries(merged, _filterType);
-    final sorted = sortSavedEntries(filtered, _sort);
-
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
     setState(() {
-      _entries = sorted;
+      _allEntries = merged;
+      _entries = _applyView(merged);
       _isLoading = false;
     });
   }
@@ -77,17 +89,24 @@ class _NotesPageState extends State<NotesPage> {
 
   void _onSearchChanged(String value) {
     _query = value;
-    _loadData();
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadData(showLoading: false);
+    });
   }
 
   void _onFilterChanged(SavedType? type) {
-    setState(() => _filterType = type);
-    _loadData();
+    setState(() {
+      _filterType = type;
+      _entries = _applyView(_allEntries);
+    });
   }
 
   void _onSortChanged(SavedSort sort) {
-    setState(() => _sort = sort);
-    _loadData();
+    setState(() {
+      _sort = sort;
+      _entries = _applyView(_allEntries);
+    });
   }
 
   Future<void> _openEntry(SavedEntry entry) async {

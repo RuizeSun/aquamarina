@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
 import '../services/dictionary_service.dart';
@@ -19,10 +21,17 @@ class FavoritesPage extends StatefulWidget {
 class _FavoritesPageState extends State<FavoritesPage> {
   final _searchController = TextEditingController();
   List<SavedEntry> _entries = [];
+  List<SavedEntry> _allEntries = [];
   bool _isLoading = true;
   String _query = '';
   SavedType? _filterType;
   SavedSort _sort = SavedSort.time;
+
+  Timer? _searchDebounce;
+
+  /// 请求序号：搜索是异步的，只有最后一次请求的结果可以落到 UI，
+  /// 避免旧查询晚返回覆盖新查询。
+  int _loadSeq = 0;
 
   @override
   void initState() {
@@ -32,12 +41,20 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+  List<SavedEntry> _applyView(List<SavedEntry> source) {
+    return sortSavedEntries(filterSavedEntries(source, _filterType), _sort);
+  }
+
+  Future<void> _loadData({bool showLoading = true}) async {
+    final seq = ++_loadSeq;
+    if (showLoading && mounted) {
+      setState(() => _isLoading = true);
+    }
 
     // 加载单词收藏 + 句子收藏
     final wordNotes = _query.trim().isEmpty
@@ -65,12 +82,10 @@ class _FavoritesPageState extends State<FavoritesPage> {
       for (final s in sentenceNotes) SavedEntry.fromSentence(s),
     ];
 
-    final filtered = filterSavedEntries(merged, _filterType);
-    final sorted = sortSavedEntries(filtered, _sort);
-
-    if (!mounted) return;
+    if (!mounted || seq != _loadSeq) return;
     setState(() {
-      _entries = sorted;
+      _allEntries = merged;
+      _entries = _applyView(merged);
       _isLoading = false;
     });
   }
@@ -82,17 +97,24 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   void _onSearchChanged(String value) {
     _query = value;
-    _loadData();
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      _loadData(showLoading: false);
+    });
   }
 
   void _onFilterChanged(SavedType? type) {
-    setState(() => _filterType = type);
-    _loadData();
+    setState(() {
+      _filterType = type;
+      _entries = _applyView(_allEntries);
+    });
   }
 
   void _onSortChanged(SavedSort sort) {
-    setState(() => _sort = sort);
-    _loadData();
+    setState(() {
+      _sort = sort;
+      _entries = _applyView(_allEntries);
+    });
   }
 
   Future<void> _openEntry(SavedEntry entry) async {
@@ -113,9 +135,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
     }
   }
 
-  /// 取消收藏（单词或句子）
-  Future<void> _removeEntry(SavedEntry entry) async {
-    if (!mounted) return;
+  /// 取消收藏（单词或句子）。
+  ///
+  /// 返回 `true` 表示已删除，用作 [Dismissible.confirmDismiss]：
+  /// 只有确认后才允许移除行，避免“滑掉后点取消导致行消失”的状态不一致。
+  Future<bool> _confirmRemoveEntry(SavedEntry entry) async {
+    if (!mounted) return false;
     final label = entry.type == SavedType.word ? entry.title : '该句';
     final confirm = await showDialog<bool>(
       context: context,
@@ -141,7 +166,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
         ],
       ),
     );
-    if (confirm != true) return;
+    if (confirm != true) return false;
 
     if (entry.type == SavedType.word) {
       await WordNoteService.setFavorite(entry.title, favorite: false);
@@ -151,7 +176,11 @@ class _FavoritesPageState extends State<FavoritesPage> {
         favorite: false,
       );
     }
-    if (!mounted) return;
+    if (!mounted) return false;
+    setState(() {
+      _allEntries.remove(entry);
+      _entries = _applyView(_allEntries);
+    });
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(
@@ -161,7 +190,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
           behavior: SnackBarBehavior.floating,
         ),
       );
-    await _loadData();
+    return true;
   }
   @override
   Widget build(BuildContext context) {
@@ -258,7 +287,9 @@ class _FavoritesPageState extends State<FavoritesPage> {
         itemBuilder: (context, index) {
           final entry = _entries[index];
           return Dismissible(
-            key: ValueKey('fav_${entry.type}_${entry.title}'),
+            key: ValueKey(
+              'fav_${entry.type}_${entry.type == SavedType.word ? entry.title : (entry.sentenceNote?.sentenceId ?? entry.title)}',
+            ),
             direction: DismissDirection.endToStart,
             background: Container(
               alignment: Alignment.centerRight,
@@ -269,7 +300,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
                 color: Theme.of(context).colorScheme.onError,
               ),
             ),
-            onDismissed: (_) => _removeEntry(entry),
+            confirmDismiss: (_) => _confirmRemoveEntry(entry),
             child: _SavedListTile(entry: entry, onTap: () => _openEntry(entry)),
           );
         },
