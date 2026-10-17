@@ -30,13 +30,27 @@ class _SentenceNoteBarState extends State<SentenceNoteBar> {
     _loadState();
   }
 
+  @override
+  void didUpdateWidget(covariant SentenceNoteBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldSentence = oldWidget.sentence;
+    if (oldSentence.id != widget.sentence.id ||
+        oldSentence.english != widget.sentence.english) {
+      // 列表删除/重排后 State 会被复用：必须按新句子重新加载状态
+      _isFavorited = false;
+      _hasNote = false;
+      _isLoading = true;
+      _loadState();
+    }
+  }
+
   Future<void> _loadState() async {
-    final sentenceId = _sentence.id;
-    if (sentenceId == null || sentenceId.isEmpty) {
+    if (_sentence.english.trim().isEmpty) {
       if (mounted) setState(() => _isLoading = false);
       return;
     }
-    final note = await SentenceNoteService.getSentenceNote(sentenceId);
+    final key = SentenceNoteService.keyFor(_sentence);
+    final note = await SentenceNoteService.getSentenceNote(key);
     if (!mounted) return;
     setState(() {
       _isFavorited = note?.isFavorited ?? false;
@@ -65,8 +79,8 @@ class _SentenceNoteBarState extends State<SentenceNoteBar> {
   Future<void> _editNote() async {
     final controller = TextEditingController();
     try {
-      final sentenceId = _sentence.id;
-      if (sentenceId != null && sentenceId.isNotEmpty) {
+      final sentenceId = SentenceNoteService.keyFor(_sentence);
+      if (_sentence.english.trim().isNotEmpty) {
         final note = await SentenceNoteService.getSentenceNote(sentenceId);
         if (mounted) controller.text = note?.note ?? '';
       }

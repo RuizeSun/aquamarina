@@ -166,6 +166,7 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
     final shuffled = List<Sentence>.from(sentences)..shuffle(Random());
     final sessionSentences = shuffled.take(widget.sentenceLimit).toList();
 
+    if (!mounted) return;
     setState(() {
       _sessionSentences = sessionSentences;
       _currentSentenceIndex = 0;

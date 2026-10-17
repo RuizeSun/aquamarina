@@ -119,7 +119,9 @@ Future<void> showSentenceDetailSheet(
 
 /// 编辑句子笔记对话框（与 SentenceNoteBar 逻辑一致）
 Future<bool> _editSentenceNote(BuildContext context, Sentence sentence) async {
-  final existing = await SentenceNoteService.getSentenceNote(sentence.id ?? '');
+  final existing = await SentenceNoteService.getSentenceNote(
+    SentenceNoteService.keyFor(sentence),
+  );
   final controller = TextEditingController(text: existing?.note ?? '');
   final hasNote = controller.text.trim().isNotEmpty;
   if (!context.mounted) {

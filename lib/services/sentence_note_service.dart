@@ -17,8 +17,11 @@ class SentenceNoteService {
     );
   }
 
-  /// 为句子生成稳定的主键（句式集 / 错题本句子均带 id）
-  static String _keyFor(Sentence sentence) {
+  /// 为句子生成稳定的主键（句式集 / 错题本句子均带 id）。
+  ///
+  /// 供 UI 在加载收藏/笔记前复用，确保无 id 的临时句子也能命中
+  /// `bytext:英文原文` 约定。
+  static String keyFor(Sentence sentence) {
     final id = sentence.id;
     if (id != null && id.isNotEmpty) return id;
     // 无 id（如临时构造的句子）时回退到英文原文生成稳定 key
@@ -54,7 +57,7 @@ class SentenceNoteService {
     required bool favorite,
   }) async {
     final db = await DatabaseService.database;
-    final key = _keyFor(sentence);
+    final key = keyFor(sentence);
     final now = DateTime.now().toIso8601String();
 
     final existing = await getSentenceNote(key);
@@ -101,7 +104,7 @@ class SentenceNoteService {
   /// 保存笔记（[note] 为空字符串时视为删除笔记）
   static Future<void> saveNote(Sentence sentence, String note) async {
     final db = await DatabaseService.database;
-    final key = _keyFor(sentence);
+    final key = keyFor(sentence);
     final trimmed = note.trim();
     final now = DateTime.now().toIso8601String();
 
