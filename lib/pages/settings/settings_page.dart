@@ -6,6 +6,7 @@ import 'sections/ai_sentence_section.dart';
 import 'sections/ai_usage_stats_section.dart';
 import 'sections/sentence_cache_section.dart';
 import 'sections/logging_section.dart';
+import 'sections/cloud_sync_section.dart';
 import 'sections/data_management_section.dart';
 import 'sections/tts_section.dart';
 import 'sections/vocabulary_section.dart';
@@ -130,6 +131,11 @@ class _SettingsPageState extends State<SettingsPage> {
       title: '数据管理',
       icon: Icons.storage_outlined,
       builder: () => const DataManagementSection(),
+    ),
+    SettingsCategory(
+      title: '云同步',
+      icon: Icons.cloud_outlined,
+      builder: () => const CloudSyncSection(),
     ),
     SettingsCategory(
       title: '日志设置',

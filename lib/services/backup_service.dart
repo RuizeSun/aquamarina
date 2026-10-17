@@ -32,6 +32,12 @@ class BackupService {
   static const String _secureFileName = 'secure_storage.json';
   static const String _metaFileName = 'backup_meta.json';
 
+  /// 仅本机使用的 SharedPreferences 前缀：既不会写入备份，恢复时也不会被覆盖。
+  ///
+  /// 云同步配置（端点/桶/设备标识/同步状态）属于设备本地设置：
+  /// 如果随备份跑到另一台设备，会让那台设备把数据写进本设备的云端命名空间。
+  static const String localOnlyPrefPrefix = 'cloud_sync_';
+
   /// 导入的备份文件大小上限（防滥用，正常备份远小于此值）
   ///
   /// 公开给导入页面，在 `readAsBytes()` 之前先检查文件大小，避免大文件直接 OOM。
@@ -109,6 +115,7 @@ class BackupService {
     final prefs = await SharedPreferences.getInstance();
     final map = <String, dynamic>{};
     for (final key in prefs.getKeys()) {
+      if (key.startsWith(localOnlyPrefPrefix)) continue;
       final value = prefs.get(key);
       if (value is String) {
         map[key] = {'t': 's', 'v': value};
@@ -467,13 +474,15 @@ class BackupService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 清空现有设置
+    // 清空现有设置（保留仅本机使用的配置，如云同步端点/设备标识）
     for (final key in prefs.getKeys()) {
+      if (key.startsWith(localOnlyPrefPrefix)) continue;
       await prefs.remove(key);
     }
 
-    // 写入备份条目
+    // 写入备份条目（跳过仅本机使用的配置）
     for (final e in entries) {
+      if (e.key.startsWith(localOnlyPrefPrefix)) continue;
       final value = e.value;
       if (value is String) {
         await prefs.setString(e.key, value);
