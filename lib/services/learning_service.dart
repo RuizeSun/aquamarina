@@ -1,7 +1,9 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../models/user_word_record.dart';
 import 'database_service.dart';
+import 'cloud_sync_activity_sync_service.dart';
 import 'log_service.dart';
 
 class DailyStats {
@@ -877,6 +879,7 @@ class LearningService {
       }
     });
     invalidateStatsCache();
+    CloudSyncActivitySyncService.notifyLearningCompleted();
   }
 
   /// 批量重置学习状态（删除学习记录，回到等待学习）
@@ -903,6 +906,7 @@ class LearningService {
       }
     });
     invalidateStatsCache();
+    CloudSyncActivitySyncService.notifyLearningCompleted();
   }
 
   // ─── 批量保存学习/复习结果 ─────────────────────
@@ -1117,6 +1121,8 @@ class LearningService {
       correctCount: correctCount,
       wrongCount: wrongCount,
     );
+    // 学习流程结束：触发事件同步（防抖、后台执行）
+    CloudSyncActivitySyncService.notifyLearningCompleted();
   }
 
   /// 将单词加入今日错词队列（已存在则把计划日期更新为今天）。
@@ -1196,6 +1202,7 @@ class LearningService {
     final db = await DatabaseService.database;
     final accuracy = totalCount > 0 ? (correctCount / totalCount) : 0.0;
     await db.insert('vocab_test_history', {
+      'uuid': const Uuid().v4(),
       'date': DateTime.now().toIso8601String(),
       'total_count': totalCount,
       'correct_count': correctCount,
@@ -1203,6 +1210,7 @@ class LearningService {
       'book_id': bookId,
       'book_title': bookTitle,
     });
+    CloudSyncActivitySyncService.notifyLearningCompleted();
   }
 
   /// 获取词汇测试历史记录（按时间倒序），可选限制条数

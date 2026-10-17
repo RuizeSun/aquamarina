@@ -7,6 +7,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/ai_service.dart';
+import '../services/cloud_sync_activity_sync_service.dart';
 import '../services/log_service.dart';
 import '../services/study_timer_service.dart';
 import '../widgets/sentence_note_bar.dart';
@@ -490,6 +491,9 @@ class _AiPracticeSessionPageState extends State<AiPracticeSessionPage>
         logError('AiPracticeSessionPage', '处理练习记录失败: $e', stackTrace);
       }
     }
+
+    // 题型练习结束：触发事件同步（防抖、后台执行）
+    CloudSyncActivitySyncService.notifyLearningCompleted();
 
     if (mounted) {
       Navigator.of(context).pop(records);

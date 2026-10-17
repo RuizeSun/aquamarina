@@ -8,6 +8,7 @@ import 'pages/ai_practice_page.dart' show AiPracticePage, routeObserver;
 import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'services/cloud_sync_foreground_sync_service.dart';
 import 'services/database_service.dart';
 import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
@@ -73,7 +74,10 @@ void main() async {
       await profileService.addProfile(defaultProfile);
       logInfo('AiProfileService', '已创建默认 AI 配置');
     } else {
-      logInfo('AiProfileService', 'AI 配置加载完成，共 ${profileService.profiles.length} 个');
+      logInfo(
+        'AiProfileService',
+        'AI 配置加载完成，共 ${profileService.profiles.length} 个',
+      );
     }
   } catch (e, stackTrace) {
     logError('AiProfileService', 'AI 配置初始化失败: $e', stackTrace);
@@ -156,10 +160,24 @@ class AquamarinaApp extends StatefulWidget {
 }
 
 class _AquamarinaAppState extends State<AquamarinaApp> {
+  Timer? _autoSyncTimer;
+  late final AppLifecycleListener _syncLifecycleListener;
+
   @override
   void initState() {
     super.initState();
     ThemeModeService.instance.load();
+
+    // 启动 5 秒后启动前台轮询（首次 tick 会立即尝试一次同步）
+    _autoSyncTimer = Timer(const Duration(seconds: 5), () {
+      unawaited(CloudSyncForegroundSyncService.instance.start());
+    });
+    _syncLifecycleListener = AppLifecycleListener(
+      onResume: () =>
+          unawaited(CloudSyncForegroundSyncService.instance.start()),
+      onHide: CloudSyncForegroundSyncService.instance.stop,
+      onPause: CloudSyncForegroundSyncService.instance.stop,
+    );
 
     // 关键服务初始化失败时向用户弹窗提示
     final initError = widget.initError;
@@ -185,6 +203,15 @@ class _AquamarinaAppState extends State<AquamarinaApp> {
         );
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _autoSyncTimer?.cancel();
+    _autoSyncTimer = null;
+    CloudSyncForegroundSyncService.instance.stop();
+    _syncLifecycleListener.dispose();
+    super.dispose();
   }
 
   @override

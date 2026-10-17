@@ -2,11 +2,28 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+
 import 'log_service.dart';
+import '../models/sync_op.dart';
+import 'sync_schema.dart';
+import 'sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 12;
+  static const int schemaVersion = 17;
+
+  /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
+  static const String sentenceSetsTableSql = '''
+          CREATE TABLE IF NOT EXISTS sentence_sets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            sentence_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''';
 
   static Database? _db;
 
@@ -358,6 +375,15 @@ class DatabaseService {
         // ── AI 生成句式集「消耗预估」矫正样本 ──
         await db.execute(aiEstimateSamplesTableSql);
         await db.execute(aiEstimateSamplesIndexSql);
+
+        // ── v13：同步就绪 schema（uuid / sort_index / oplog / 触发器） ──
+        await migrateToV13(db);
+        // ── v15：设备 head / state 水位与 GC 所需的列 ──
+        await migrateToV15(db);
+        // ── v16：oplog 记录写入墙钟，导出时生成 HLC ──
+        await migrateToV16(db);
+        // ── v17：批量 op 表 ──
+        await migrateToV17(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -496,6 +522,26 @@ class DatabaseService {
           await db.execute(attemptedSentenceIdsTableSql);
           await db.execute(attemptedSentenceIdsBackfillSql);
         }
+        // 12 → 13：同步就绪 schema（稳定 ID、顺序键、oplog 与触发器）
+        if (oldVersion < 13) {
+          await migrateToV13(db);
+        }
+        // 13 → 14：句式集元数据入库（便于事务与增量同步）
+        if (oldVersion < 14) {
+          await migrateToV14(db);
+        }
+        // 14 → 15：设备 head / state 水位、chunk HLC 边界与应用记录 GC
+        if (oldVersion < 15) {
+          await migrateToV15(db);
+        }
+        // 15 → 16：oplog 捕获时间列与触发器重建
+        if (oldVersion < 16) {
+          await migrateToV16(db);
+        }
+        // 16 → 17：批量 op 表
+        if (oldVersion < 17) {
+          await migrateToV17(db);
+        }
       },
     );
   }
@@ -566,6 +612,249 @@ class DatabaseService {
       )
     ''');
     await db.execute(wrongSentencesUniqueIndexSql);
+  }
+
+  /// v12 → v13：为同步准备稳定标识、顺序键与捕获层。
+  ///
+  /// 幂等：新装、升级、重复执行均安全。内容：
+  /// 1. 补列：`word_books.uuid`、`word_book_entries.book_uuid`、
+  ///    `learning_sessions.uuid`、`vocab_test_history.uuid`、
+  ///    `sentences.sort_index`；
+  /// 2. 回填：为存量行生成 UUID、从词书回填条目的 book_uuid、按 rowid 回填句子顺序；
+  /// 3. 索引：跨设备稳定键与顺序查询；
+  /// 4. 安装同步系统表、oplog 表与触发器。
+  static Future<void> migrateToV13(Database db) async {
+    await db.execute(sentenceSetsTableSql);
+    await _ensureColumn(db, 'word_books', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'word_book_entries', 'book_uuid', 'TEXT');
+    await _ensureColumn(db, 'learning_sessions', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'vocab_test_history', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'sentences', 'sort_index', 'REAL');
+
+    await _backfillUuid(db, 'word_books');
+    await _backfillUuid(db, 'learning_sessions');
+    await _backfillUuid(db, 'vocab_test_history');
+    await _backfillBookUuid(db);
+    await _backfillSentenceSortIndex(db);
+
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_word_books_uuid '
+      'ON word_books(uuid)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_sessions_uuid '
+      'ON learning_sessions(uuid)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_test_history_uuid '
+      'ON vocab_test_history(uuid)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_book_entries_book_uuid '
+      'ON word_book_entries(book_uuid)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sentences_set_sort '
+      'ON sentences(set_id, sort_index)',
+    );
+
+    await SyncSchema.ensure(db);
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'baseline_hlc',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'capture_enabled',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    logInfo('DatabaseService', 'v13 同步 schema 迁移完成');
+  }
+
+  /// v13 → v14：句式集元数据表 + 同步触发器安装。
+  ///
+  /// Prefs → DB 的数据搬运由 `SentenceSetService.load()` 惰性完成，
+  /// 这样旧备份恢复后也能触发迁移。
+  static Future<void> migrateToV14(Database db) async {
+    await db.execute(sentenceSetsTableSql);
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v14 句式集 schema 迁移完成');
+  }
+
+  /// v14 → v15：增量同步的设备 head / state 水位与 GC 支撑列。
+  ///
+  /// `SyncSchema.ensure` 会幂等补齐所有新列（含旧库升级），
+  /// 这里额外把已有 `sync_chunks` 的起始 HLC 从对象键回填，
+  /// 以便 GC 能按 HLC 水位判断哪些 chunk 已经无人需要。
+  static Future<void> migrateToV15(Database db) async {
+    await SyncSchema.ensure(db);
+    final rows = await db.query(
+      'sync_chunks',
+      columns: ['device_id', 'chunk_key', 'min_hlc'],
+      where: 'min_hlc IS NULL OR min_hlc = ?',
+      whereArgs: [''],
+    );
+    for (final row in rows) {
+      final key = row['chunk_key'];
+      if (key is! String) continue;
+      final hlc = _chunkStartHlc(key);
+      if (hlc == null) continue;
+      await db.update(
+        'sync_chunks',
+        {'min_hlc': hlc.value, 'max_hlc': hlc.value},
+        where: 'device_id = ? AND chunk_key = ?',
+        whereArgs: [row['device_id'], key],
+      );
+    }
+    await _backfillSyncState(db);
+    logInfo('DatabaseService', 'v15 云同步水位 schema 迁移完成');
+  }
+
+  /// v15 → v16：oplog 增加 `captured_at_ms`，并重建触发器。
+  ///
+  /// 历史待上传行没有捕获时间：保持 NULL，由导出逻辑回退到当前时间。
+  static Future<void> migrateToV16(Database db) async {
+    await SyncSchema.reinstallTriggers(db);
+    // 已有待上传行若已分配 HLC，可用它近似捕获时间；未分配的行保持 NULL，
+    // 由导出逻辑回退到当前时间。
+    for (final spec in SyncSpecs.all) {
+      try {
+        await db.rawUpdate(
+          'UPDATE "${spec.oplogTable}" '
+          'SET captured_at_ms = hlc_ms '
+          'WHERE captured_at_ms IS NULL AND hlc_ms IS NOT NULL',
+        );
+      } catch (_) {
+        // 旧库表结构异常时忽略，后续同步仍可运行
+      }
+    }
+    logInfo('DatabaseService', 'v16 同步捕获时间 schema 迁移完成');
+  }
+
+  /// v16 → v17：批量 op 表（大批量导入压缩为单条 op）。
+  static Future<void> migrateToV17(Database db) async {
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v17 批量 op schema 迁移完成');
+  }
+
+  /// 从已有 `sync_chunks` 反推每个来源设备的水位，避免升级后
+  /// 已同步设备因为 `sync_state` 为空而长期阻塞云端 GC。
+  static Future<void> _backfillSyncState(Database db) async {
+    final rows = await db.query(
+      'sync_chunks',
+      columns: ['device_id', 'chunk_key', 'min_hlc'],
+      where: 'min_hlc IS NOT NULL',
+    );
+    final latest = <String, Map<String, Object?>>{};
+    for (final row in rows) {
+      final device = row['device_id'];
+      final hlc = row['min_hlc'];
+      if (device is! String || device.isEmpty || hlc is! String) continue;
+      final current = latest[device];
+      if (current == null || hlc.compareTo(current['min_hlc'] as String) > 0) {
+        latest[device] = row;
+      }
+    }
+    for (final entry in latest.entries) {
+      await db.insert('sync_state', {
+        'device_id': entry.key,
+        'last_seq': 0,
+        'last_hlc': entry.value['min_hlc'],
+        'last_chunk_key': entry.value['chunk_key'],
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  /// 从 `chunks/{msHex}-{counterHex}-{sha}.jsonl` 解析 chunk 起始 HLC。
+  static SyncHlc? _chunkStartHlc(String key) {
+    final name = key.split('/').last;
+    final parts = name.split('-');
+    if (parts.length < 2) return null;
+    final ms = int.tryParse(parts[0], radix: 16);
+    final counter = int.tryParse(parts[1], radix: 16);
+    if (ms == null || counter == null) return null;
+    return SyncHlc(ms, counter);
+  }
+
+  /// 为表中 uuid 为空的行生成 UUID（按 rowid 更新，幂等）。
+  static Future<void> _backfillUuid(Database db, String table) async {
+    final rows = await db.rawQuery(
+      'SELECT rowid AS rid FROM "$table" '
+      'WHERE "uuid" IS NULL OR "uuid" = \'\'',
+    );
+    if (rows.isEmpty) return;
+    for (final row in rows) {
+      await db.update(
+        table,
+        {'uuid': const Uuid().v4()},
+        where: 'rowid = ?',
+        whereArgs: [row['rid']],
+      );
+    }
+  }
+
+  /// 从 word_books.uuid 回填 word_book_entries.book_uuid。
+  static Future<void> _backfillBookUuid(Database db) async {
+    final rows = await db.rawQuery(
+      'SELECT rowid AS rid, book_id FROM word_book_entries '
+      'WHERE "book_uuid" IS NULL OR "book_uuid" = \'\'',
+    );
+    for (final row in rows) {
+      final bookId = row['book_id'];
+      if (bookId == null) continue;
+      final books = await db.query(
+        'word_books',
+        columns: ['uuid'],
+        where: 'id = ?',
+        whereArgs: [bookId],
+        limit: 1,
+      );
+      if (books.isEmpty) continue;
+      final uuid = books.first['uuid'] as String?;
+      if (uuid == null || uuid.isEmpty) continue;
+      await db.update(
+        'word_book_entries',
+        {'book_uuid': uuid},
+        where: 'rowid = ?',
+        whereArgs: [row['rid']],
+      );
+    }
+  }
+
+  /// 按 rowid 顺序为每个句式集的句子回填 `sort_index`。
+  ///
+  /// 只处理 `sort_index IS NULL` 的行，重复执行不会重排已有顺序。
+  static Future<void> _backfillSentenceSortIndex(Database db) async {
+    final sets = await db.rawQuery('SELECT DISTINCT set_id FROM sentences');
+    for (final setRow in sets) {
+      final setId = setRow['set_id'];
+      if (setId is! String) continue;
+      final maxRows = await db.rawQuery(
+        'SELECT COALESCE(MAX(sort_index), 0) AS m FROM sentences '
+        'WHERE set_id = ?',
+        [setId],
+      );
+      final maxValue = (maxRows.first['m'] as num?)?.toDouble() ?? 0;
+      final rows = await db.rawQuery(
+        'SELECT rowid AS rid FROM sentences '
+        'WHERE set_id = ? AND sort_index IS NULL ORDER BY rowid ASC',
+        [setId],
+      );
+      var index = maxValue + 1;
+      for (final row in rows) {
+        await db.update(
+          'sentences',
+          {'sort_index': index},
+          where: 'rowid = ?',
+          whereArgs: [row['rid']],
+        );
+        index += 1;
+      }
+    }
   }
 
   /// 检查表中是否存在指定列，缺失则添加（幂等，可安全重复调用）

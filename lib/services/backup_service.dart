@@ -2,16 +2,18 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'cloud_sync_settings.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 'mimo_tts_credentials.dart';
+import 'sync_schema.dart';
 import 'theme_mode_service.dart';
 import 'tts_service.dart';
 
@@ -32,6 +34,12 @@ class BackupService {
   static const String _secureFileName = 'secure_storage.json';
   static const String _metaFileName = 'backup_meta.json';
 
+  /// 仅本机使用的 SharedPreferences 前缀：既不会写入备份，恢复时也不会被覆盖。
+  ///
+  /// 云同步配置（端点/桶/设备标识/同步状态）属于设备本地设置：
+  /// 如果随备份跑到另一台设备，会让那台设备把数据写进本设备的云端命名空间。
+  static const String localOnlyPrefPrefix = 'cloud_sync_';
+
   /// 导入的备份文件大小上限（防滥用，正常备份远小于此值）
   ///
   /// 公开给导入页面，在 `readAsBytes()` 之前先检查文件大小，避免大文件直接 OOM。
@@ -43,65 +51,132 @@ class BackupService {
 
   /// 生成完整备份数据（ZIP 字节流）。
   ///
-  /// [includeApiKeys] 为 true 时包含 AI API Keys（敏感信息）。
-  ///
-  /// 数据库通过 SQLite `VACUUM INTO` 生成一致快照副本后读取，
-  /// 全程保持主连接打开，避免「关闭 → 拷贝 → 重开」窗口期内
-  /// 其他异步写入（如 StudyTimerService 定时持久化）访问数据库出错。
+  /// 兼容旧调用方；内部改为写临时文件再读取。云同步与手动导出应优先使用
+  /// [exportBackupToFile]，避免大数据库整包进入内存（P0-2）。
   static Future<Uint8List> exportBackup({required bool includeApiKeys}) async {
-    logInfo('BackupService', '开始导出备份 includeApiKeys=$includeApiKeys');
-    final archive = Archive();
+    final dir = await getTemporaryDirectory();
+    final file = File(
+      p.join(
+        dir.path,
+        'aquamarina_backup_${DateTime.now().microsecondsSinceEpoch}.zip',
+      ),
+    );
+    try {
+      await exportBackupToFile(includeApiKeys: includeApiKeys, output: file);
+      return await file.readAsBytes();
+    } finally {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+  }
 
-    // 1. 业务数据库（VACUUM INTO 生成快照，不关闭主连接）
+  /// 流式生成完整备份到 [output]。
+  ///
+  /// - 数据库先用 `VACUUM INTO` 生成一致副本；
+  /// - 副本中的 `sync_*` / `oplog_*` 会被删除并 `VACUUM`（P2-1），
+  ///   恢复时由 `SyncSchema.ensure` 重建，避免快照携带运行时状态；
+  /// - 使用 `ZipFileEncoder` 直接从文件流写入，不把 DB 读进内存。
+  static Future<void> exportBackupToFile({
+    required bool includeApiKeys,
+    required File output,
+  }) async {
+    logInfo('BackupService', '开始导出备份 includeApiKeys=$includeApiKeys');
+    final parent = output.parent;
+    if (!await parent.exists()) {
+      await parent.create(recursive: true);
+    }
+
     final dbPath = await DatabaseService.databasePath;
     final dbFile = File(dbPath);
-    if (await dbFile.exists()) {
-      final tmpPath = '$dbPath.export_tmp';
-      final tmpFile = File(tmpPath);
-      // 清理可能残留的临时文件（上次导出异常中断时）
+    final tmpPath = '$dbPath.export_tmp';
+    final tmpFile = File(tmpPath);
+    if (await tmpFile.exists()) {
+      await tmpFile.delete();
+    }
+
+    ZipFileEncoder? encoder;
+    try {
+      if (await dbFile.exists()) {
+        // 由 SQLite 引擎生成与主连接一致（含 WAL 事务）的独立快照
+        await DatabaseService.exportDatabaseCopy(tmpPath);
+        await _stripSyncRuntimeTables(tmpPath);
+      }
+
+      encoder = ZipFileEncoder();
+      encoder.create(output.path);
+      if (await tmpFile.exists()) {
+        await encoder.addFile(tmpFile, dbFileName);
+      }
+      encoder.addArchiveFile(
+        ArchiveFile.string(_prefsFileName, await _exportPreferences()),
+      );
+      if (includeApiKeys) {
+        encoder.addArchiveFile(
+          ArchiveFile.string(_secureFileName, await _exportSecureStorage()),
+        );
+      }
+      encoder.addArchiveFile(
+        ArchiveFile.string(
+          _metaFileName,
+          jsonEncode({
+            'app': 'aquamarina',
+            'created_at': DateTime.now().toIso8601String(),
+            'contains_api_keys': includeApiKeys,
+          }),
+        ),
+      );
+      await encoder.close();
+      encoder = null;
+
+      final size = await output.length();
+      logInfo('BackupService', '备份导出完成，文件大小: $size 字节');
+    } catch (e) {
+      // 避免把半个 ZIP 留给调用方（用户选择的路径可能已被截断）。
+      try {
+        if (await output.exists()) await output.delete();
+      } catch (_) {}
+      rethrow;
+    } finally {
+      if (encoder != null) {
+        try {
+          await encoder.close();
+        } catch (_) {}
+      }
       if (await tmpFile.exists()) {
         await tmpFile.delete();
       }
-      try {
-        // 由 SQLite 引擎生成与主连接一致（含 WAL 事务）的独立快照
-        await DatabaseService.exportDatabaseCopy(tmpPath);
-        archive.addFile(
-          ArchiveFile.bytes(dbFileName, await tmpFile.readAsBytes()),
-        );
-      } finally {
-        if (await tmpFile.exists()) {
-          await tmpFile.delete();
+    }
+  }
+
+  /// 从导出的 DB 副本中移除同步运行时表，减小快照体积。
+  ///
+  /// 恢复流程会重新执行 `SyncSchema.ensure` 并写入同步基线，因此不会
+  /// 丢失业务数据，也不会重复应用历史 chunk。
+  static Future<void> _stripSyncRuntimeTables(String dbPath) async {
+    Database? db;
+    try {
+      db = await databaseFactory.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(singleInstance: false),
+      );
+      final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND (name LIKE 'sync\\_%' ESCAPE '\\' OR name LIKE 'oplog\\_%' ESCAPE '\\')",
+      );
+      for (final row in rows) {
+        final name = row['name'];
+        if (name is String && name.isNotEmpty) {
+          await db.execute('DROP TABLE IF EXISTS "$name"');
         }
       }
+      await db.execute('VACUUM');
+    } catch (e) {
+      // 瘦身失败不影响导出：恢复时仍会清理运行时状态
+      logWarning('BackupService', '清理快照中的同步表失败（不影响导出）: $e');
+    } finally {
+      await db?.close();
     }
-
-    // 2. SharedPreferences
-    archive.addFile(
-      ArchiveFile.string(_prefsFileName, await _exportPreferences()),
-    );
-
-    // 3. AI API Keys（可选）
-    if (includeApiKeys) {
-      archive.addFile(
-        ArchiveFile.string(_secureFileName, await _exportSecureStorage()),
-      );
-    }
-
-    // 4. 元信息
-    archive.addFile(
-      ArchiveFile.string(
-        _metaFileName,
-        jsonEncode({
-          'app': 'aquamarina',
-          'created_at': DateTime.now().toIso8601String(),
-          'contains_api_keys': includeApiKeys,
-        }),
-      ),
-    );
-
-    final bytes = Uint8List.fromList(ZipEncoder().encode(archive));
-    logInfo('BackupService', '备份导出完成，文件大小: ${bytes.lengthInBytes} 字节');
-    return bytes;
   }
 
   /// 序列化 SharedPreferences：为每个 key 附带类型标记，保证恢复时类型不丢失。
@@ -109,6 +184,9 @@ class BackupService {
     final prefs = await SharedPreferences.getInstance();
     final map = <String, dynamic>{};
     for (final key in prefs.getKeys()) {
+      if (key.startsWith(localOnlyPrefPrefix)) continue;
+      // 句式集元数据已迁入 SQLite（v14）；旧 key 只为兼容历史备份
+      if (key == 'sentence_sets_v1') continue;
       final value = prefs.get(key);
       if (value is String) {
         map[key] = {'t': 's', 'v': value};
@@ -188,187 +266,282 @@ class BackupService {
   ///
   /// 任何校验失败都会在触碰现有数据之前抛出 [BackupException]。
   static Future<BackupImportResult> importBackup(Uint8List bytes) async {
-    logInfo('BackupService', '开始导入备份，文件大小: ${bytes.length} 字节');
-    // ── 1. 解压与校验 ─────────────────────────────
-    if (bytes.length > maxBackupSize) {
+    final dir = await getTemporaryDirectory();
+    final file = File(
+      p.join(
+        dir.path,
+        'aquamarina_import_${DateTime.now().microsecondsSinceEpoch}.zip',
+      ),
+    );
+    try {
+      await file.writeAsBytes(bytes, flush: true);
+      return await importBackupFromFile(file);
+    } finally {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
+  }
+
+  /// 从备份 ZIP 文件流式恢复数据（覆盖式）。
+  ///
+  /// 数据库通过 `ArchiveFile.writeContent` 直接解压到临时文件，
+  /// 不会把整库读入内存（P0-2）。
+  static Future<BackupImportResult> importBackupFromFile(File file) async {
+    final size = await file.length();
+    logInfo('BackupService', '开始导入备份，文件大小: $size 字节');
+    if (size > maxBackupSize) {
       throw const BackupException('备份文件过大，拒绝导入');
     }
 
-    Archive archive;
-    try {
-      archive = ZipDecoder().decodeBytes(bytes, verify: true);
-    } on ArchiveException {
-      throw const BackupException('文件不是有效的备份文件（ZIP 解析失败）');
-    }
-
-    final dbEntry = archive.findFile(dbFileName);
-    if (dbEntry == null) {
-      throw const BackupException('备份文件缺少 aquamarina.db，无法导入');
-    }
-    final dbBytes = dbEntry.content as List<int>;
-    if (!_isSqliteHeader(dbBytes)) {
-      throw const BackupException('备份中的数据库文件无效，拒绝导入');
-    }
-    if (dbBytes.length > maxBackupSize) {
-      throw const BackupException('备份中的数据库文件过大，拒绝导入');
-    }
-
-    // 校验元信息（可选；旧备份可能没有）
-    final metaEntry = archive.findFile(_metaFileName);
-    if (metaEntry != null) {
-      try {
-        final meta =
-            jsonDecode(utf8.decode(metaEntry.content as List<int>))
-                as Map<String, dynamic>;
-        if (meta['app'] != 'aquamarina') {
-          throw const BackupException('不是 Aquamarina 的备份文件');
-        }
-      } catch (e) {
-        if (e is BackupException) rethrow;
-        throw const BackupException('备份文件的元信息损坏');
-      }
-    }
-
-    // 解析并校验 SharedPreferences（不触碰现有数据）
-    final hasPrefsEntry = archive.findFile(_prefsFileName) != null;
-    var prefsEntries = const <MapEntry<String, Object?>>[];
-    if (hasPrefsEntry) {
-      try {
-        prefsEntries = _parsePreferences(
-          utf8.decode(archive.findFile(_prefsFileName)!.content as List<int>),
-        );
-      } on FormatException catch (e) {
-        throw BackupException('备份文件中的设置数据损坏：${e.message}');
-      }
-    }
-
-    // 解析并校验 Secure Storage（不触碰现有数据）
-    Map<String, String> secureMap = const {};
-    final hasSecureEntry = archive.findFile(_secureFileName) != null;
-    if (hasSecureEntry) {
-      try {
-        final decoded = jsonDecode(
-          utf8.decode(archive.findFile(_secureFileName)!.content as List<int>),
-        );
-        if (decoded is! Map) {
-          throw const FormatException('JSON 顶层不是对象');
-        }
-        for (final e in decoded.entries) {
-          if (e.key is! String || e.value is! String) {
-            throw const FormatException('API Key 数据格式错误');
-          }
-        }
-        secureMap = decoded.cast<String, String>();
-      } on FormatException catch (e) {
-        throw BackupException('备份文件中的 API Key 数据损坏：${e.message}');
-      } catch (_) {
-        throw const BackupException('备份文件中的 API Key 数据损坏');
-      }
-    }
-
-    // ── 2. 校验全部通过，开始写入 ──────────────────
     final dir = await getApplicationSupportDirectory();
     final dbPath = p.join(dir.path, dbFileName);
-
-    // 在触碰现有数据之前，先打开备份数据库做完整性 / 版本 / 必要表校验
-    await _validateImportedDatabase('$dbPath.import_probe', dbBytes);
-
-    // 先为现有数据库留一份回滚副本
-    final bakPath = '$dbPath.bak';
-    if (await File(dbPath).exists()) {
-      await File(dbPath).copy(bakPath);
+    // 唯一临时文件：避免并发恢复或上次异常中断留下的文件互相覆盖。
+    final extractPath =
+        '$dbPath.import_extract_${DateTime.now().microsecondsSinceEpoch}';
+    final extractFile = File(extractPath);
+    if (await extractFile.exists()) {
+      await extractFile.delete();
     }
 
+    InputFileStream? input;
     try {
-      await DatabaseService.close();
+      Archive archive;
+      try {
+        input = InputFileStream(file.path);
+        archive = ZipDecoder().decodeStream(input, verify: true);
+      } on ArchiveException {
+        throw const BackupException('文件不是有效的备份文件（ZIP 解析失败）');
+      }
 
-      // 2a. 原子替换数据库文件（临时文件 + rename，避免写坏唯一副本）
-      final tmpPath = '$dbPath.import_tmp';
-      await File(tmpPath).writeAsBytes(dbBytes, flush: true);
-      await File(tmpPath).rename(dbPath);
-      // 清理可能残留的 WAL/SHM 文件，避免与旧连接冲突
-      for (final suffix in ['-wal', '-shm']) {
-        final sidecar = File('$dbPath$suffix');
-        if (await sidecar.exists()) {
-          await sidecar.delete();
+      final dbEntry = archive.findFile(dbFileName);
+      if (dbEntry == null) {
+        throw const BackupException('备份文件缺少 aquamarina.db，无法导入');
+      }
+
+      // 校验元信息（可选；旧备份可能没有）
+      DateTime? backupCreatedAt;
+      final metaBytes = _readSmallEntry(archive, _metaFileName, 1024 * 1024);
+      if (metaBytes != null) {
+        try {
+          final meta =
+              jsonDecode(utf8.decode(metaBytes)) as Map<String, dynamic>;
+          if (meta['app'] != 'aquamarina') {
+            throw const BackupException('不是 Aquamarina 的备份文件');
+          }
+          final createdAt = meta['created_at'];
+          if (createdAt is String) {
+            backupCreatedAt = DateTime.tryParse(createdAt);
+          }
+        } catch (e) {
+          if (e is BackupException) rethrow;
+          throw const BackupException('备份文件的元信息损坏');
         }
       }
 
-      // 2b. 恢复 SharedPreferences（entry 存在时总是清空并写入，含空对象）
-      if (hasPrefsEntry) {
-        await _restorePreferences(prefsEntries);
+      // 解析并校验 SharedPreferences（不触碰现有数据）
+      final prefsBytes = _readSmallEntry(
+        archive,
+        _prefsFileName,
+        64 * 1024 * 1024,
+      );
+      final hasPrefsEntry = prefsBytes != null;
+      var prefsEntries = const <MapEntry<String, Object?>>[];
+      if (prefsBytes != null) {
+        try {
+          prefsEntries = _parsePreferences(utf8.decode(prefsBytes));
+        } on FormatException catch (e) {
+          throw BackupException('备份文件中的设置数据损坏：${e.message}');
+        }
       }
 
-      // 2c. 恢复 Secure Storage
-      if (hasSecureEntry) {
-        await _restoreSecureStorage(secureMap);
+      // 解析并校验 Secure Storage（不触碰现有数据）
+      Map<String, String> secureMap = const {};
+      final secureBytes = _readSmallEntry(
+        archive,
+        _secureFileName,
+        4 * 1024 * 1024,
+      );
+      final hasSecureEntry = secureBytes != null;
+      if (secureBytes != null) {
+        try {
+          final decoded = jsonDecode(utf8.decode(secureBytes));
+          if (decoded is! Map) {
+            throw const FormatException('JSON 顶层不是对象');
+          }
+          for (final e in decoded.entries) {
+            if (e.key is! String || e.value is! String) {
+              throw const FormatException('API Key 数据格式错误');
+            }
+          }
+          secureMap = decoded.cast<String, String>();
+        } on FormatException catch (e) {
+          throw BackupException('备份文件中的 API Key 数据损坏：${e.message}');
+        } catch (_) {
+          throw const BackupException('备份文件中的 API Key 数据损坏');
+        }
       }
 
-      // 2d. 立即重新打开数据库
+      // 流式解压数据库到临时文件
+      final output = OutputFileStream(extractPath);
       try {
-        await DatabaseService.database;
-      } catch (_) {
-        throw const BackupException('数据库文件已替换，但打开失败，请重启应用');
+        dbEntry.writeContent(output);
+      } finally {
+        await output.close();
+      }
+      final extractedSize = await extractFile.length();
+      if (extractedSize > maxBackupSize) {
+        throw const BackupException('备份中的数据库文件过大，拒绝导入');
+      }
+      await _validateImportedDatabase(extractPath);
+
+      // 先为现有数据库留一份回滚副本
+      final bakPath = '$dbPath.bak';
+      if (await File(dbPath).exists()) {
+        await File(dbPath).copy(bakPath);
       }
 
-      // 2e. 热更新 TTS 与主题设置（无需重启即可生效）
-      try {
-        await TtsService.instance.refreshSettings();
-      } catch (_) {
-        // TTS 刷新失败不影响导入结果
-      }
-      try {
-        await ThemeModeService.instance.load();
-      } catch (_) {
-        // 主题刷新失败不影响导入结果
-      }
-    } catch (e) {
-      // 回滚：恢复导入前的数据库
       try {
         await DatabaseService.close();
-        final current = File(dbPath);
-        if (await current.exists()) {
-          await current.delete();
+
+        // 原子替换数据库文件（临时文件 + rename，避免写坏唯一副本）。
+        // Windows 的 File.rename 不能覆盖已存在文件，先删除旧库；失败时由
+        // 下方的 .bak 回滚。
+        final currentDb = File(dbPath);
+        if (await currentDb.exists()) {
+          await currentDb.delete();
         }
-        if (await File(bakPath).exists()) {
-          await File(bakPath).rename(dbPath);
+        await extractFile.rename(dbPath);
+        // 清理可能残留的 WAL/SHM 文件，避免与旧连接冲突
+        for (final suffix in ['-wal', '-shm']) {
+          final sidecar = File('$dbPath$suffix');
+          if (await sidecar.exists()) {
+            await sidecar.delete();
+          }
         }
-      } catch (_) {
-        // 回滚失败时保留现场，交由用户处理
+
+        if (hasPrefsEntry) {
+          await _restorePreferences(prefsEntries);
+        }
+        if (hasSecureEntry) {
+          await _restoreSecureStorage(secureMap);
+        }
+
+        try {
+          await DatabaseService.database;
+        } catch (_) {
+          throw const BackupException('数据库文件已替换，但打开失败，请重启应用');
+        }
+
+        // 快照可能已移除同步运行时表：先重建，再写入基线。
+        final db = await DatabaseService.database;
+        try {
+          await SyncSchema.ensure(db);
+        } catch (e) {
+          logWarning('BackupService', '重建同步 schema 失败（不影响恢复）: $e');
+        }
+        try {
+          await SyncSchema.resetRuntimeState(
+            db,
+            baseline: backupCreatedAt ?? DateTime.now(),
+          );
+          // 恢复后数据基线已变：清空检查点水位，允许重新生成检查点。
+          await CloudSyncSettings.saveState(
+            (await CloudSyncSettings.loadState()).copyWith(
+              clearCheckpoint: true,
+            ),
+          );
+        } catch (e) {
+          logWarning('BackupService', '重置同步运行时状态失败（不影响恢复）: $e');
+        }
+
+        try {
+          await TtsService.instance.refreshSettings();
+        } catch (_) {
+          // TTS 刷新失败不影响导入结果
+        }
+        try {
+          await ThemeModeService.instance.load();
+        } catch (_) {
+          // 主题刷新失败不影响导入结果
+        }
+      } catch (e) {
+        // 回滚：恢复导入前的数据库
+        try {
+          await DatabaseService.close();
+          final current = File(dbPath);
+          if (await current.exists()) {
+            await current.delete();
+          }
+          if (await File(bakPath).exists()) {
+            await File(bakPath).rename(dbPath);
+          }
+        } catch (_) {
+          // 回滚失败时保留现场，交由用户处理
+        }
+        rethrow;
+      } finally {
+        final bak = File(bakPath);
+        if (await bak.exists()) {
+          await bak.delete();
+        }
       }
-      rethrow;
+
+      logInfo('BackupService', '备份导入完成');
+      return BackupImportResult(restoredApiKeys: hasSecureEntry);
     } finally {
-      final bak = File(bakPath);
-      if (await bak.exists()) {
-        await bak.delete();
+      try {
+        await input?.close();
+      } catch (_) {}
+      if (await extractFile.exists()) {
+        await extractFile.delete();
       }
     }
-
-    logInfo('BackupService', '备份导入完成');
-    return BackupImportResult(restoredApiKeys: hasSecureEntry);
   }
 
-  /// 在替换现有数据库之前，对备份中的数据库做预检：
+  /// 读取小型 JSON 条目并限制大小，避免恶意 ZIP 让内存爆掉。
+  static List<int>? _readSmallEntry(
+    Archive archive,
+    String name,
+    int maxBytes,
+  ) {
+    final entry = archive.findFile(name);
+    if (entry == null) return null;
+    if (entry.size > maxBytes) {
+      throw const BackupException('备份文件中的条目过大，拒绝导入');
+    }
+    return entry.readBytes();
+  }
+
+  /// 在替换现有数据库之前，对解压出的数据库做预检：
+  /// - SQLite 文件头有效
   /// - 能否以只读方式打开
   /// - Schema 版本不高于当前 App
   /// - `PRAGMA quick_check` 通过
   /// - 必要业务表齐全
-  ///
-  /// 校验使用临时副本，失败时不会触碰任何现有数据。
-  static Future<void> _validateImportedDatabase(
-    String probePath,
-    List<int> dbBytes,
-  ) async {
-    final probeFile = File(probePath);
-    if (await probeFile.exists()) {
-      await probeFile.delete();
+  static Future<void> _validateImportedDatabase(String dbPath) async {
+    final file = File(dbPath);
+    if (!await file.exists()) {
+      throw const BackupException('备份中的数据库文件不存在，拒绝导入');
     }
-    await probeFile.writeAsBytes(dbBytes, flush: true);
+    if (await file.length() > maxBackupSize) {
+      throw const BackupException('备份中的数据库文件过大，拒绝导入');
+    }
+    final raf = await file.open();
+    List<int> header;
+    try {
+      header = await raf.read(16);
+    } finally {
+      await raf.close();
+    }
+    if (!_isSqliteHeader(header)) {
+      throw const BackupException('备份中的数据库文件无效，拒绝导入');
+    }
 
     Database? probe;
     try {
       probe = await databaseFactory.openDatabase(
-        probePath,
+        dbPath,
         options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
       );
 
@@ -409,9 +582,6 @@ class BackupService {
       throw BackupException('备份中的数据库无法打开或已损坏：$e');
     } finally {
       await probe?.close();
-      if (await probeFile.exists()) {
-        await probeFile.delete();
-      }
     }
   }
 
@@ -467,13 +637,15 @@ class BackupService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
 
-    // 清空现有设置
+    // 清空现有设置（保留仅本机使用的配置，如云同步端点/设备标识）
     for (final key in prefs.getKeys()) {
+      if (key.startsWith(localOnlyPrefPrefix)) continue;
       await prefs.remove(key);
     }
 
-    // 写入备份条目
+    // 写入备份条目（跳过仅本机使用的配置）
     for (final e in entries) {
+      if (e.key.startsWith(localOnlyPrefPrefix)) continue;
       final value = e.value;
       if (value is String) {
         await prefs.setString(e.key, value);
