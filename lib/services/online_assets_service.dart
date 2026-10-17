@@ -51,10 +51,29 @@ class OnlineAssetsService {
     ),
   );
 
+  /// 在线资源响应缓存：同一路径（根索引 / 分类 / 具体词书或句型集）
+  /// 只下载一次；搜索多个关键词时无需反复拉取全量 JSON。
+  ///
+  /// 采用简单的条目上限，避免缓存无限增长。
+  static const int _maxCacheEntries = 50;
+  static final Map<String, dynamic> _responseCache = {};
+
+  static Future<dynamic> _getJson(String path) async {
+    final cached = _responseCache[path];
+    if (cached != null) return cached;
+
+    final resp = await _dio.get(path);
+    final data = resp.data;
+    if (_responseCache.length >= _maxCacheEntries) {
+      _responseCache.clear();
+    }
+    _responseCache[path] = data;
+    return data;
+  }
+
   // ===== 根入口 =====
   static Future<Map<String, dynamic>> fetchRoot() async {
-    final resp = await _dio.get('/index.json');
-    return resp.data as Map<String, dynamic>;
+    return await _getJson('/index.json') as Map<String, dynamic>;
   }
 
   // ===== 句型集（Corpus） =====
@@ -62,8 +81,7 @@ class OnlineAssetsService {
   static Future<List<OnlineCategory>> fetchCorpusCategories() async {
     final root = await fetchRoot();
     final corpusPath = root['corpus'] as String;
-    final resp = await _dio.get(corpusPath);
-    final data = resp.data as Map<String, dynamic>;
+    final data = await _getJson(corpusPath) as Map<String, dynamic>;
     final list = data['categlories'] as List<dynamic>;
     return list.map((e) {
       final title = e['title'] as Map<String, dynamic>;
@@ -79,8 +97,7 @@ class OnlineAssetsService {
   static Future<List<OnlineAssetEntry>> fetchCorpusSets(
     OnlineCategory category,
   ) async {
-    final resp = await _dio.get(category.indexUrl);
-    final list = resp.data as List<dynamic>;
+    final list = await _getJson(category.indexUrl) as List<dynamic>;
     return list.map((e) {
       final title = e['title'] as Map<String, dynamic>;
       final author = e['author'] as Map<String, dynamic>?;
@@ -99,8 +116,7 @@ class OnlineAssetsService {
     OnlineAssetEntry entry,
   ) async {
     final dir = category.indexUrl.replaceAll('/index.json', '');
-    final resp = await _dio.get('$dir/${entry.file}');
-    final list = resp.data as List<dynamic>;
+    final list = await _getJson('$dir/${entry.file}') as List<dynamic>;
     return list.map((e) {
       final item = e as Map<String, dynamic>;
       return OnlineSentence(
@@ -118,8 +134,7 @@ class OnlineAssetsService {
   static Future<List<OnlineCategory>> fetchWordbookCategories() async {
     final root = await fetchRoot();
     final wbPath = root['wordbook'] as String;
-    final resp = await _dio.get(wbPath);
-    final data = resp.data as Map<String, dynamic>;
+    final data = await _getJson(wbPath) as Map<String, dynamic>;
     final list = data['categlories'] as List<dynamic>;
     return list.map((e) {
       final title = e['title'] as Map<String, dynamic>;
@@ -135,8 +150,7 @@ class OnlineAssetsService {
   static Future<List<OnlineAssetEntry>> fetchWordbookSets(
     OnlineCategory category,
   ) async {
-    final resp = await _dio.get(category.indexUrl);
-    final list = resp.data as List<dynamic>;
+    final list = await _getJson(category.indexUrl) as List<dynamic>;
     return list.map((e) {
       final title = e['title'] as Map<String, dynamic>;
       final author = e['author'] as Map<String, dynamic>?;
@@ -155,8 +169,7 @@ class OnlineAssetsService {
     OnlineAssetEntry entry,
   ) async {
     final dir = category.indexUrl.replaceAll('/index.json', '');
-    final resp = await _dio.get('$dir/${entry.file}');
-    final list = resp.data as List<dynamic>;
+    final list = await _getJson('$dir/${entry.file}') as List<dynamic>;
     return list.map((e) => e as String).toList();
   }
 

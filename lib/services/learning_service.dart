@@ -1164,16 +1164,21 @@ class LearningService {
     if (cleaned.isEmpty) return {};
     final db = await DatabaseService.database;
 
-    final placeholders = cleaned.map((_) => '?').join(',');
-    final maps = await db.rawQuery(
-      'SELECT * FROM user_word_records WHERE word IN ($placeholders)',
-      cleaned,
-    );
-
     final result = <String, UserWordRecord?>{for (final w in cleaned) w: null};
-    for (final m in maps) {
-      final word = (m['word'] as String).toLowerCase();
-      result[word] = UserWordRecord.fromMap(m);
+    for (var start = 0; start < cleaned.length; start += _maxQueryChunkSize) {
+      final end = start + _maxQueryChunkSize < cleaned.length
+          ? start + _maxQueryChunkSize
+          : cleaned.length;
+      final chunk = cleaned.sublist(start, end);
+      final placeholders = chunk.map((_) => '?').join(',');
+      final maps = await db.rawQuery(
+        'SELECT * FROM user_word_records WHERE word IN ($placeholders)',
+        chunk,
+      );
+      for (final m in maps) {
+        final word = (m['word'] as String).toLowerCase();
+        result[word] = UserWordRecord.fromMap(m);
+      }
     }
     return result;
   }
