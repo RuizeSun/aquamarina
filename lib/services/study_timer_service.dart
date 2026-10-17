@@ -54,6 +54,9 @@ class StudyTimerService with WidgetsBindingObserver {
   /// 定期持久化定时器
   Timer? _persistTimer;
 
+  /// 会话代次：用于丢弃跨会话/已结束会话的延迟持久化写入
+  int _generation = 0;
+
   /// 是否已注册 WidgetsBindingObserver
   bool _observerRegistered = false;
 
@@ -85,17 +88,37 @@ class StudyTimerService with WidgetsBindingObserver {
 
   // ─── 会话生命周期 ──────────────────────────────
 
+  /// 串行化 start/end：页面 initState/dispose 中调用时无法 await，
+  /// 若不排队，快速进出页面会出现「end 先于 start 完成 → 留下未结束会话」。
+  Future<void> _lifecycleChain = Future<void>.value();
+
+  Future<T> _serialize<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _lifecycleChain = _lifecycleChain.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (e, stackTrace) {
+        completer.completeError(e, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
   /// 开始一个新的学习会话
-  Future<void> startSession(SessionType type) async {
-    // 如果已有活跃会话，先结束
+  Future<void> startSession(SessionType type) =>
+      _serialize(() => _startSession(type));
+
+  Future<void> _startSession(SessionType type) async {
+    // 如果已有活跃会话，先结束（直接调用内部实现，避免在队列中等待自己）
     if (_sessionId != null) {
-      await endSession();
+      await _endSession();
     }
 
     final db = await DatabaseService.database;
     final now = DateTime.now();
     final dateStr = _dateStr(now);
 
+    _generation++;
     _sessionId = await db.insert('learning_sessions', {
       'session_type': type.value,
       'started_at': now.toIso8601String(),
@@ -119,8 +142,13 @@ class StudyTimerService with WidgetsBindingObserver {
   }
 
   /// 结束当前学习会话
-  Future<void> endSession() async {
+  Future<void> endSession() => _serialize(_endSession);
+
+  Future<void> _endSession() async {
     if (_sessionId == null) return;
+
+    // 使仍在途的定期持久化失效，避免它晚于最终写入覆盖时长
+    _generation++;
 
     // 先累积本轮未持久化的时间
     _accumulateElapsed();
@@ -135,25 +163,31 @@ class StudyTimerService with WidgetsBindingObserver {
       _observerRegistered = false;
     }
 
+    // 捕获当前会话状态，避免 await 期间被新会话覆盖
+    final sessionId = _sessionId;
+    final seconds = _persistedSeconds;
+
     // 最终写入数据库
     final db = await DatabaseService.database;
     await db.update(
       'learning_sessions',
       {
         'ended_at': DateTime.now().toIso8601String(),
-        'duration_seconds': _persistedSeconds,
+        'duration_seconds': seconds,
       },
       where: 'id = ?',
-      whereArgs: [_sessionId],
+      whereArgs: [sessionId],
     );
 
-    logDebug('StudyTimerService', '结束会话: id=$_sessionId duration=${_persistedSeconds}s');
+    logDebug('StudyTimerService', '结束会话: id=$sessionId duration=${seconds}s');
 
-    // 重置状态
-    _sessionId = null;
-    _persistedSeconds = 0;
-    _resumeWallTime = null;
-    _isRunning = false;
+    // 重置状态（仅当没有新的会话在此期间启动时）
+    if (_sessionId == sessionId) {
+      _sessionId = null;
+      _persistedSeconds = 0;
+      _resumeWallTime = null;
+      _isRunning = false;
+    }
   }
 
   // ─── App 生命周期处理 ──────────────────────────
@@ -215,28 +249,43 @@ class StudyTimerService with WidgetsBindingObserver {
 
   /// 累积从上次 resume 到现在的活跃秒数
   void _accumulateElapsed() {
-    if (_resumeWallTime != null) {
-      final elapsed = DateTime.now().difference(_resumeWallTime!).inSeconds;
-      if (elapsed > 0) {
-        _persistedSeconds += elapsed;
-      }
-      _resumeWallTime = DateTime.now();
+    final resumeWallTime = _resumeWallTime;
+    if (resumeWallTime == null) return;
+    final now = DateTime.now();
+    final elapsed = now.difference(resumeWallTime).inSeconds;
+    if (elapsed > 0) {
+      _persistedSeconds += elapsed;
     }
+    _resumeWallTime = now;
   }
 
   /// 将当前累积秒数写入数据库
   void _persistToDb() {
-    if (_sessionId == null) return;
-    final dbFuture = DatabaseService.database;
-    dbFuture.then((db) {
-      if (_sessionId == null) return;
-      db.update(
+    final sessionId = _sessionId;
+    if (sessionId == null) return;
+    // 捕获当前值，避免 await 期间会话切换导致写到新会话上
+    final seconds = _persistedSeconds;
+    final generation = _generation;
+    unawaited(_persistToDbAsync(sessionId, seconds, generation));
+  }
+
+  static Future<void> _persistToDbAsync(
+    int sessionId,
+    int seconds,
+    int generation,
+  ) async {
+    try {
+      final db = await DatabaseService.database;
+      if (generation != StudyTimerService.instance._generation) return;
+      await db.update(
         'learning_sessions',
-        {'duration_seconds': _persistedSeconds},
+        {'duration_seconds': seconds},
         where: 'id = ?',
-        whereArgs: [_sessionId],
+        whereArgs: [sessionId],
       );
-    });
+    } catch (e, stackTrace) {
+      logError('StudyTimerService', '持久化学习时长失败: $e', stackTrace);
+    }
   }
 
   // ─── 查询接口 ──────────────────────────────────

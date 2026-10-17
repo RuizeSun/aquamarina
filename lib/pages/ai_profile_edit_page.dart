@@ -94,9 +94,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
       text: pricing?.cacheHitPrice != null ? '${pricing!.cacheHitPrice}' : '',
     );
     _cacheMissPriceController = TextEditingController(
-      text: pricing?.cacheMissPrice != null
-          ? '${pricing!.cacheMissPrice}'
-          : '',
+      text: pricing?.cacheMissPrice != null ? '${pricing!.cacheMissPrice}' : '',
     );
     _outputPriceController = TextEditingController(
       text: pricing?.outputPrice != null ? '${pricing!.outputPrice}' : '',
@@ -427,8 +425,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
 
   /// 计费与货币设置的分区 UI（仅非 Aquamarina 显示）
   Widget _buildPricingSection() {
-    final symbol =
-        _currencySymbolController.text.trim().isEmpty ? '¥' : _currencySymbolController.text.trim();
+    final symbol = _currencySymbolController.text.trim().isEmpty
+        ? '¥'
+        : _currencySymbolController.text.trim();
 
     Widget priceField({
       required String label,
@@ -480,8 +479,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
               ),
             ],
             selected: {_pricingMode},
-            onSelectionChanged: (s) =>
-                setState(() => _pricingMode = s.first),
+            onSelectionChanged: (s) => setState(() => _pricingMode = s.first),
             showSelectedIcon: false,
           ),
           const SizedBox(height: 16),
@@ -495,15 +493,18 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
             Row(
               children: [
                 Expanded(
-                  child: Text('单价（每单位）',
-                      style: Theme.of(context).textTheme.labelLarge),
+                  child: Text(
+                    '单价（每单位）',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
                 ),
                 DropdownButton<AiPriceUnit>(
                   value: _priceUnit,
                   underline: const SizedBox.shrink(),
                   items: AiPriceUnit.values
-                      .map((u) =>
-                          DropdownMenuItem(value: u, child: Text(u.label)))
+                      .map(
+                        (u) => DropdownMenuItem(value: u, child: Text(u.label)),
+                      )
                       .toList(),
                   onChanged: (u) =>
                       setState(() => _priceUnit = u ?? _priceUnit),
@@ -546,7 +547,10 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
           Row(
             children: [
               Expanded(
-                child: Text('小数位数', style: Theme.of(context).textTheme.bodyMedium),
+                child: Text(
+                  '小数位数',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
               ),
               SegmentedButton<int>(
                 segments: const [
@@ -572,8 +576,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest
-                  .withValues(alpha: 0.4),
+              color: Theme.of(
+                context,
+              ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
