@@ -5,6 +5,9 @@ import 'package:path_provider/path_provider.dart';
 import 'log_service.dart';
 
 class DatabaseService {
+  /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
+  static const int schemaVersion = 12;
+
   static Database? _db;
 
   /// 句型练习批改结果缓存的建表语句（v9 新增）。
@@ -143,7 +146,13 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 12,
+      version: schemaVersion,
+      onConfigure: (db) async {
+        // 外键约束默认关闭；开启后 ON DELETE CASCADE 才会生效
+        await db.execute('PRAGMA foreign_keys = ON');
+        // WAL 提升读写并发与写入性能
+        await db.rawQuery('PRAGMA journal_mode = WAL');
+      },
       onCreate: (db, version) async {
         // ── 词库相关 ──
         await db.execute('''
