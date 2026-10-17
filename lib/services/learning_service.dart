@@ -657,14 +657,17 @@ class LearningService {
       // 等待学习：出现在词书中但还没有学习记录。
       // 词书过滤直接下推到 SQL，避免先把整本词书读进 Dart 再过滤。
       final bookFilter = bookId == null ? '' : 'AND e.book_id = ?';
-      wordMaps = await db.rawQuery('''
+      wordMaps = await db.rawQuery(
+        '''
         SELECT DISTINCT e.word FROM word_book_entries e
         WHERE e.word NOT IN (
           SELECT r.word FROM user_word_records r
         )
         $bookFilter
         ORDER BY e.word COLLATE NOCASE
-      ''', [if (bookId != null) bookId]);
+      ''',
+        [if (bookId != null) bookId],
+      );
     } else {
       // status == 1：已学习（未掌握）；status == 2 / null：已掌握
       final isMastered = status == 1 ? 0 : 1;
@@ -675,12 +678,15 @@ class LearningService {
           SELECT 1 FROM word_book_entries e
           WHERE e.book_id = ? AND e.word = r.word
         )''';
-      wordMaps = await db.rawQuery('''
+      wordMaps = await db.rawQuery(
+        '''
         SELECT DISTINCT r.word FROM user_word_records r
         WHERE r.is_mastered = ?
         $bookFilter
         ORDER BY r.word COLLATE NOCASE
-      ''', [isMastered, if (bookId != null) bookId]);
+      ''',
+        [isMastered, if (bookId != null) bookId],
+      );
     }
 
     // 仅查询结果单词的来源词书映射，避免全表 JOIN
@@ -689,7 +695,11 @@ class LearningService {
         .toSet()
         .toList();
     final sourceMap = <String, Set<String>>{};
-    for (var start = 0; start < resultWords.length; start += _maxQueryChunkSize) {
+    for (
+      var start = 0;
+      start < resultWords.length;
+      start += _maxQueryChunkSize
+    ) {
       final end = start + _maxQueryChunkSize < resultWords.length
           ? start + _maxQueryChunkSize
           : resultWords.length;
@@ -772,11 +782,7 @@ class LearningService {
     final now = DateTime.now().toIso8601String();
 
     await db.transaction((txn) async {
-      for (
-        var start = 0;
-        start < cleaned.length;
-        start += _maxQueryChunkSize
-      ) {
+      for (var start = 0; start < cleaned.length; start += _maxQueryChunkSize) {
         final end = start + _maxQueryChunkSize < cleaned.length
             ? start + _maxQueryChunkSize
             : cleaned.length;
@@ -806,20 +812,16 @@ class LearningService {
           // 还没有学习记录的词：补插一条已掌握记录
           final batch = txn.batch();
           for (final word in missing) {
-            batch.insert(
-              'user_word_records',
-              {
-                'word': word,
-                'stage': 0,
-                'is_weak': 0,
-                'is_mastered': 1,
-                'next_review_date': null,
-                'last_reviewed_at': now,
-                'review_count': 0,
-                'created_at': now,
-              },
-              conflictAlgorithm: ConflictAlgorithm.ignore,
-            );
+            batch.insert('user_word_records', {
+              'word': word,
+              'stage': 0,
+              'is_weak': 0,
+              'is_mastered': 1,
+              'next_review_date': null,
+              'last_reviewed_at': now,
+              'review_count': 0,
+              'created_at': now,
+            }, conflictAlgorithm: ConflictAlgorithm.ignore);
           }
           await batch.commit(noResult: true);
         }
@@ -839,11 +841,7 @@ class LearningService {
     if (cleaned.isEmpty) return;
 
     await db.transaction((txn) async {
-      for (
-        var start = 0;
-        start < cleaned.length;
-        start += _maxQueryChunkSize
-      ) {
+      for (var start = 0; start < cleaned.length; start += _maxQueryChunkSize) {
         final end = start + _maxQueryChunkSize < cleaned.length
             ? start + _maxQueryChunkSize
             : cleaned.length;
@@ -877,7 +875,10 @@ class LearningService {
     Map<String, String> results, {
     bool isReview = false,
   }) async {
-    logDebug('LearningService', '保存批量学习结果: ${results.length} 个单词, isReview=$isReview');
+    logDebug(
+      'LearningService',
+      '保存批量学习结果: ${results.length} 个单词, isReview=$isReview',
+    );
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
     final today = _todayStr();
@@ -897,20 +898,16 @@ class LearningService {
           if (updated == 0) {
             // 首次学习时直接标记「已掌握」：此时还没有学习记录，
             // 必须补插一条，否则单词会一直停留在「等待学习」。
-            await txn.insert(
-              'user_word_records',
-              {
-                'word': word,
-                'stage': 0,
-                'is_weak': 0,
-                'is_mastered': 1,
-                'next_review_date': null,
-                'last_reviewed_at': now,
-                'review_count': 0,
-                'created_at': now,
-              },
-              conflictAlgorithm: ConflictAlgorithm.ignore,
-            );
+            await txn.insert('user_word_records', {
+              'word': word,
+              'stage': 0,
+              'is_weak': 0,
+              'is_mastered': 1,
+              'next_review_date': null,
+              'last_reviewed_at': now,
+              'review_count': 0,
+              'created_at': now,
+            }, conflictAlgorithm: ConflictAlgorithm.ignore);
           }
           await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
         } else if (result == 'forgot') {
@@ -1075,6 +1072,7 @@ class LearningService {
       wrongCount: wrongCount,
     );
   }
+
   /// 将单词加入今日错词队列（已存在则把计划日期更新为今天）。
   ///
   /// 与 `wrong_sentences`（句型错题）区分：本表只服务单词复习流程，
@@ -1092,15 +1090,13 @@ class LearningService {
       whereArgs: [word],
     );
     if (updated == 0) {
-      await txn.insert(
-        'wrong_words',
-        {'word': word, 'scheduled_date': today, 'created_at': now},
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
+      await txn.insert('wrong_words', {
+        'word': word,
+        'scheduled_date': today,
+        'created_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
-
-
 
   static Future<UserWordRecord?> getRecord(String word) async {
     final db = await DatabaseService.database;
@@ -1128,7 +1124,7 @@ class LearningService {
       cleaned,
     );
 
-    final result = <String, UserWordRecord?>{ for (final w in cleaned) w: null };
+    final result = <String, UserWordRecord?>{for (final w in cleaned) w: null};
     for (final m in maps) {
       final word = (m['word'] as String).toLowerCase();
       result[word] = UserWordRecord.fromMap(m);

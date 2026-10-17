@@ -85,13 +85,12 @@ class _WordDetailPageState extends State<WordDetailPage> {
 
     if (selectedBook == null || !mounted) return;
 
-    // 检查是否已存在于该词书
-    final existingWords = await WordBookService.getBookWords(selectedBook.id!);
-    if (!mounted) return;
-    final normalizedWord = widget.word.trim().toLowerCase();
-    final alreadyExists = existingWords.any(
-      (w) => w.trim().toLowerCase() == normalizedWord,
+    // 检查是否已存在于该词书（一次索引查询，避免加载整本词书）
+    final alreadyExists = await WordBookService.isWordInBook(
+      selectedBook.id!,
+      widget.word,
     );
+    if (!mounted) return;
     if (alreadyExists) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('「${widget.word}」已在词书「${selectedBook.title}」中')),

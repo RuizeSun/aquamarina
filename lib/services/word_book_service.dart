@@ -126,11 +126,11 @@ class WordBookService {
         // 一次 batch 提交所有插入，避免逐词一次平台通道往返
         final batch = txn.batch();
         for (final word in cleaned) {
-          batch.insert(
-            'word_book_entries',
-            {'book_id': bookId, 'word': word, 'added_at': now},
-            conflictAlgorithm: ConflictAlgorithm.ignore,
-          );
+          batch.insert('word_book_entries', {
+            'book_id': bookId,
+            'word': word,
+            'added_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.ignore);
         }
         final results = await batch.commit();
         for (final result in results) {
@@ -156,6 +156,21 @@ class WordBookService {
     );
 
     return added;
+  }
+
+  /// 判断某个单词是否已在指定词书中（一次索引查询，避免整表加载）
+  static Future<bool> isWordInBook(int bookId, String word) async {
+    final db = await DatabaseService.database;
+    final count =
+        Sqflite.firstIntValue(
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM word_book_entries '
+            'WHERE book_id = ? AND word = ?',
+            [bookId, word.trim().toLowerCase()],
+          ),
+        ) ??
+        0;
+    return count > 0;
   }
 
   /// 从词书删除单个单词
