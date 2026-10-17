@@ -37,9 +37,23 @@ class SyncTableSpec {
     this.lwwColumn,
   });
 
+  /// 触发器写入的墙钟时间（毫秒），用于在导出时为 op 生成合理 HLC。
+  static const String capturedAtSql =
+      "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+
   String get oplogTable => 'oplog_$entity';
 
   String get pendingIndex => 'idx_${oplogTable}_pending';
+
+  List<String> get triggerNames => [
+    'trg_${entity}_insert',
+    'trg_${entity}_update',
+    'trg_${entity}_delete',
+  ];
+
+  List<String> get dropTriggerDdls => [
+    for (final name in triggerNames) 'DROP TRIGGER IF EXISTS "$name"',
+  ];
 
   String get _keysSql =>
       keyColumns.entries.map((e) => '"${e.key}" ${e.value}').join(', ');
@@ -60,6 +74,7 @@ class SyncTableSpec {
     if (counters.isNotEmpty) parts.add(_countersSql);
     parts.add('"hlc_ms" INTEGER');
     parts.add('"hlc_counter" INTEGER');
+    parts.add('"captured_at_ms" INTEGER');
     return parts.join(',\n  ');
   }
 
@@ -101,8 +116,8 @@ class SyncTableSpec {
   }
 
   String _insertStatement({required String row, required String deltaPrefix}) {
-    final columns = <String>['"op"'];
-    final values = <String>["'upsert'"];
+    final columns = <String>['"op"', '"captured_at_ms"'];
+    final values = <String>["'upsert'", SyncTableSpec.capturedAtSql];
     for (final key in keyColumns.keys) {
       columns.add('"$key"');
       values.add('$row."$key"');
@@ -124,8 +139,8 @@ class SyncTableSpec {
   }
 
   String _deleteStatement() {
-    final columns = <String>['"op"'];
-    final values = <String>["'delete'"];
+    final columns = <String>['"op"', '"captured_at_ms"'];
+    final values = <String>["'delete'", SyncTableSpec.capturedAtSql];
     for (final key in keyColumns.keys) {
       columns.add('"$key"');
       values.add('OLD."$key"');

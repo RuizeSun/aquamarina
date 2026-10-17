@@ -92,9 +92,13 @@ class _FakeStorage extends S3StorageService {
   Future<List<S3ObjectInfo>> list(
     String prefix, {
     bool recursive = true,
+    String? startAfter,
   }) async {
     return objects.entries
         .where((entry) => entry.key.startsWith(prefix))
+        .where(
+          (entry) => startAfter == null || entry.key.compareTo(startAfter) > 0,
+        )
         .map(
           (entry) => S3ObjectInfo(
             key: entry.key,
@@ -103,6 +107,19 @@ class _FakeStorage extends S3StorageService {
           ),
         )
         .toList();
+  }
+
+  @override
+  Future<List<String>> listCommonPrefixes(String prefix) async {
+    final out = <String>{};
+    for (final key in objects.keys) {
+      if (!key.startsWith(prefix)) continue;
+      final rest = key.substring(prefix.length);
+      final slash = rest.indexOf('/');
+      if (slash < 0) continue;
+      out.add('$prefix${rest.substring(0, slash + 1)}');
+    }
+    return (out.toList()..sort());
   }
 
   @override

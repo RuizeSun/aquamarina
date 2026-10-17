@@ -3,11 +3,46 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:minio/minio.dart';
 
 import '../models/cloud_sync_manifest.dart';
 import 'cloud_sync_settings.dart';
 import 'log_service.dart';
+
+/// 文件上传结果（流式上传）。
+class S3FileUploadResult {
+  final String etag;
+  final int size;
+  final String sha256;
+
+  const S3FileUploadResult({
+    required this.etag,
+    required this.size,
+    required this.sha256,
+  });
+}
+
+/// 文件下载结果（流式下载）。
+class S3FileDownloadResult {
+  final int size;
+  final String sha256;
+
+  const S3FileDownloadResult({required this.size, required this.sha256});
+}
+
+/// 收集 `startChunkedConversion` 的最终摘要。
+class _DigestCollector implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) {
+    value = data;
+  }
+
+  @override
+  void close() {}
+}
 
 /// 对象列表条目（只保留同步需要的字段）。
 class S3ObjectInfo {
@@ -140,6 +175,119 @@ class S3StorageService {
     });
   }
 
+  /// 流式上传文件，避免把大文件整体读入内存（P0-2）。
+  ///
+  /// 同时计算完整 SHA-256，供快照清单直接使用。
+  Future<S3FileUploadResult> putFile(
+    String key,
+    File file, {
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    return _guard('上传文件', () async {
+      final size = await file.length();
+      final timeout = _uploadTimeout(size);
+      final collector = _DigestCollector();
+      final hashSink = sha256.startChunkedConversion(collector);
+      final stream = file.openRead().map((chunk) {
+        final bytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+        hashSink.add(bytes);
+        return bytes;
+      });
+      try {
+        final etag = await _minio
+            .putObject(
+              config.bucket,
+              key,
+              stream,
+              size: size,
+              onProgress: (sent) => onProgress?.call(sent, size),
+            )
+            .timeout(timeout);
+        hashSink.close();
+        return S3FileUploadResult(
+          etag: etag,
+          size: size,
+          sha256: collector.value?.toString() ?? '',
+        );
+      } finally {
+        try {
+          hashSink.close();
+        } catch (_) {}
+      }
+    });
+  }
+
+  /// 流式下载对象到文件，边写边算 SHA-256。
+  ///
+  /// [maxBytes] 防止异常大文件占满磁盘/内存；[nullIfMissing] 为 true 时
+  /// 对象不存在返回 null（用于可选清单/状态文件）。
+  Future<S3FileDownloadResult?> downloadToFile(
+    String key,
+    File output, {
+    int maxBytes = 500 * 1024 * 1024,
+    bool nullIfMissing = false,
+    void Function(int received, int? total)? onProgress,
+  }) async {
+    return _guard('下载文件', () async {
+      try {
+        final object = await _minio
+            .getObject(config.bucket, key)
+            .timeout(_defaultTimeout);
+        final total = object.contentLength;
+        if (total != null && total > maxBytes) {
+          throw CloudSyncException(
+            '云端文件过大（${CloudSyncUtils.formatBytes(total)}），已中止下载',
+          );
+        }
+        final parent = output.parent;
+        if (!await parent.exists()) {
+          await parent.create(recursive: true);
+        }
+        final sink = output.openWrite();
+        final collector = _DigestCollector();
+        final hashSink = sha256.startChunkedConversion(collector);
+        var received = 0;
+        try {
+          await for (final chunk in object.timeout(
+            const Duration(seconds: 60),
+            onTimeout: (s) => s.addError(
+              TimeoutException('读取对象超时', const Duration(seconds: 60)),
+            ),
+          )) {
+            final bytes = chunk is Uint8List
+                ? chunk
+                : Uint8List.fromList(chunk);
+            received += bytes.length;
+            if (received > maxBytes) {
+              throw CloudSyncException(
+                '云端文件超过大小上限（${CloudSyncUtils.formatBytes(maxBytes)}），已中止下载',
+              );
+            }
+            sink.add(bytes);
+            hashSink.add(bytes);
+            onProgress?.call(received, total);
+          }
+        } finally {
+          await sink.close();
+          hashSink.close();
+        }
+        if (total != null && received != total) {
+          throw const CloudSyncException('下载内容不完整，请重试');
+        }
+        return S3FileDownloadResult(
+          size: received,
+          sha256: collector.value?.toString() ?? '',
+        );
+      } catch (e) {
+        if (nullIfMissing && _isNotFound(e)) return null;
+        try {
+          if (await output.exists()) await output.delete();
+        } catch (_) {}
+        rethrow;
+      }
+    });
+  }
+
   /// 下载对象。
   ///
   /// [maxBytes] 防止异常大文件把内存打满；[nullIfMissing] 为 true 时
@@ -198,13 +346,22 @@ class S3StorageService {
   }
 
   /// 列举前缀下的对象。
+  ///
+  /// [startAfter] 用于增量拉取：只返回键严格大于该值的对象，
+  /// 配合 `sync_state.last_chunk_key` 可以避免重复列举历史 chunk。
   Future<List<S3ObjectInfo>> list(
     String prefix, {
     bool recursive = true,
+    String? startAfter,
   }) async {
     return _guard('列举对象', () async {
       final pages = await _minio
-          .listObjectsV2(config.bucket, prefix: prefix, recursive: recursive)
+          .listObjectsV2(
+            config.bucket,
+            prefix: prefix,
+            recursive: recursive,
+            startAfter: startAfter,
+          )
           .toList()
           .timeout(_listTimeout);
       final out = <S3ObjectInfo>[];
@@ -223,6 +380,25 @@ class S3StorageService {
         }
       }
       return out;
+    });
+  }
+
+  /// 只列举「目录」（S3 CommonPrefixes），不展开其下对象。
+  ///
+  /// 用于发现 `{prefix}/devices/` 下的设备 ID：一次请求即可拿到设备列表，
+  /// 不必递归列举所有 chunk。
+  Future<List<String>> listCommonPrefixes(String prefix) async {
+    return _guard('列举目录', () async {
+      final pages = await _minio
+          .listObjectsV2(config.bucket, prefix: prefix, recursive: false)
+          .toList()
+          .timeout(_listTimeout);
+      final out = <String>{};
+      for (final page in pages) {
+        out.addAll(page.prefixes);
+      }
+      final sorted = out.toList()..sort();
+      return sorted;
     });
   }
 

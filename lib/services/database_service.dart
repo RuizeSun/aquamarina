@@ -5,11 +5,13 @@ import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import 'log_service.dart';
+import '../models/sync_op.dart';
 import 'sync_schema.dart';
+import 'sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 14;
+  static const int schemaVersion = 17;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -376,6 +378,12 @@ class DatabaseService {
 
         // ── v13：同步就绪 schema（uuid / sort_index / oplog / 触发器） ──
         await migrateToV13(db);
+        // ── v15：设备 head / state 水位与 GC 所需的列 ──
+        await migrateToV15(db);
+        // ── v16：oplog 记录写入墙钟，导出时生成 HLC ──
+        await migrateToV16(db);
+        // ── v17：批量 op 表 ──
+        await migrateToV17(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -522,6 +530,18 @@ class DatabaseService {
         if (oldVersion < 14) {
           await migrateToV14(db);
         }
+        // 14 → 15：设备 head / state 水位、chunk HLC 边界与应用记录 GC
+        if (oldVersion < 15) {
+          await migrateToV15(db);
+        }
+        // 15 → 16：oplog 捕获时间列与触发器重建
+        if (oldVersion < 16) {
+          await migrateToV16(db);
+        }
+        // 16 → 17：批量 op 表
+        if (oldVersion < 17) {
+          await migrateToV17(db);
+        }
       },
     );
   }
@@ -662,6 +682,102 @@ class DatabaseService {
     await db.execute(sentenceSetsTableSql);
     await SyncSchema.ensure(db);
     logInfo('DatabaseService', 'v14 句式集 schema 迁移完成');
+  }
+
+  /// v14 → v15：增量同步的设备 head / state 水位与 GC 支撑列。
+  ///
+  /// `SyncSchema.ensure` 会幂等补齐所有新列（含旧库升级），
+  /// 这里额外把已有 `sync_chunks` 的起始 HLC 从对象键回填，
+  /// 以便 GC 能按 HLC 水位判断哪些 chunk 已经无人需要。
+  static Future<void> migrateToV15(Database db) async {
+    await SyncSchema.ensure(db);
+    final rows = await db.query(
+      'sync_chunks',
+      columns: ['device_id', 'chunk_key', 'min_hlc'],
+      where: 'min_hlc IS NULL OR min_hlc = ?',
+      whereArgs: [''],
+    );
+    for (final row in rows) {
+      final key = row['chunk_key'];
+      if (key is! String) continue;
+      final hlc = _chunkStartHlc(key);
+      if (hlc == null) continue;
+      await db.update(
+        'sync_chunks',
+        {'min_hlc': hlc.value, 'max_hlc': hlc.value},
+        where: 'device_id = ? AND chunk_key = ?',
+        whereArgs: [row['device_id'], key],
+      );
+    }
+    await _backfillSyncState(db);
+    logInfo('DatabaseService', 'v15 云同步水位 schema 迁移完成');
+  }
+
+  /// v15 → v16：oplog 增加 `captured_at_ms`，并重建触发器。
+  ///
+  /// 历史待上传行没有捕获时间：保持 NULL，由导出逻辑回退到当前时间。
+  static Future<void> migrateToV16(Database db) async {
+    await SyncSchema.reinstallTriggers(db);
+    // 已有待上传行若已分配 HLC，可用它近似捕获时间；未分配的行保持 NULL，
+    // 由导出逻辑回退到当前时间。
+    for (final spec in SyncSpecs.all) {
+      try {
+        await db.rawUpdate(
+          'UPDATE "${spec.oplogTable}" '
+          'SET captured_at_ms = hlc_ms '
+          'WHERE captured_at_ms IS NULL AND hlc_ms IS NOT NULL',
+        );
+      } catch (_) {
+        // 旧库表结构异常时忽略，后续同步仍可运行
+      }
+    }
+    logInfo('DatabaseService', 'v16 同步捕获时间 schema 迁移完成');
+  }
+
+  /// v16 → v17：批量 op 表（大批量导入压缩为单条 op）。
+  static Future<void> migrateToV17(Database db) async {
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v17 批量 op schema 迁移完成');
+  }
+
+  /// 从已有 `sync_chunks` 反推每个来源设备的水位，避免升级后
+  /// 已同步设备因为 `sync_state` 为空而长期阻塞云端 GC。
+  static Future<void> _backfillSyncState(Database db) async {
+    final rows = await db.query(
+      'sync_chunks',
+      columns: ['device_id', 'chunk_key', 'min_hlc'],
+      where: 'min_hlc IS NOT NULL',
+    );
+    final latest = <String, Map<String, Object?>>{};
+    for (final row in rows) {
+      final device = row['device_id'];
+      final hlc = row['min_hlc'];
+      if (device is! String || device.isEmpty || hlc is! String) continue;
+      final current = latest[device];
+      if (current == null || hlc.compareTo(current['min_hlc'] as String) > 0) {
+        latest[device] = row;
+      }
+    }
+    for (final entry in latest.entries) {
+      await db.insert('sync_state', {
+        'device_id': entry.key,
+        'last_seq': 0,
+        'last_hlc': entry.value['min_hlc'],
+        'last_chunk_key': entry.value['chunk_key'],
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+    }
+  }
+
+  /// 从 `chunks/{msHex}-{counterHex}-{sha}.jsonl` 解析 chunk 起始 HLC。
+  static SyncHlc? _chunkStartHlc(String key) {
+    final name = key.split('/').last;
+    final parts = name.split('-');
+    if (parts.length < 2) return null;
+    final ms = int.tryParse(parts[0], radix: 16);
+    final counter = int.tryParse(parts[1], radix: 16);
+    if (ms == null || counter == null) return null;
+    return SyncHlc(ms, counter);
   }
 
   /// 为表中 uuid 为空的行生成 UUID（按 rowid 更新，幂等）。

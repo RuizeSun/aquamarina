@@ -22,7 +22,12 @@ class SyncSchema {
       "hlc_ms" INTEGER NOT NULL DEFAULT 0,
       "hlc_counter" INTEGER NOT NULL DEFAULT 0,
       "baseline_hlc" TEXT NOT NULL DEFAULT '',
-      "capture_enabled" INTEGER NOT NULL DEFAULT 0
+      "capture_enabled" INTEGER NOT NULL DEFAULT 0,
+      "head_hlc" TEXT NOT NULL DEFAULT '',
+      "head_key" TEXT NOT NULL DEFAULT '',
+      "head_chunk_count" INTEGER NOT NULL DEFAULT 0,
+      "head_dirty" INTEGER NOT NULL DEFAULT 0,
+      "total_ops" INTEGER NOT NULL DEFAULT 0
     )
     ''',
     '''
@@ -30,6 +35,7 @@ class SyncSchema {
       "device_id" TEXT NOT NULL,
       "entity" TEXT NOT NULL,
       "seq" INTEGER NOT NULL,
+      "hlc" TEXT,
       "applied_at" TEXT NOT NULL,
       PRIMARY KEY ("device_id", "entity", "seq")
     )
@@ -39,6 +45,7 @@ class SyncSchema {
       "device_id" TEXT PRIMARY KEY,
       "last_seq" INTEGER NOT NULL DEFAULT 0,
       "last_hlc" TEXT,
+      "last_chunk_key" TEXT,
       "updated_at" TEXT NOT NULL
     )
     ''',
@@ -55,8 +62,35 @@ class SyncSchema {
       "device_id" TEXT NOT NULL,
       "chunk_key" TEXT NOT NULL,
       "sha256" TEXT NOT NULL,
+      "min_hlc" TEXT,
+      "max_hlc" TEXT,
       "applied_at" TEXT NOT NULL,
       PRIMARY KEY ("device_id", "chunk_key")
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS "oplog_bulk" (
+      "seq" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "op" TEXT NOT NULL,
+      "payload" TEXT NOT NULL,
+      "item_count" INTEGER NOT NULL,
+      "hlc_ms" INTEGER,
+      "hlc_counter" INTEGER,
+      "captured_at_ms" INTEGER
+    )
+    ''',
+    '''
+    CREATE TABLE IF NOT EXISTS "sync_conflicts" (
+      "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "entity" TEXT NOT NULL,
+      "key" TEXT NOT NULL,
+      "local_json" TEXT,
+      "remote_json" TEXT,
+      "local_time" TEXT,
+      "remote_time" TEXT,
+      "created_at" TEXT NOT NULL,
+      "resolved" INTEGER NOT NULL DEFAULT 0,
+      "resolution" TEXT
     )
     ''',
     '''
@@ -95,10 +129,92 @@ class SyncSchema {
     for (final spec in SyncSpecs.all) {
       await db.execute(spec.oplogDdl);
       await db.execute(spec.pendingIndexDdl);
+      // v16：为已存在的 oplog 表补捕获时间列（CREATE TABLE IF NOT EXISTS 不补列）。
+      await _ensureColumn(db, spec.oplogTable, 'captured_at_ms', 'INTEGER');
       for (final trigger in spec.triggerDdls) {
         await db.execute(trigger);
       }
     }
+
+    // v15：为已存在的数据库补列（CREATE TABLE IF NOT EXISTS 不会新增列）。
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'head_hlc',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'head_key',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'head_chunk_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'head_dirty',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'total_ops',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(db, 'sync_applied', 'hlc', 'TEXT');
+    await _ensureColumn(db, 'sync_state', 'last_chunk_key', 'TEXT');
+    await _ensureColumn(db, 'sync_chunks', 'min_hlc', 'TEXT');
+    await _ensureColumn(db, 'sync_chunks', 'max_hlc', 'TEXT');
+
+    for (final sql in systemIndexDdl) {
+      await db.execute(sql);
+    }
+  }
+
+  static const List<String> systemIndexDdl = [
+    'CREATE INDEX IF NOT EXISTS idx_sync_applied_device_hlc '
+        'ON sync_applied(device_id, hlc)',
+    'CREATE INDEX IF NOT EXISTS idx_sync_chunks_device_hlc '
+        'ON sync_chunks(device_id, min_hlc)',
+    'CREATE INDEX IF NOT EXISTS idx_sync_tombstones_hlc '
+        'ON sync_tombstones(deleted_hlc)',
+    'CREATE INDEX IF NOT EXISTS idx_sync_conflicts_resolved '
+        'ON sync_conflicts(resolved, created_at)',
+    'CREATE INDEX IF NOT EXISTS idx_oplog_bulk_pending '
+        'ON oplog_bulk(hlc_ms)',
+  ];
+
+  /// SQLite 没有 `ADD COLUMN IF NOT EXISTS`，先查 `PRAGMA table_info`。
+  static Future<void> _ensureColumn(
+    Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final rows = await db.rawQuery('PRAGMA table_info("$table")');
+    for (final row in rows) {
+      if (row['name'] == column) return;
+    }
+    await db.execute('ALTER TABLE "$table" ADD COLUMN "$column" $definition');
+  }
+
+  /// v16：重建触发器，使新数据在写入时记录 `captured_at_ms`。
+  ///
+  /// SQLite 的 `CREATE TRIGGER IF NOT EXISTS` 不会更新已存在的触发器，
+  /// 必须显式 DROP 后再按最新规格创建。
+  static Future<void> reinstallTriggers(Database db) async {
+    for (final spec in SyncSpecs.all) {
+      for (final sql in spec.dropTriggerDdls) {
+        await db.execute(sql);
+      }
+    }
+    await ensure(db);
   }
 
   /// 清理本机 oplog 中已上传的记录（按实体）。
@@ -126,12 +242,20 @@ class SyncSchema {
       for (final spec in SyncSpecs.all) {
         await txn.delete(spec.oplogTable);
       }
+      await txn.delete('oplog_bulk');
+      // 快照可能携带旧冲突记录；恢复后应以当前数据为准。
+      await txn.delete('sync_conflicts');
       await txn.update('sync_meta', {
         'device_id': '',
         'applying': 0,
         'hlc_ms': 0,
         'hlc_counter': 0,
         'baseline_hlc': baselineHlc,
+        'head_hlc': '',
+        'head_key': '',
+        'head_chunk_count': 0,
+        'head_dirty': 0,
+        'total_ops': 0,
       }, where: 'id = 1');
     });
   }

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 
 import '../../../models/cloud_sync_manifest.dart';
+import '../../../services/cloud_sync_bootstrap_service.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
 import '../../../services/cloud_sync_foreground_sync_service.dart';
@@ -36,6 +37,8 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
   int _retainCount = CloudSyncConfig.defaultRetainCount;
   bool _autoSync = true;
   int _autoSyncIntervalMinutes = 5;
+  bool _wifiOnly = false;
+  bool _autoCheckpoint = true;
   bool _obscureAccessKey = true;
   bool _obscureSecretKey = true;
   bool _loading = true;
@@ -76,6 +79,8 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         _retainCount = config.retainCount;
         _autoSync = config.autoSync;
         _autoSyncIntervalMinutes = config.autoSyncIntervalMinutes;
+        _wifiOnly = config.wifiOnly;
+        _autoCheckpoint = config.autoCheckpoint;
       }
       _accessKeyController.text = credentials?.accessKey ?? '';
       _secretKeyController.text = credentials?.secretKey ?? '';
@@ -95,6 +100,8 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       retainCount: _retainCount,
       autoSync: _autoSync,
       autoSyncIntervalMinutes: _autoSyncIntervalMinutes,
+      wifiOnly: _wifiOnly,
+      autoCheckpoint: _autoCheckpoint,
     );
   }
 
@@ -152,6 +159,49 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       _showSnack(message);
     } catch (e) {
       _showSnack('连接失败：$e', isError: true);
+    }
+  }
+
+  /// 新设备首次配置：本机没有业务数据且云端有快照时，询问是否引导。
+  Future<void> _maybeBootstrap() async {
+    try {
+      if (await CloudSyncBootstrapService.hasLocalData()) return;
+      final candidate = await CloudSyncBootstrapService.findLatestSnapshot();
+      if (candidate == null || !mounted) return;
+      final summary = candidate.summary;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('发现云端备份'),
+          content: Text(
+            '本机还没有学习数据，检测到设备「${summary.manifest.deviceName}」'
+            '在 ${summary.latest!.createdAt.toLocal()} 有完整备份。\n\n'
+            '是否立即恢复这份快照作为本机数据？恢复会覆盖当前空库。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('稍后手动恢复'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('立即引导'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await runWithProgressDialog<CloudRestoreOutcome>(
+        context,
+        title: '从云端引导',
+        task: (update) async {
+          update('正在下载并校验云端检查点…');
+          return candidate.service.restoreSnapshot(summary);
+        },
+      );
+      if (mounted) _showSnack('已从云端引导，建议重启应用');
+    } catch (e) {
+      if (mounted) _showSnack('自动引导失败：$e', isError: true);
     }
   }
 
@@ -226,6 +276,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       } catch (_) {}
       // 按新配置重建前台轮询（关闭自动同步时会自动停止）
       unawaited(CloudSyncForegroundSyncService.instance.start());
+      await _maybeBootstrap();
       if (!mounted) return;
       _showSnack('配置已保存');
       Navigator.of(context).pop(true);
@@ -492,6 +543,21 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
                     subtitle: const Text('学习结束后会立即同步一次；前台按下方间隔轮询，失败静默重试'),
                     value: _autoSync,
                     onChanged: (value) => setState(() => _autoSync = value),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('仅 Wi-Fi / 以太网自动同步'),
+                    subtitle: const Text('移动流量下跳过自动同步；手动同步不受限制'),
+                    value: _wifiOnly,
+                    onChanged: (value) => setState(() => _wifiOnly = value),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('自动生成检查点'),
+                    subtitle: const Text('每 7 天或累计 5000 条变更上传一份完整快照'),
+                    value: _autoCheckpoint,
+                    onChanged: (value) =>
+                        setState(() => _autoCheckpoint = value),
                   ),
                   DropdownButtonFormField<int>(
                     initialValue: _autoSyncIntervalMinutes,

@@ -93,6 +93,12 @@ class CloudSyncConfig {
   /// 自动同步最小间隔（分钟），同时用于前台轮询。
   final int autoSyncIntervalMinutes;
 
+  /// 仅在 Wi-Fi / 以太网下自动同步（移动流量下跳过轮询）。
+  final bool wifiOnly;
+
+  /// 自动生成完整检查点（每 7 天或 5000 条变更）。
+  final bool autoCheckpoint;
+
   const CloudSyncConfig({
     required this.endpoint,
     this.port,
@@ -104,6 +110,8 @@ class CloudSyncConfig {
     required this.retainCount,
     this.autoSync = true,
     this.autoSyncIntervalMinutes = 5,
+    this.wifiOnly = false,
+    this.autoCheckpoint = true,
   });
 
   bool get isConfigured => endpoint.isNotEmpty && bucket.isNotEmpty;
@@ -123,6 +131,8 @@ class CloudSyncConfig {
     int retainCount = defaultRetainCount,
     bool autoSync = true,
     int autoSyncIntervalMinutes = 5,
+    bool wifiOnly = false,
+    bool autoCheckpoint = true,
   }) {
     final parsed = S3Endpoint.parse(endpointInput);
     final bucketName = bucket.trim();
@@ -153,6 +163,8 @@ class CloudSyncConfig {
       retainCount: retainCount,
       autoSync: autoSync,
       autoSyncIntervalMinutes: autoSyncIntervalMinutes,
+      wifiOnly: wifiOnly,
+      autoCheckpoint: autoCheckpoint,
     );
   }
 
@@ -207,6 +219,8 @@ class CloudSyncConfig {
 
   String stateKey(String deviceId) => '${devicePrefix(deviceId)}/state.json';
 
+  String headKey(String deviceId) => '${devicePrefix(deviceId)}/head.json';
+
   String get devicesPrefix => '$prefix/devices';
 
   factory CloudSyncConfig.fromJson(Map<String, dynamic> json) {
@@ -240,6 +254,10 @@ class CloudSyncConfig {
       autoSync: json['auto_sync'] is bool ? json['auto_sync'] as bool : true,
       autoSyncIntervalMinutes:
           (json['auto_sync_interval_minutes'] as int?)?.clamp(1, 60) ?? 5,
+      wifiOnly: json['wifi_only'] is bool ? json['wifi_only'] as bool : false,
+      autoCheckpoint: json['auto_checkpoint'] is bool
+          ? json['auto_checkpoint'] as bool
+          : true,
     );
   }
 
@@ -254,6 +272,8 @@ class CloudSyncConfig {
     'retain_count': retainCount,
     'auto_sync': autoSync,
     'auto_sync_interval_minutes': autoSyncIntervalMinutes,
+    'wifi_only': wifiOnly,
+    'auto_checkpoint': autoCheckpoint,
   };
 
   CloudSyncConfig copyWith({
@@ -267,6 +287,8 @@ class CloudSyncConfig {
     int? retainCount,
     bool? autoSync,
     int? autoSyncIntervalMinutes,
+    bool? wifiOnly,
+    bool? autoCheckpoint,
   }) {
     return CloudSyncConfig(
       endpoint: endpoint ?? this.endpoint,
@@ -280,6 +302,8 @@ class CloudSyncConfig {
       autoSync: autoSync ?? this.autoSync,
       autoSyncIntervalMinutes:
           autoSyncIntervalMinutes ?? this.autoSyncIntervalMinutes,
+      wifiOnly: wifiOnly ?? this.wifiOnly,
+      autoCheckpoint: autoCheckpoint ?? this.autoCheckpoint,
     );
   }
 }
@@ -293,6 +317,17 @@ class CloudSyncRuntimeState {
   final DateTime? lastAutoSyncAt;
   final DateTime? lastGcAt;
 
+  /// 最近一次自动检查点时间与当时的累计变更数。
+  final DateTime? lastCheckpointAt;
+  final int lastCheckpointOps;
+  final DateTime? lastCheckpointAttemptAt;
+  final int checkpointConsecutiveFailures;
+  final DateTime? checkpointBackoffUntil;
+
+  /// 连续失败次数与退避截止时间（P2-7）。
+  final int consecutiveFailures;
+  final DateTime? backoffUntil;
+
   const CloudSyncRuntimeState({
     this.lastSuccessAt,
     this.lastUploadKey,
@@ -300,12 +335,23 @@ class CloudSyncRuntimeState {
     this.lastError,
     this.lastAutoSyncAt,
     this.lastGcAt,
+    this.lastCheckpointAt,
+    this.lastCheckpointOps = 0,
+    this.lastCheckpointAttemptAt,
+    this.checkpointConsecutiveFailures = 0,
+    this.checkpointBackoffUntil,
+    this.consecutiveFailures = 0,
+    this.backoffUntil,
   });
 
   factory CloudSyncRuntimeState.fromJson(Map<String, dynamic> json) {
     final lastSuccess = json['last_success_at'];
     final lastAuto = json['last_auto_sync_at'];
     final lastGc = json['last_gc_at'];
+    final lastCheckpoint = json['last_checkpoint_at'];
+    final lastCheckpointAttempt = json['last_checkpoint_attempt_at'];
+    final checkpointBackoff = json['checkpoint_backoff_until'];
+    final backoffUntil = json['backoff_until'];
     return CloudSyncRuntimeState(
       lastSuccessAt: lastSuccess is int
           ? DateTime.fromMillisecondsSinceEpoch(lastSuccess)
@@ -319,6 +365,22 @@ class CloudSyncRuntimeState {
       lastGcAt: lastGc is int
           ? DateTime.fromMillisecondsSinceEpoch(lastGc)
           : null,
+      lastCheckpointAt: lastCheckpoint is int
+          ? DateTime.fromMillisecondsSinceEpoch(lastCheckpoint)
+          : null,
+      lastCheckpointOps: (json['last_checkpoint_ops'] as int?) ?? 0,
+      lastCheckpointAttemptAt: lastCheckpointAttempt is int
+          ? DateTime.fromMillisecondsSinceEpoch(lastCheckpointAttempt)
+          : null,
+      checkpointConsecutiveFailures:
+          (json['checkpoint_consecutive_failures'] as int?) ?? 0,
+      checkpointBackoffUntil: checkpointBackoff is int
+          ? DateTime.fromMillisecondsSinceEpoch(checkpointBackoff)
+          : null,
+      consecutiveFailures: (json['consecutive_failures'] as int?) ?? 0,
+      backoffUntil: backoffUntil is int
+          ? DateTime.fromMillisecondsSinceEpoch(backoffUntil)
+          : null,
     );
   }
 
@@ -329,6 +391,14 @@ class CloudSyncRuntimeState {
     'last_error': lastError,
     'last_auto_sync_at': lastAutoSyncAt?.millisecondsSinceEpoch,
     'last_gc_at': lastGcAt?.millisecondsSinceEpoch,
+    'last_checkpoint_at': lastCheckpointAt?.millisecondsSinceEpoch,
+    'last_checkpoint_ops': lastCheckpointOps,
+    'last_checkpoint_attempt_at':
+        lastCheckpointAttemptAt?.millisecondsSinceEpoch,
+    'checkpoint_consecutive_failures': checkpointConsecutiveFailures,
+    'checkpoint_backoff_until': checkpointBackoffUntil?.millisecondsSinceEpoch,
+    'consecutive_failures': consecutiveFailures,
+    'backoff_until': backoffUntil?.millisecondsSinceEpoch,
   };
 
   CloudSyncRuntimeState copyWith({
@@ -338,6 +408,16 @@ class CloudSyncRuntimeState {
     String? lastError,
     DateTime? lastAutoSyncAt,
     DateTime? lastGcAt,
+    DateTime? lastCheckpointAt,
+    int? lastCheckpointOps,
+    DateTime? lastCheckpointAttemptAt,
+    int? checkpointConsecutiveFailures,
+    DateTime? checkpointBackoffUntil,
+    int? consecutiveFailures,
+    DateTime? backoffUntil,
+    bool clearBackoff = false,
+    bool clearCheckpoint = false,
+    bool clearCheckpointBackoff = false,
     bool clearError = false,
   }) {
     return CloudSyncRuntimeState(
@@ -347,6 +427,24 @@ class CloudSyncRuntimeState {
       lastError: clearError ? null : (lastError ?? this.lastError),
       lastAutoSyncAt: lastAutoSyncAt ?? this.lastAutoSyncAt,
       lastGcAt: lastGcAt ?? this.lastGcAt,
+      lastCheckpointAt: clearCheckpoint
+          ? null
+          : (lastCheckpointAt ?? this.lastCheckpointAt),
+      lastCheckpointOps: clearCheckpoint
+          ? 0
+          : (lastCheckpointOps ?? this.lastCheckpointOps),
+      lastCheckpointAttemptAt: clearCheckpoint
+          ? null
+          : (lastCheckpointAttemptAt ?? this.lastCheckpointAttemptAt),
+      checkpointConsecutiveFailures: clearCheckpoint
+          ? 0
+          : (checkpointConsecutiveFailures ??
+                this.checkpointConsecutiveFailures),
+      checkpointBackoffUntil: (clearCheckpoint || clearCheckpointBackoff)
+          ? null
+          : (checkpointBackoffUntil ?? this.checkpointBackoffUntil),
+      consecutiveFailures: consecutiveFailures ?? this.consecutiveFailures,
+      backoffUntil: clearBackoff ? null : (backoffUntil ?? this.backoffUntil),
     );
   }
 }

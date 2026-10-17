@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 /// 混合逻辑时钟（HLC）：毫秒时间 + 逻辑计数。
@@ -55,9 +56,51 @@ class SyncHlc implements Comparable<SyncHlc> {
   String toString() => value;
 }
 
+/// 批量 op 中的一个实体操作（用于大批量导入压缩 oplog）。
+class SyncBulkItem {
+  final String entity;
+  final Map<String, dynamic> key;
+  final Map<String, dynamic> data;
+  final Map<String, int> delta;
+
+  const SyncBulkItem({
+    required this.entity,
+    required this.key,
+    this.data = const {},
+    this.delta = const {},
+  });
+
+  factory SyncBulkItem.fromJson(Map<String, dynamic> json) {
+    final entity = json['entity'];
+    final key = json['key'];
+    final data = json['data'];
+    final delta = json['delta'];
+    if (entity is! String || entity.isEmpty || key is! Map) {
+      throw const FormatException('bulk item 字段缺失');
+    }
+    return SyncBulkItem(
+      entity: entity,
+      key: key.cast<String, dynamic>(),
+      data: data is Map
+          ? data.cast<String, dynamic>()
+          : const <String, dynamic>{},
+      delta: delta is Map
+          ? delta.map((k, v) => MapEntry(k.toString(), (v as num).toInt()))
+          : const <String, int>{},
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'entity': entity,
+    'key': key,
+    if (data.isNotEmpty) 'data': data,
+    if (delta.isNotEmpty) 'delta': delta,
+  };
+}
+
 /// 单条同步操作（oplog 的传输形态）。
 class SyncOp {
-  static const int currentVersion = 1;
+  static const int currentVersion = 2;
 
   final int version;
   final String deviceId;
@@ -80,6 +123,9 @@ class SyncOp {
   /// 删除时间（delete 时存在）。
   final String? deletedAt;
 
+  /// 批量 op 的条目；普通 op 为空。
+  final List<SyncBulkItem> items;
+
   const SyncOp({
     this.version = currentVersion,
     required this.deviceId,
@@ -91,9 +137,12 @@ class SyncOp {
     this.data = const {},
     this.delta = const {},
     this.deletedAt,
+    this.items = const [],
   });
 
   bool get isDelete => op == 'delete';
+
+  bool get isBulk => op == 'bulk';
 
   /// 供 tombstone 使用的稳定键（键顺序固定）。
   String get keyFingerprint {
@@ -126,17 +175,31 @@ class SyncOp {
         op is! String) {
       throw const FormatException('op 字段缺失或格式错误');
     }
-    if (op != 'upsert' && op != 'delete') {
+    if (op != 'upsert' && op != 'delete' && op != 'bulk') {
       throw FormatException('未知 op 类型：$op');
     }
     final rawData = json['data'];
     final rawDelta = json['delta'];
+    final rawItems = json['items'];
     final deletedAt = json['deleted_at'];
     if (rawData != null && rawData is! Map) {
       throw const FormatException('op.data 格式错误');
     }
     if (rawDelta != null && rawDelta is! Map) {
       throw const FormatException('op.delta 格式错误');
+    }
+    if (rawItems != null && rawItems is! List) {
+      throw const FormatException('op.items 格式错误');
+    }
+    final items = <SyncBulkItem>[];
+    if (rawItems is List) {
+      for (final item in rawItems) {
+        if (item is! Map) throw const FormatException('op.items 元素格式错误');
+        items.add(SyncBulkItem.fromJson(item.cast<String, dynamic>()));
+      }
+    }
+    if (op == 'bulk' && items.isEmpty) {
+      throw const FormatException('bulk op 缺少 items');
     }
     return SyncOp(
       version: version,
@@ -155,6 +218,7 @@ class SyncOp {
               (k, v) => MapEntry(k.toString(), (v as num).toInt()),
             ),
       deletedAt: deletedAt is String ? deletedAt : null,
+      items: items,
     );
   }
 
@@ -169,6 +233,7 @@ class SyncOp {
     'data': data,
     'delta': delta,
     if (deletedAt != null) 'deleted_at': deletedAt,
+    if (items.isNotEmpty) 'items': items.map((e) => e.toJson()).toList(),
   };
 }
 
@@ -182,6 +247,23 @@ class SyncChunkCodec {
       buffer.writeln(jsonEncode(op.toJson()));
     }
     return Uint8List.fromList(utf8.encode(buffer.toString()));
+  }
+
+  /// 压缩后的 chunk 内容（gzip）。体积通常只有 JSONL 的 1/5 – 1/10。
+  static Uint8List encodeCompressed(Iterable<SyncOp> ops) {
+    return Uint8List.fromList(gzip.encode(encode(ops)));
+  }
+
+  /// gzip 魔数：`1f 8b`。对象键后缀缺失时也可据此识别。
+  static bool isGzip(List<int> bytes) =>
+      bytes.length >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b;
+
+  /// 自动识别并解压（兼容 v15 及更早的未压缩 `.jsonl`）。
+  static List<SyncOp> decodeAuto(List<int> bytes) {
+    if (isGzip(bytes)) {
+      return decode(gzip.decode(bytes));
+    }
+    return decode(bytes);
   }
 
   static List<SyncOp> decode(List<int> bytes) {

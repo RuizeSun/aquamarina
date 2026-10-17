@@ -1,10 +1,13 @@
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
+import '../models/sync_op.dart';
 import '../models/word_book.dart';
 import 'database_service.dart';
 import 'dictionary_service.dart';
 import 'log_service.dart';
+import 'sync_capture_service.dart';
+import 'sync_table_spec.dart';
 
 class WordBookService {
   /// 单条 SQL 中 `IN (...)` 的最大绑定参数个数（与 DictionaryService 一致）。
@@ -141,7 +144,22 @@ class WordBookService {
       final bookUuid = bookRows.isEmpty
           ? null
           : bookRows.first['uuid'] as String?;
+      // 大批量导入快速路径：关闭逐行触发器，导入后用一条 INSERT ... SELECT
+      // 回填 oplog，避免 N 万次触发器写入（P1-3）。
+      final useFastPath =
+          cleaned.length >= 1000 &&
+          await SyncCaptureService.isCaptureEnabled(db: db);
       await db.transaction((txn) async {
+        var minEntryId = 0;
+        if (useFastPath) {
+          final idRows = await txn.rawQuery(
+            'SELECT COALESCE(MAX(id), 0) AS m FROM word_book_entries',
+          );
+          minEntryId = (idRows.first['m'] as int?) ?? 0;
+          await txn.update('sync_meta', {
+            'capture_enabled': 0,
+          }, where: 'id = 1');
+        }
         // 一次 batch 提交所有插入，避免逐词一次平台通道往返
         final batch = txn.batch();
         for (final word in cleaned) {
@@ -155,6 +173,37 @@ class WordBookService {
         final results = await batch.commit();
         for (final result in results) {
           if (result is int && result > 0) added++;
+        }
+        if (useFastPath) {
+          if (bookUuid != null) {
+            // 一条（或几条）批量 op 代替 N 条逐行 oplog。
+            final items = [
+              for (final word in cleaned)
+                SyncBulkItem(
+                  entity: 'word_book_entries',
+                  key: {'book_uuid': bookUuid, 'word': word},
+                  data: {'added_at': now},
+                ),
+            ];
+            for (var i = 0; i < items.length; i += 1000) {
+              final end = (i + 1000) > items.length ? items.length : i + 1000;
+              await SyncCaptureService.recordBulk(txn, items.sublist(i, end));
+            }
+          } else {
+            // 极旧词书没有 uuid 时退回逐行回填。
+            final spec = SyncSpecs.byEntity['word_book_entries'];
+            if (spec != null) {
+              await SyncCaptureService.backfillOps(
+                txn,
+                spec,
+                where: 'book_id = ? AND id > ?',
+                whereArgs: [bookId, minEntryId],
+              );
+            }
+          }
+          await txn.update('sync_meta', {
+            'capture_enabled': 1,
+          }, where: 'id = 1');
         }
       });
     }

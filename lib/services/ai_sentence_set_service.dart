@@ -5,8 +5,10 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
+import '../models/sync_op.dart';
 import 'database_service.dart';
 import 'learning_service.dart';
+import 'sync_capture_service.dart';
 
 /// 句式集管理服务（单例，各页面共享同一数据源以确保实时同步）
 class SentenceSetService extends ChangeNotifier {
@@ -269,21 +271,60 @@ class SentenceSetService extends ChangeNotifier {
   Future<void> addSentences(String setId, List<Sentence> newSentences) async {
     final db = await _db;
     final now = DateTime.now().toIso8601String();
-    final batch = db.batch();
+    final useFastPath =
+        newSentences.length >= 500 &&
+        await SyncCaptureService.isCaptureEnabled(db: db);
     var sortIndex = await _nextSortIndex(db, setId);
-    for (final s in newSentences) {
-      batch.insert('sentences', {
-        'id': const Uuid().v4(),
-        'set_id': setId,
-        'english': s.english,
-        'chinese': s.chinese,
-        'extra_words': jsonEncode(s.extraWords),
-        'created_at': now,
-        'sort_index': sortIndex,
-      });
+    final pending = <({String id, Sentence sentence, double sortIndex})>[];
+    for (final sentence in newSentences) {
+      pending.add((
+        id: const Uuid().v4(),
+        sentence: sentence,
+        sortIndex: sortIndex,
+      ));
       sortIndex += 1;
     }
-    await batch.commit(noResult: true);
+    await db.transaction((txn) async {
+      if (useFastPath) {
+        await txn.update('sync_meta', {'capture_enabled': 0}, where: 'id = 1');
+      }
+      final batch = txn.batch();
+      for (final item in pending) {
+        final s = item.sentence;
+        batch.insert('sentences', {
+          'id': item.id,
+          'set_id': setId,
+          'english': s.english,
+          'chinese': s.chinese,
+          'extra_words': jsonEncode(s.extraWords),
+          'created_at': now,
+          'sort_index': item.sortIndex,
+        });
+      }
+      await batch.commit(noResult: true);
+      if (useFastPath) {
+        final items = [
+          for (final item in pending)
+            SyncBulkItem(
+              entity: 'sentences',
+              key: {'id': item.id},
+              data: {
+                'set_id': setId,
+                'english': item.sentence.english,
+                'chinese': item.sentence.chinese,
+                'extra_words': jsonEncode(item.sentence.extraWords),
+                'created_at': now,
+                'sort_index': item.sortIndex,
+              },
+            ),
+        ];
+        for (var i = 0; i < items.length; i += 1000) {
+          final end = (i + 1000) > items.length ? items.length : i + 1000;
+          await SyncCaptureService.recordBulk(txn, items.sublist(i, end));
+        }
+        await txn.update('sync_meta', {'capture_enabled': 1}, where: 'id = 1');
+      }
+    });
     await _updateSentenceCount(setId);
     notifyListeners();
   }

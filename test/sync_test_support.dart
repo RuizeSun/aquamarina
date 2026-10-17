@@ -39,6 +39,9 @@ Future<Database> openSyncTestDb() async {
   );
   await createSyncTestTables(db);
   await DatabaseService.migrateToV13(db);
+  await DatabaseService.migrateToV15(db);
+  await DatabaseService.migrateToV16(db);
+  await DatabaseService.migrateToV17(db);
   await SyncSchema.setCaptureEnabled(db, true);
   return db;
 }

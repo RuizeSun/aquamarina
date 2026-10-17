@@ -1,4 +1,6 @@
+import 'cloud_sync_checkpoint_service.dart';
 import 'cloud_sync_engine.dart';
+import 'cloud_sync_network_service.dart';
 import 'cloud_sync_settings.dart';
 import 'log_service.dart';
 
@@ -31,13 +33,21 @@ class CloudSyncAutoSyncService {
     if (credentials == null || !credentials.isComplete) return;
 
     final state = await CloudSyncSettings.loadState();
+    final now = DateTime.now();
+    if (state.backoffUntil != null && now.isBefore(state.backoffUntil!)) {
+      return;
+    }
     final last = state.lastAutoSyncAt;
     final cooldown = Duration(
       minutes: config.autoSyncIntervalMinutes > 0
           ? config.autoSyncIntervalMinutes
           : defaultCooldown.inMinutes,
     );
-    if (!force && last != null && DateTime.now().difference(last) < cooldown) {
+    if (!force && last != null && now.difference(last) < cooldown) {
+      return;
+    }
+    if (!await CloudSyncNetworkService.isAllowed(config)) {
+      logInfo('CloudSyncAutoSync', '当前网络不满足「仅 Wi-Fi」设置，跳过本次同步');
       return;
     }
 
@@ -53,11 +63,29 @@ class CloudSyncAutoSyncService {
       await CloudSyncSettings.saveState(
         (await CloudSyncSettings.loadState()).copyWith(
           lastAutoSyncAt: DateTime.now(),
+          consecutiveFailures: 0,
+          clearBackoff: true,
           clearError: true,
         ),
       );
+      // 自动检查点：内部有 7 天 / 5000 op 冷却，失败不影响同步。
+      await CloudSyncCheckpointService.maybeCreate(config: config);
     } catch (e) {
-      logWarning('CloudSyncAutoSync', '自动同步失败: $e');
+      final failures = state.consecutiveFailures + 1;
+      final cooldownMinutes = config.autoSyncIntervalMinutes.clamp(1, 60);
+      final exponent = failures > 5 ? 5 : failures;
+      final backoffMinutes = (cooldownMinutes * (1 << exponent)).clamp(1, 60);
+      logWarning(
+        'CloudSyncAutoSync',
+        '自动同步失败（连续 $failures 次，退避 $backoffMinutes 分钟）: $e',
+      );
+      await CloudSyncSettings.saveState(
+        (await CloudSyncSettings.loadState()).copyWith(
+          lastError: '$e',
+          consecutiveFailures: failures,
+          backoffUntil: DateTime.now().add(Duration(minutes: backoffMinutes)),
+        ),
+      );
     } finally {
       _running = false;
     }

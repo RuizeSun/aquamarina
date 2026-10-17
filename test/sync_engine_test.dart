@@ -2,6 +2,7 @@ import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/sync_apply_service.dart';
 import 'package:aquamarina/services/sync_capture_service.dart';
 import 'package:aquamarina/services/sync_schema.dart';
+import 'package:aquamarina/services/sync_table_spec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -53,10 +54,13 @@ void main() {
       );
       expect(first.ops.map((op) => op.hlc.ms), everyElement(greaterThan(0)));
 
-      final decoded = SyncChunkCodec.decode(first.bytes);
+      final decoded = SyncChunkCodec.decodeAuto(first.bytes);
       expect(decoded.length, 2);
       expect(decoded.first.key['word'], first.ops.first.key['word']);
       expect(decoded.first.delta['review_count'], 2);
+      // gzip + 完整 SHA-256（P1-4）
+      expect(SyncChunkCodec.isGzip(first.bytes), isTrue);
+      expect(first.sha256.length, 64);
 
       await SyncCaptureService.markUploaded(first, db: db);
       expect(await SyncCaptureService.pendingCount(db: db), 1);
@@ -80,6 +84,135 @@ void main() {
         await SyncCaptureService.takePendingBatch(db: db, deviceId: 'device-a'),
         isNull,
       );
+    });
+
+    test('HLC 以写入时的 captured_at_ms 为基准，晚导出不会变晚', () async {
+      await db.insert('word_notes', {
+        'word': 'apple',
+        'note': 'local',
+        'is_favorited': 0,
+        'updated_at': '2026-10-02T00:00:00Z',
+      });
+      // 模拟业务写入发生在很久以前，今天才导出
+      await db.update('oplog_word_notes', {
+        'captured_at_ms': 1000,
+      }, where: 'hlc_ms IS NULL');
+      await db.update('sync_meta', {
+        'hlc_ms': 0,
+        'hlc_counter': 0,
+      }, where: 'id = 1');
+
+      final batch = await SyncCaptureService.takePendingBatch(
+        db: db,
+        deviceId: 'device-a',
+      );
+      expect(batch, isNotNull);
+      expect(batch!.ops.single.hlc.ms, 1000);
+    });
+
+    test('未来墙钟超过 5 分钟时按当前时间生成 HLC', () async {
+      await db.insert('word_notes', {
+        'word': 'apple',
+        'note': 'local',
+        'is_favorited': 0,
+        'updated_at': '2026-10-02T00:00:00Z',
+      });
+      final future = DateTime.now()
+          .add(const Duration(days: 1))
+          .millisecondsSinceEpoch;
+      await db.update('oplog_word_notes', {
+        'captured_at_ms': future,
+      }, where: 'hlc_ms IS NULL');
+      await db.update('sync_meta', {
+        'hlc_ms': 0,
+        'hlc_counter': 0,
+      }, where: 'id = 1');
+      final before = DateTime.now().millisecondsSinceEpoch;
+      final batch = await SyncCaptureService.takePendingBatch(
+        db: db,
+        deviceId: 'device-a',
+      );
+      expect(batch, isNotNull);
+      expect(
+        batch!.ops.single.hlc.ms,
+        lessThanOrEqualTo(before + 5 * 60 * 1000),
+      );
+    });
+
+    test('批量回填 oplog 使用单条 INSERT SELECT', () async {
+      await db.insert('word_books', {
+        'uuid': 'book-1',
+        'title': 'Book',
+        'word_count': 0,
+      });
+      final book = await db.query('word_books', limit: 1);
+      final bookId = book.first['id'];
+      for (var i = 0; i < 20; i++) {
+        await db.insert('word_book_entries', {
+          'book_id': bookId,
+          'book_uuid': 'book-1',
+          'word': 'word$i',
+          'added_at': '2026-10-01T00:00:00Z',
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      // 触发器会先写 20 条；清空后验证回填 SQL。
+      await db.delete('oplog_word_book_entries');
+      await SyncSchema.setCaptureEnabled(db, false);
+      final inserted = await SyncCaptureService.backfillOps(
+        db,
+        SyncSpecs.byEntity['word_book_entries']!,
+        where: 'book_id = ?',
+        whereArgs: [bookId],
+      );
+      expect(inserted, greaterThan(0));
+      await SyncSchema.setCaptureEnabled(db, true);
+      // 1 条 word_books op + 回填的 20 条 word_book_entries
+      expect(await SyncCaptureService.pendingCount(db: db), 21);
+    });
+
+    test('批量 op 导出、应用并幂等重试', () async {
+      await SyncCaptureService.recordBulk(db, const [
+        SyncBulkItem(
+          entity: 'word_book_entries',
+          key: {'book_uuid': 'book-bulk', 'word': 'apple'},
+          data: {'added_at': '2026-10-01T00:00:00Z'},
+        ),
+        SyncBulkItem(
+          entity: 'word_book_entries',
+          key: {'book_uuid': 'book-bulk', 'word': 'banana'},
+          data: {'added_at': '2026-10-01T00:00:00Z'},
+        ),
+      ]);
+
+      final batch = await SyncCaptureService.takePendingBatch(
+        db: db,
+        deviceId: 'device-a',
+      );
+      expect(batch, isNotNull);
+      expect(batch!.ops.single.isBulk, isTrue);
+      expect(batch.ops.single.items.length, 2);
+
+      final decoded = SyncChunkCodec.decodeAuto(batch.bytes);
+      expect(decoded.single.isBulk, isTrue);
+      expect(decoded.single.items.length, 2);
+
+      final target = await openSyncTestDb();
+      try {
+        await target.insert('word_books', {
+          'uuid': 'book-bulk',
+          'title': 'Bulk Book',
+          'word_count': 0,
+        });
+        var applied = await SyncApplyService.applyOps(decoded, db: target);
+        expect(applied.applied, 2);
+        expect((await target.query('word_book_entries')).length, 2);
+
+        applied = await SyncApplyService.applyOps(decoded, db: target);
+        expect(applied.duplicates, 1);
+        expect((await target.query('word_book_entries')).length, 2);
+      } finally {
+        await target.close();
+      }
     });
 
     test('导出后立即写入本地版本，旧远端 op 无法覆盖', () async {
@@ -258,9 +391,16 @@ void main() {
 
       expect(result.applied, 1);
       expect(result.conflicts, 1);
+      expect(result.conflictItems, hasLength(1));
+      expect(result.conflictItems.single.entity, 'word_notes');
       final row = (await db.query('word_notes')).single;
       expect(row['note'], 'local newer');
       expect(row['is_favorited'], 1);
+
+      final conflicts = await db.query('sync_conflicts');
+      expect(conflicts, hasLength(1));
+      expect(conflicts.single['resolved'], 0);
+      expect('${conflicts.single['remote_json']}', contains('remote older'));
     });
 
     test('词书条目依赖父级：同批次重试后解析 book_id', () async {
@@ -345,6 +485,39 @@ void main() {
       expect(await db.query('attempted_sentence_ids'), isEmpty);
       expect(await db.query('practiced_sentence_ids'), isEmpty);
       expect(await db.query('wrong_sentences'), isEmpty);
+    });
+
+    test('时间预算按小批提交，下一次从已应用位置继续', () async {
+      final ops = [
+        for (var i = 0; i < 120; i++)
+          makeOp(
+            entity: 'word_notes',
+            seq: i + 1,
+            hlcMs: 10000 + i,
+            key: {'word': 'word$i'},
+            data: {
+              'note': 'n$i',
+              'is_favorited': 0,
+              'updated_at': '2026-10-02T00:00:00Z',
+            },
+          ),
+      ];
+
+      final first = await SyncApplyService.applyOps(
+        ops,
+        db: db,
+        deadline: DateTime.now().subtract(const Duration(seconds: 1)),
+        sliceSize: 50,
+      );
+      expect(first.deferred, isTrue);
+      expect(first.applied, 50);
+      expect((await db.query('word_notes')).length, 50);
+
+      final resumed = await SyncApplyService.applyOps(ops, db: db);
+      expect(resumed.deferred, isFalse);
+      expect(resumed.duplicates, 50);
+      expect(resumed.applied, 70);
+      expect((await db.query('word_notes')).length, 120);
     });
 
     test('每日统计的计数增量可累加', () async {

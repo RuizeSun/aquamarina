@@ -73,32 +73,23 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     );
     if (includeKeys == null || !context.mounted) return;
 
-    // 2. 生成备份数据
-    final Uint8List bytes;
-    try {
-      logInfo('DataManagement', '开始导出数据备份 includeApiKeys=$includeKeys');
-      bytes = await BackupService.exportBackup(includeApiKeys: includeKeys);
-    } catch (e) {
-      logError('DataManagement', '导出数据备份失败: $e');
-      if (context.mounted) {
-        _showResultSnackBar(context, '导出失败：$e', isSuccess: false);
-      }
-      return;
-    }
-
     final fileName = 'aquamarina_backup_${_backupTimeStamp()}.zip';
 
-    // 3. 保存文件
+    // 2. 直接流式写入目标文件，避免大数据库整包进内存。
     if (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS) {
       // 手机端：保存到临时目录后调用系统分享面板，
       // 让用户自由选择保存到 Downloads、发送到邮件/云盘等
       final tmpDir = await getTemporaryDirectory();
       final tmpPath = p.join(tmpDir.path, fileName);
-      final tmpFile = await File(tmpPath).writeAsBytes(bytes, flush: true);
-      if (!context.mounted) return;
-
+      final tmpFile = File(tmpPath);
       try {
+        logInfo('DataManagement', '开始导出数据备份 includeApiKeys=$includeKeys');
+        await BackupService.exportBackupToFile(
+          includeApiKeys: includeKeys,
+          output: tmpFile,
+        );
+        if (!context.mounted) return;
         final result = await SharePlus.instance.share(
           ShareParams(files: [XFile(tmpPath)], subject: fileName),
         );
@@ -108,8 +99,12 @@ class _DataManagementSectionState extends State<DataManagementSection> {
             result.status == ShareResultStatus.dismissed) {
           _showResultSnackBar(context, '导出完成', isSuccess: true);
         }
+      } catch (e) {
+        logError('DataManagement', '导出数据备份失败: $e');
+        if (context.mounted) {
+          _showResultSnackBar(context, '导出失败：$e', isSuccess: false);
+        }
       } finally {
-        // 清理临时文件
         if (await tmpFile.exists()) {
           await tmpFile.delete();
         }
@@ -127,7 +122,10 @@ class _DataManagementSectionState extends State<DataManagementSection> {
         try {
           final docsDir = await getApplicationDocumentsDirectory();
           final fallbackPath = p.join(docsDir.path, fileName);
-          await File(fallbackPath).writeAsBytes(bytes, flush: true);
+          await BackupService.exportBackupToFile(
+            includeApiKeys: includeKeys,
+            output: File(fallbackPath),
+          );
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -147,7 +145,10 @@ class _DataManagementSectionState extends State<DataManagementSection> {
       if (saveLocation == null) return; // 用户取消
 
       try {
-        await File(saveLocation.path).writeAsBytes(bytes, flush: true);
+        await BackupService.exportBackupToFile(
+          includeApiKeys: includeKeys,
+          output: File(saveLocation.path),
+        );
       } catch (e) {
         if (context.mounted) {
           _showResultSnackBar(context, '保存失败：$e', isSuccess: false);
@@ -195,15 +196,6 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     }
 
     logInfo('DataManagement', '开始导入数据备份: ${file.name}');
-    final Uint8List bytes;
-    try {
-      bytes = await file.readAsBytes();
-    } catch (e) {
-      if (context.mounted) {
-        _showResultSnackBar(context, '读取文件失败：$e', isSuccess: false);
-      }
-      return;
-    }
     if (!context.mounted) return;
 
     // 确认覆盖；选择否则退出导入
@@ -230,7 +222,7 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     if (confirmed != true || !context.mounted) return;
 
     try {
-      final result = await BackupService.importBackup(bytes);
+      final result = await BackupService.importBackupFromFile(File(file.path));
       logInfo('DataManagement', '数据导入成功');
       if (!context.mounted) return;
       await showDialog<void>(

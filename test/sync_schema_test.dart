@@ -1,3 +1,4 @@
+import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/database_service.dart';
 import 'package:aquamarina/services/sync_table_spec.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +35,11 @@ Future<void> _createLegacyTables(Database db) async {
 Future<int> _oplogCount(Database db, String entity) async {
   final result = await db.rawQuery('SELECT COUNT(*) AS c FROM "oplog_$entity"');
   return (result.first['c'] as int?) ?? 0;
+}
+
+Future<Set<String>> _columnsOf(Database db, String table) async {
+  final rows = await db.rawQuery('PRAGMA table_info("$table")');
+  return {for (final row in rows) row['name'] as String};
 }
 
 void main() {
@@ -219,5 +225,38 @@ void main() {
       'is_favorited': 0,
     });
     expect(await _oplogCount(db, 'word_notes'), 1);
+  });
+
+  test('v15 迁移：补齐水位列并回填 chunk 起始 HLC', () async {
+    await DatabaseService.migrateToV13(db);
+    await DatabaseService.migrateToV15(db);
+
+    expect(
+      await _columnsOf(db, 'sync_meta'),
+      containsAll(['head_hlc', 'head_key', 'head_chunk_count', 'head_dirty']),
+    );
+    expect(await _columnsOf(db, 'sync_applied'), contains('hlc'));
+    expect(await _columnsOf(db, 'sync_state'), contains('last_chunk_key'));
+    expect(
+      await _columnsOf(db, 'sync_chunks'),
+      containsAll(['min_hlc', 'max_hlc']),
+    );
+
+    final hlc = SyncHlc(1000, 0).value;
+    await db.insert('sync_chunks', {
+      'device_id': 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'chunk_key':
+          'aquamarina/devices/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/chunks/'
+          '${hlc.replaceAll(':', '-')}-aaaaaaaaaaaaaaaa.jsonl',
+      'sha256':
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'applied_at': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    // 幂等：再次迁移不应重复添加列或失败，并回填旧行的起始 HLC。
+    await DatabaseService.migrateToV15(db);
+    final rows = await db.query('sync_chunks');
+    expect(rows.single['min_hlc'], hlc);
+    expect(rows.single['max_hlc'], hlc);
   });
 }

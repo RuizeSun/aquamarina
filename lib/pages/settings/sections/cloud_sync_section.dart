@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/cloud_sync_manifest.dart';
+import '../../../services/cloud_sync_bootstrap_service.dart';
 import '../../../services/cloud_sync_engine.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
 import '../cloud_sync_config_page.dart';
+import '../cloud_sync_conflict_page.dart';
+import '../cloud_sync_devices_page.dart';
 import '../cloud_sync_progress.dart';
 import '../settings_section_header.dart';
 
@@ -72,6 +75,57 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     }
   }
 
+  /// 从云端最新检查点引导（不限首次配置，可随时灾备恢复）。
+  Future<void> _bootstrapFromCloud() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final candidate = await CloudSyncBootstrapService.findLatestSnapshot();
+      if (candidate == null) {
+        _showSnack('云端还没有可用快照');
+        return;
+      }
+      if (!mounted) return;
+      final summary = candidate.summary;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('从最新检查点引导'),
+          content: Text(
+            '将使用设备「${summary.manifest.deviceName}」在 '
+            '${_formatTime(summary.latest!.createdAt)} 的快照覆盖本机数据。\n\n'
+            '恢复前会自动保留本机数据库副本，但当前数据会被覆盖。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('覆盖并恢复'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      await runWithProgressDialog<CloudRestoreOutcome>(
+        context,
+        title: '从云端引导',
+        task: (update) async {
+          update('正在下载并校验最新检查点…');
+          return candidate.service.restoreSnapshot(summary);
+        },
+      );
+      await _load();
+      _showSnack('已从云端最新检查点恢复，建议重启应用');
+    } catch (e) {
+      _showSnack('引导失败：$e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   /// 增量同步：拉取其它设备的变更并上传本机 oplog。
   Future<void> _incrementalSync() async {
     if (_busy) return;
@@ -86,7 +140,15 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         title: '增量同步',
         task: (update) async {
           update('正在同步词书、学习记录、笔记与错题…');
-          return engine.run();
+          return engine.run(
+            onProgress: (phase, done, total) {
+              if (phase == CloudSyncRunPhase.pull) {
+                update('已拉取 $done/$total 个变更包…');
+              } else {
+                update('已上传 $done 个变更包…');
+              }
+            },
+          );
         },
       );
       await _load();
@@ -114,6 +176,16 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
                   '冲突：${result.conflicts} 条（已保留较新数据）\n'
                   '本机待上传：${result.remainingLocalOps} 条',
                 ),
+                if (result.budgetExhausted)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      '已达到单次同步时间预算，剩余变更将在下次同步继续。',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 if (result.errors.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(
@@ -476,6 +548,48 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         ),
         ListTile(
           leading: Icon(
+            Icons.merge_type,
+            color: _configured ? colorScheme.primary : colorScheme.outline,
+          ),
+          title: const Text('同步冲突'),
+          subtitle: const Text('查看并处理合并冲突'),
+          enabled: _configured,
+          onTap: _configured
+              ? () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const CloudSyncConflictPage(),
+                  ),
+                )
+              : null,
+        ),
+        ListTile(
+          leading: Icon(
+            Icons.devices_other,
+            color: _configured ? colorScheme.primary : colorScheme.outline,
+          ),
+          title: const Text('云端设备'),
+          subtitle: const Text('查看设备列表、删除旧设备数据'),
+          enabled: _configured,
+          onTap: _configured
+              ? () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const CloudSyncDevicesPage(),
+                  ),
+                )
+              : null,
+        ),
+        ListTile(
+          leading: Icon(
+            Icons.auto_awesome_outlined,
+            color: _configured ? colorScheme.primary : colorScheme.outline,
+          ),
+          title: const Text('从最新检查点引导'),
+          subtitle: const Text('自动选择最新快照覆盖恢复（随时可用）'),
+          enabled: _configured && !_busy,
+          onTap: _configured && !_busy ? _bootstrapFromCloud : null,
+        ),
+        ListTile(
+          leading: Icon(
             Icons.cloud_upload_outlined,
             color: _configured ? colorScheme.primary : colorScheme.outline,
           ),
@@ -528,9 +642,9 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
             '「增量同步」按设备 oplog 只传输变更，支持词书、单词记录、笔记、'
             '错题与学习统计的跨设备合并；删除通过墓碑同步，重复应用幂等。\n'
             '「立即上传备份」提供设备隔离的完整快照（含历史版本），'
-            '用于灾备与新设备引导；恢复仍是覆盖式。\n'
-            '句式集元数据（SharedPreferences）暂通过完整快照同步，'
-            '详见 docs/cloud-sync-spec.md。',
+            '用于灾备与新设备引导；自动检查点每 7 天或 5000 条变更生成。\n'
+            '恢复仍是覆盖式：快照适合灾备 / 引导，日常跨设备合并请使用增量同步。\n'
+            '冲突记录可逐条选择保留本地、采用远端或保留双方。',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),

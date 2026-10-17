@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'cloud_sync_auto_sync_service.dart';
+import 'cloud_sync_checkpoint_service.dart';
 import 'cloud_sync_engine.dart';
 import 'cloud_sync_foreground_sync_service.dart';
+import 'cloud_sync_network_service.dart';
 import 'cloud_sync_settings.dart';
 import 'log_service.dart';
 import 'sync_capture_service.dart';
@@ -62,10 +64,14 @@ class CloudSyncActivitySyncService {
       final state = await (debugState?.call() ?? CloudSyncSettings.loadState());
       final interval = Duration(minutes: config.autoSyncIntervalMinutes);
       final last = state.lastSuccessAt;
-      final pullDue =
-          last == null || DateTime.now().difference(last) >= interval;
+      final now = DateTime.now();
+      if (state.backoffUntil != null && now.isBefore(state.backoffUntil!)) {
+        return;
+      }
+      final pullDue = last == null || now.difference(last) >= interval;
 
       if (pending == 0 && !pullDue) return;
+      if (!await CloudSyncNetworkService.isAllowed(config)) return;
 
       if (debugRun != null) {
         await debugRun!(pullDue);
@@ -75,13 +81,31 @@ class CloudSyncActivitySyncService {
         await CloudSyncSettings.saveState(
           (await CloudSyncSettings.loadState()).copyWith(
             lastAutoSyncAt: DateTime.now(),
+            consecutiveFailures: 0,
+            clearBackoff: true,
             clearError: true,
           ),
         );
+        await CloudSyncCheckpointService.maybeCreate(config: config);
       }
       logInfo('CloudSyncActivity', '学习结束同步完成：pending=$pending, pull=$pullDue');
     } catch (e) {
       logWarning('CloudSyncActivity', '学习结束同步失败: $e');
+      try {
+        final state = await CloudSyncSettings.loadState();
+        final failures = state.consecutiveFailures + 1;
+        await CloudSyncSettings.saveState(
+          state.copyWith(
+            lastError: '$e',
+            consecutiveFailures: failures,
+            backoffUntil: DateTime.now().add(
+              Duration(
+                minutes: (1 << (failures > 5 ? 5 : failures)).clamp(1, 60),
+              ),
+            ),
+          ),
+        );
+      } catch (_) {}
     } finally {
       _running = false;
       if (debugOnReset != null) {

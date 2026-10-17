@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
+import 'package:aquamarina/services/cloud_sync_device_meta_service.dart';
 import 'package:aquamarina/services/cloud_sync_engine.dart';
 import 'package:aquamarina/services/cloud_sync_service.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
@@ -42,6 +43,39 @@ void main() {
     );
     final message = await service.testConnection();
     expect(message, contains('连接成功'));
+  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+
+  test('流式文件上传/下载与 SHA-256 校验（真实存储）', () async {
+    final storage = S3StorageService(
+      config: config!,
+      accessKey: accessKey!,
+      secretKey: secretKey!,
+    );
+    final key =
+        '${config.prefix}/streaming/${DateTime.now().microsecondsSinceEpoch}.bin';
+    final tmpDir = await Directory.systemTemp.createTemp('aquamarina-stream-');
+    final source = File('${tmpDir.path}/source.bin');
+    final target = File('${tmpDir.path}/target.bin');
+    final payload = Uint8List.fromList(
+      List<int>.generate(256 * 1024, (i) => i % 251),
+    );
+    await source.writeAsBytes(payload, flush: true);
+    try {
+      final uploaded = await storage.putFile(key, source);
+      expect(uploaded.size, payload.length);
+      expect(uploaded.sha256, CloudSyncUtils.sha256Hex(payload));
+
+      final downloaded = await storage.downloadToFile(key, target);
+      expect(downloaded, isNotNull);
+      expect(downloaded!.size, payload.length);
+      expect(downloaded.sha256, uploaded.sha256);
+      expect(await target.readAsBytes(), payload);
+    } finally {
+      try {
+        await storage.delete(key);
+      } catch (_) {}
+      await tmpDir.delete(recursive: true);
+    }
   }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
   test('设备清单上传/列举/清理（真实存储）', () async {
@@ -153,10 +187,28 @@ void main() {
 
       var result = await engineA.run(pull: false);
       expect(result.pushedOps, greaterThanOrEqualTo(1));
+      final metaA = CloudSyncDeviceMetaService(
+        config: e2eConfig,
+        storage: storageA,
+      );
+      final metaB = CloudSyncDeviceMetaService(
+        config: e2eConfig,
+        storage: storageB,
+      );
+      final headA = await metaA.fetchHead(deviceA);
+      expect(headA, isNotNull);
+      expect(headA!.latestChunkKey, contains('/chunks/'));
 
       result = await engineB.run(pull: true, push: false);
       expect(result.pulledOps, greaterThanOrEqualTo(1));
       expect((await dbB.query('word_notes')).single['note'], 'from A');
+      final stateB = await metaB.fetchState(deviceB);
+      expect(stateB?.appliedFor(deviceA), isNotNull);
+      expect(await metaB.listDeviceIds(), containsAll([deviceA, deviceB]));
+
+      // head 未变化时，下一次拉取应完全跳过该设备。
+      result = await engineB.run(pull: true, push: false);
+      expect(result.skippedByHead, greaterThanOrEqualTo(1));
 
       await dbB.update(
         'word_notes',
@@ -173,6 +225,8 @@ void main() {
       result = await engineA.run(pull: true, push: false);
       expect(result.pulledOps, greaterThanOrEqualTo(1));
       expect((await dbA.query('word_notes')).single['note'], 'from B');
+      final stateA = await metaA.fetchState(deviceA);
+      expect(stateA?.appliedFor(deviceB), isNotNull);
     } finally {
       try {
         final objects = await storageA.list('${e2eConfig.prefix}/');

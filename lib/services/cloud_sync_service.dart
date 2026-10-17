@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/cloud_sync_manifest.dart';
 import 'backup_service.dart';
+import 'cloud_sync_run_lock.dart';
 import 'cloud_sync_settings.dart';
 import 'database_service.dart';
 import 'log_service.dart';
@@ -51,6 +52,21 @@ class CloudSyncService {
 
   /// 仅用于单元测试：注入内存对象存储，避免真实网络与平台插件。
   factory CloudSyncService.forTesting({
+    required CloudSyncConfig config,
+    required String deviceId,
+    required String deviceName,
+    required S3StorageService storage,
+  }) {
+    return CloudSyncService._(
+      config: config,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      storage: storage,
+    );
+  }
+
+  /// 使用已存在的客户端创建服务（检查点等内部调用）。
+  factory CloudSyncService.withStorage({
     required CloudSyncConfig config,
     required String deviceId,
     required String deviceName,
@@ -157,24 +173,47 @@ class CloudSyncService {
   Future<CloudSnapshotInfo> uploadSnapshot({
     required bool includeApiKeys,
     void Function(int sent, int total)? onProgress,
+  }) {
+    // 与增量同步、恢复、设备删除共用同一把全局锁，避免 manifest / 数据库
+    // 文件被并发读写。
+    return CloudSyncRunLock.runExclusive(
+      () => _uploadSnapshot(
+        includeApiKeys: includeApiKeys,
+        onProgress: onProgress,
+      ),
+    );
+  }
+
+  Future<CloudSnapshotInfo> _uploadSnapshot({
+    required bool includeApiKeys,
+    void Function(int sent, int total)? onProgress,
   }) async {
     logInfo('CloudSync', '开始上传快照 includeApiKeys=$includeApiKeys');
-    final bytes = await BackupService.exportBackup(
-      includeApiKeys: includeApiKeys,
-    );
-    final sha256 = CloudSyncUtils.sha256Hex(bytes);
     final now = DateTime.now().toUtc();
     final stamp = CloudSyncUtils.utcTimestamp(now);
     final key = config.snapshotKey(deviceId, stamp);
-    final snapshot = CloudSnapshotInfo(
-      key: key,
-      size: bytes.length,
-      sha256: sha256,
-      createdAt: now,
-      containsApiKeys: includeApiKeys,
-    );
-
-    await storage.putBytes(key, bytes, onProgress: onProgress);
+    final tmpDir = await getTemporaryDirectory();
+    final file = File(p.join(tmpDir.path, 'aquamarina_snapshot_$stamp.zip'));
+    final CloudSnapshotInfo snapshot;
+    try {
+      await BackupService.exportBackupToFile(
+        includeApiKeys: includeApiKeys,
+        output: file,
+      );
+      final size = await file.length();
+      final uploaded = await storage.putFile(key, file, onProgress: onProgress);
+      snapshot = CloudSnapshotInfo(
+        key: key,
+        size: size,
+        sha256: uploaded.sha256,
+        createdAt: now,
+        containsApiKeys: includeApiKeys,
+      );
+    } finally {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
 
     final appVersion = await _appVersion();
     final existing = await fetchManifest(deviceId);
@@ -210,7 +249,10 @@ class CloudSyncService {
         clearError: true,
       ),
     );
-    logInfo('CloudSync', '快照上传完成 key=$key size=${bytes.length} sha256=$sha256');
+    logInfo(
+      'CloudSync',
+      '快照上传完成 key=$key size=${snapshot.size} sha256=${snapshot.sha256}',
+    );
     return snapshot;
   }
 
@@ -219,6 +261,15 @@ class CloudSyncService {
   /// 恢复前会自动保留一份本机数据库快照，导入失败时由
   /// `BackupService.importBackup` 自行回滚。
   Future<CloudRestoreOutcome> restoreSnapshot(
+    CloudDeviceSummary summary, {
+    void Function(int received, int? total)? onProgress,
+  }) {
+    return CloudSyncRunLock.runExclusive(
+      () => _restoreSnapshot(summary, onProgress: onProgress),
+    );
+  }
+
+  Future<CloudRestoreOutcome> _restoreSnapshot(
     CloudDeviceSummary summary, {
     void Function(int received, int? total)? onProgress,
   }) async {
@@ -240,28 +291,48 @@ class CloudSyncService {
       throw const CloudSyncException('云端备份大小与清单不一致，已中止恢复');
     }
 
-    final bytes = await storage.getBytes(
-      snapshot.key,
-      maxBytes: BackupService.maxBackupSize,
-      onProgress: onProgress,
+    final tmpDir = await getTemporaryDirectory();
+    final file = File(
+      p.join(
+        tmpDir.path,
+        'aquamarina_restore_${DateTime.now().microsecondsSinceEpoch}.zip',
+      ),
     );
-    if (bytes == null) {
-      throw const CloudSyncException('云端备份下载失败，请重试');
-    }
-    if (bytes.length != snapshot.size) {
-      throw const CloudSyncException('云端备份下载不完整，已中止恢复');
-    }
-    final actualSha = CloudSyncUtils.sha256Hex(bytes);
-    if (actualSha != snapshot.sha256) {
-      throw const CloudSyncException('云端备份校验失败（内容已损坏），已中止恢复');
-    }
+    final CloudRestoreOutcome outcome;
+    try {
+      final downloaded = await storage.downloadToFile(
+        snapshot.key,
+        file,
+        maxBytes: BackupService.maxBackupSize,
+        onProgress: onProgress,
+      );
+      if (downloaded == null) {
+        throw const CloudSyncException('云端备份下载失败，请重试');
+      }
+      if (downloaded.size != snapshot.size) {
+        throw const CloudSyncException('云端备份下载不完整，已中止恢复');
+      }
+      if (downloaded.sha256 != snapshot.sha256) {
+        throw const CloudSyncException('云端备份校验失败（内容已损坏），已中止恢复');
+      }
 
-    logInfo(
-      'CloudSync',
-      '开始恢复快照 device=${summary.manifest.deviceId} key=${snapshot.key} size=${bytes.length}',
-    );
-    final safetyCopyPath = await _createSafetyCopy();
-    final result = await BackupService.importBackup(bytes);
+      logInfo(
+        'CloudSync',
+        '开始恢复快照 device=${summary.manifest.deviceId} key=${snapshot.key} size=${downloaded.size}',
+      );
+      final safetyCopyPath = await _createSafetyCopy();
+      final result = await BackupService.importBackupFromFile(file);
+      outcome = CloudRestoreOutcome(
+        manifest: summary.manifest,
+        snapshot: snapshot,
+        result: result,
+        safetyCopyPath: safetyCopyPath,
+      );
+    } finally {
+      if (await file.exists()) {
+        await file.delete();
+      }
+    }
 
     await CloudSyncSettings.saveState(
       (await CloudSyncSettings.loadState()).copyWith(
@@ -270,25 +341,45 @@ class CloudSyncService {
         clearError: true,
       ),
     );
-    logInfo('CloudSync', '快照恢复完成，API Key 已恢复=${result.restoredApiKeys}');
-    return CloudRestoreOutcome(
-      manifest: summary.manifest,
-      snapshot: snapshot,
-      result: result,
-      safetyCopyPath: safetyCopyPath,
+    logInfo(
+      'CloudSync',
+      '快照恢复完成，API Key 已恢复=${outcome.result.restoredApiKeys}',
     );
+    return outcome;
+  }
+
+  /// 删除指定设备的全部云端数据（P2-8 设备管理）。
+  ///
+  /// 只允许删除非当前设备，避免误删本机正在使用的命名空间。
+  Future<int> deleteDeviceData(String targetDeviceId) {
+    return CloudSyncRunLock.runExclusive(() async {
+      if (targetDeviceId == deviceId) {
+        throw const CloudSyncException('不能删除当前设备，请使用「清空本设备云端数据」');
+      }
+      final prefix = '${config.devicePrefix(targetDeviceId)}/';
+      final objects = await storage.list(prefix, recursive: true);
+      if (objects.isEmpty) return 0;
+      await storage.deleteMany(objects.map((e) => e.key));
+      logInfo(
+        'CloudSync',
+        '已删除设备 $targetDeviceId 的云端数据，共 ${objects.length} 个对象',
+      );
+      return objects.length;
+    });
   }
 
   /// 清空本设备在云端的全部对象（快照 / 清单 / 状态）。
   ///
   /// 危险操作：不影响其它设备，但本设备云端历史将无法恢复。
-  Future<int> deleteOwnCloudData() async {
-    final prefix = '${config.devicePrefix(deviceId)}/';
-    final objects = await storage.list(prefix, recursive: true);
-    if (objects.isEmpty) return 0;
-    await storage.deleteMany(objects.map((e) => e.key));
-    logInfo('CloudSync', '已清空本设备云端数据，共 ${objects.length} 个对象');
-    return objects.length;
+  Future<int> deleteOwnCloudData() {
+    return CloudSyncRunLock.runExclusive(() async {
+      final prefix = '${config.devicePrefix(deviceId)}/';
+      final objects = await storage.list(prefix, recursive: true);
+      if (objects.isEmpty) return 0;
+      await storage.deleteMany(objects.map((e) => e.key));
+      logInfo('CloudSync', '已清空本设备云端数据，共 ${objects.length} 个对象');
+      return objects.length;
+    });
   }
 
   // ── 内部工具 ────────────────────────────────────────
