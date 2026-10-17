@@ -42,7 +42,14 @@ class OnlineSentence {
 
 /// 在线词书/句型集搜索工具
 class OnlineAssetsService {
-  static final Dio _dio = Dio(BaseOptions(baseUrl: _baseUrl));
+  static final Dio _dio = Dio(
+    BaseOptions(
+      baseUrl: _baseUrl,
+      connectTimeout: const Duration(seconds: 10),
+      sendTimeout: const Duration(seconds: 20),
+      receiveTimeout: const Duration(seconds: 30),
+    ),
+  );
 
   // ===== 根入口 =====
   static Future<Map<String, dynamic>> fetchRoot() async {
