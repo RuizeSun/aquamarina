@@ -636,7 +636,9 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
               leading: Icon(Icons.settings_suggest, color: colorScheme.primary),
               title: const Text('MiMo 高级设置'),
               subtitle: const Text('接口地址、模型与音频标签前缀'),
-              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              // 顶部留白：Expansible 用 ClipRect 裁剪展开内容，而 OutlineInputBorder
+              // 的悬浮 label 会绘制到输入框上边界之外，紧贴裁剪边界时上半部分会被裁掉
+              childrenPadding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
               children: [
                 TextField(
                   controller: _mimoBaseUrlController,

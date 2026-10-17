@@ -422,6 +422,37 @@ void main() {
       }
     });
 
+    testWidgets('MiMo 高级设置展开后 Base URL 标签完整可见', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'tts_enabled': true,
+        'tts_provider': TtsProvider.mimo.index,
+      });
+      // 放大测试视口，保证高级设置展开后输入框在屏幕内
+      tester.view.physicalSize = const Size(600, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await pumpSection(tester);
+      await tester.tap(find.text('MiMo 高级设置'));
+      await tester.pumpAndSettle();
+
+      // ExpansionTile（Expansible）用 ClipRect 裁剪展开内容，
+      // 而 OutlineInputBorder 的悬浮 label 会绘制到输入框上边界之外，
+      // 若 childrenPadding 顶部没有留白，label 上半部分会被裁掉。
+      final clipRect = tester.getRect(
+        find
+            .descendant(
+              of: find.byType(ExpansionTile),
+              matching: find.byType(ClipRect),
+            )
+            .first,
+      );
+      final labelRect = tester.getRect(find.text('Base URL'));
+
+      expect(labelRect.top, greaterThanOrEqualTo(clipRect.top));
+      expect(labelRect.bottom, lessThanOrEqualTo(clipRect.bottom));
+    });
+
     testWidgets('测试文本为空时点击试听给出提示', (tester) async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         'tts_enabled': true,
