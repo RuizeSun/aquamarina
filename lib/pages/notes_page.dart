@@ -69,7 +69,9 @@ class _NotesPageState extends State<NotesPage> {
       for (final w in wordNotes)
         SavedEntry.fromWord(
           w,
-          subtitle: _cleanTranslation(entries[w.word.toLowerCase()]?.translation),
+          subtitle: _cleanTranslation(
+            entries[w.word.toLowerCase()]?.translation,
+          ),
         ),
       for (final s in sentenceNotes) SavedEntry.fromSentence(s),
     ];
@@ -116,14 +118,16 @@ class _NotesPageState extends State<NotesPage> {
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              WordDetailPage(result: result, word: wordNote.word),
+          builder: (_) => WordDetailPage(result: result, word: wordNote.word),
         ),
       );
       await _loadData();
     } else {
-      await showSentenceDetailSheet(context, entry.sentenceNote!,
-          onChanged: _loadData);
+      await showSentenceDetailSheet(
+        context,
+        entry.sentenceNote!,
+        onChanged: _loadData,
+      );
     }
   }
 
@@ -173,6 +177,7 @@ class _NotesPageState extends State<NotesPage> {
       );
     await _loadData();
   }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -245,9 +250,7 @@ class _NotesPageState extends State<NotesPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            isSearching
-                ? '换个关键词试试吧'
-                : '去词典给单词记笔记，或在句型练习中给句子记笔记',
+            isSearching ? '换个关键词试试吧' : '去词典给单词记笔记，或在句型练习中给句子记笔记',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
@@ -277,7 +280,6 @@ class _NotesPageState extends State<NotesPage> {
     );
   }
 }
-
 
 /// 笔记卡片（单词或句子）
 class _NoteCard extends StatelessWidget {

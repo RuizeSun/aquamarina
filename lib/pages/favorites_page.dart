@@ -124,14 +124,16 @@ class _FavoritesPageState extends State<FavoritesPage> {
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) =>
-              WordDetailPage(result: result, word: wordNote.word),
+          builder: (_) => WordDetailPage(result: result, word: wordNote.word),
         ),
       );
       await _loadData();
     } else {
-      await showSentenceDetailSheet(context, entry.sentenceNote!,
-          onChanged: _loadData);
+      await showSentenceDetailSheet(
+        context,
+        entry.sentenceNote!,
+        onChanged: _loadData,
+      );
     }
   }
 
@@ -192,6 +194,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
       );
     return true;
   }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -264,9 +267,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            isSearching
-                ? '换个关键词试试吧'
-                : '去词典收藏单词，或在句型练习中点 ⭐ 收藏句子',
+            isSearching ? '换个关键词试试吧' : '去词典收藏单词，或在句型练习中点 ⭐ 收藏句子',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),

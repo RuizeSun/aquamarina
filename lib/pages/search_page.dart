@@ -24,6 +24,10 @@ class _SearchPageState extends State<SearchPage> {
   List<String> _searchHistory = [];
   Timer? _debounceTimer;
 
+  /// 搜索请求序号：只有最新一次查询可以更新 UI，
+  /// 防止旧 query 晚返回后覆盖新 query 的结果。
+  int _searchSeq = 0;
+
   static const _historyKey = 'search_history';
 
   @override
@@ -86,9 +90,12 @@ class _SearchPageState extends State<SearchPage> {
     final query = _searchController.text.trim();
     if (query.isEmpty) {
       _debounceTimer?.cancel();
+      // 使仍在进行中的旧请求失效
+      _searchSeq++;
       setState(() {
         _suggestions = [];
         _errorMessage = null;
+        _isSearching = false;
       });
       return;
     }
@@ -100,6 +107,7 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _performFuzzySearch(String query) async {
+    final seq = ++_searchSeq;
     setState(() {
       _isSearching = true;
       _errorMessage = null;
@@ -108,14 +116,14 @@ class _SearchPageState extends State<SearchPage> {
     try {
       final results = await DictionaryService.searchAllFuzzy(query);
       logDebug('SearchPage', '搜索 "$query" 返回 ${results.length} 条结果');
-      if (!mounted) return;
+      if (!mounted || seq != _searchSeq) return;
       setState(() {
         _suggestions = results;
         _isSearching = false;
       });
     } catch (e) {
       logError('SearchPage', '搜索 "$query" 失败: $e');
-      if (!mounted) return;
+      if (!mounted || seq != _searchSeq) return;
       setState(() {
         _isSearching = false;
         _errorMessage = '搜索失败: $e';
@@ -382,27 +390,29 @@ class _SearchPageState extends State<SearchPage> {
                 )
               : null;
 
-          return _StaggeredFadeIn(
-            index: index,
-            child: ListTile(
-              leading: Icon(
-                leadingIcon,
-                color: Theme.of(context).colorScheme.primary,
-              ),
-              title: Text(result.displayWord),
-              subtitle:
-                  result.displaySubtitle != null &&
-                      result.displaySubtitle!.isNotEmpty
-                  ? Text(
-                      normalizeNewlines(result.displaySubtitle),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    )
-                  : null,
-              trailing: trailing,
-              onTap: () => _onSelectWord(result.displayWord),
+          final tile = ListTile(
+            leading: Icon(
+              leadingIcon,
+              color: Theme.of(context).colorScheme.primary,
             ),
+            title: Text(result.displayWord),
+            subtitle:
+                result.displaySubtitle != null &&
+                    result.displaySubtitle!.isNotEmpty
+                ? Text(
+                    normalizeNewlines(result.displaySubtitle),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                : null,
+            trailing: trailing,
+            onTap: () => _onSelectWord(result.displayWord),
           );
+          // 只对前 10 条做交错动画：结果最多 50 条，
+          // 每条都创建 AnimationController + 延迟定时器会带来无谓开销。
+          return index < 10
+              ? _StaggeredFadeIn(index: index, child: tile)
+              : tile;
         },
       );
     } else {
