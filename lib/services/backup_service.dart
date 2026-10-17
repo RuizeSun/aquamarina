@@ -117,6 +117,8 @@ class BackupService {
     final map = <String, dynamic>{};
     for (final key in prefs.getKeys()) {
       if (key.startsWith(localOnlyPrefPrefix)) continue;
+      // 句式集元数据已迁入 SQLite（v14）；旧 key 只为兼容历史备份
+      if (key == 'sentence_sets_v1') continue;
       final value = prefs.get(key);
       if (value is String) {
         map[key] = {'t': 's', 'v': value};

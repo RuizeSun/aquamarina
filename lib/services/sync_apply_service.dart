@@ -265,6 +265,26 @@ class SyncApplyService {
         );
         await txn.delete('sentences', where: 'id = ?', whereArgs: [id]);
         return;
+      case 'sentence_sets':
+        final setId = op.key['id'];
+        await txn.delete('sentences', where: 'set_id = ?', whereArgs: [setId]);
+        await txn.delete(
+          'attempted_sentence_ids',
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        await txn.delete(
+          'practiced_sentence_ids',
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        await txn.delete(
+          'wrong_sentences',
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        await txn.delete('sentence_sets', where: 'id = ?', whereArgs: [setId]);
+        return;
       default:
         await txn.delete(
           spec.table,

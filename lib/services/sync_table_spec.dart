@@ -224,6 +224,19 @@ class SyncSpecs {
       dataColumns: {'added_at': 'TEXT'},
     ),
     SyncTableSpec(
+      entity: 'sentence_sets',
+      table: 'sentence_sets',
+      keyColumns: {'id': 'TEXT'},
+      dataColumns: {
+        'name': 'TEXT',
+        'description': 'TEXT',
+        'sentence_count': 'INTEGER',
+        'created_at': 'TEXT',
+        'updated_at': 'TEXT',
+      },
+      lwwColumn: 'updated_at',
+    ),
+    SyncTableSpec(
       entity: 'sentences',
       table: 'sentences',
       keyColumns: {'id': 'TEXT'},

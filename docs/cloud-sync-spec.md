@@ -72,7 +72,7 @@
 | `word_books` | `uuid`（v13 新增） | upsert / delete | 删除级联条目（墓碑 + 级联 op） |
 | `word_book_entries` | `(book_uuid, word)` | grow-only set / remove | 加入与移除分别记录 |
 | `sentences` | `id` | upsert / delete | `sort_index REAL`（v13 新增）保证顺序 |
-| `sentence_sets` | `id` | upsert / delete | v13 从 `SharedPreferences:sentence_sets_v1` 迁入 SQLite |
+| `sentence_sets` | `id` | upsert / delete | v14 从 `SharedPreferences:sentence_sets_v1` 迁入 SQLite |
 | `attempted_sentence_ids` | `(set_id, sentence_id)` | grow-only | 幂等插入 |
 | `practiced_sentence_ids` | `(set_id, sentence_id)` | grow-only | 幂等插入 |
 | `wrong_sentences` | `sentence_id` | upsert + increment(`wrong_count`) | `last_wrong_at = MAX` |
@@ -148,7 +148,7 @@ for chunk in pull():
 | 0 | PoC：Rain S3 读写/列举/删除 | ✅ 已完成（path-style + `cn-nb1`） |
 | 1 | 配置与凭据、S3 客户端封装、连接测试、设置页 UI | ✅ 已完成 |
 | 2 | 设备隔离快照上传/下载 + manifest（引导/灾备能力） | ✅ 已完成 |
-| 3 | schema v13 + 触发器生成器（`sentence_sets` 入库暂缓） | ✅ 已完成（DB 内 13 张表） |
+| 3 | schema v13 + 触发器生成器（`sentence_sets` 于 v14 入库） | ✅ 已完成（DB 内 14 张同步表） |
 | 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
 | 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 自动同步（启动/回前台 + 15 分钟冷却）、保守 chunk GC 已完成；冲突明细 UI 待补 |
 | 6 | 收敛性/幂等/崩溃/迁移测试与文档 | 🚧 单测 + 真实 S3 双设备 E2E 已通过；崩溃注入待补 |
@@ -173,20 +173,22 @@ for chunk in pull():
 | `lib/services/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
 | `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、15 分钟冷却、并发保护 |
 | `lib/services/cloud_sync_maintenance_service.dart` | 保守 chunk GC（每设备保留最近 1000 个 + 180 天） |
+| `lib/services/ai_sentence_set_service.dart` | 句式集元数据迁入 SQLite（v14），CRUD 走事务并纳入触发器同步 |
 
 已通过的验证：
 
 - `flutter analyze`：新增文件无告警；
-- 186 个测试通过（含 v13 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、自动同步配置）；
+- 189 个测试通过（含 v13/v14 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置）；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、**双设备增量同步收敛**）。
 
 ### 当前已知限制
 
-- `sentence_sets` 元数据仍在 SharedPreferences 中，暂只通过完整快照同步；
 - 冲突明细 UI 与崩溃注入测试待补；远程 GC 采用保守策略：
   离线超过 180 天的设备可能错过已清理的 chunk，可用完整快照恢复；
 - 首次接入云同步时，历史数据不会被追溯为 oplog：
   建议先「立即上传备份」并在其它设备「从云端恢复」，再使用增量同步；
 - 未配置云同步时默认不捕获（`sync_meta.capture_enabled = 0`），
   配置成功后自动开启；清除配置会停止捕获并清空 oplog。
+- 句式集元数据 v14 起在 SQLite，旧版 `sentence_sets_v1` 会在首次加载时
+  惰性迁移；新备份不再导出旧 Prefs key。
 

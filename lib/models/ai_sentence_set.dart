@@ -5,6 +5,7 @@ class SentenceSet {
   final String? description;
   final int sentenceCount;
   final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   SentenceSet({
     this.id,
@@ -12,6 +13,7 @@ class SentenceSet {
     this.description,
     this.sentenceCount = 0,
     this.createdAt,
+    this.updatedAt,
   });
 
   factory SentenceSet.fromJson(Map<String, dynamic> json) {
@@ -23,6 +25,9 @@ class SentenceSet {
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : null,
+      updatedAt: json['updated_at'] != null
+          ? DateTime.parse(json['updated_at'] as String)
+          : null,
     );
   }
 
@@ -32,6 +37,7 @@ class SentenceSet {
     'description': description,
     'sentence_count': sentenceCount,
     'created_at': createdAt?.toIso8601String(),
+    'updated_at': updatedAt?.toIso8601String(),
   };
 
   SentenceSet copyWith({
@@ -40,6 +46,7 @@ class SentenceSet {
     String? description,
     int? sentenceCount,
     DateTime? createdAt,
+    DateTime? updatedAt,
   }) {
     return SentenceSet(
       id: id ?? this.id,
@@ -47,6 +54,7 @@ class SentenceSet {
       description: description ?? this.description,
       sentenceCount: sentenceCount ?? this.sentenceCount,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
     );
   }
 }

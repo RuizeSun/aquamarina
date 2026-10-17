@@ -295,6 +295,58 @@ void main() {
       expect(entries.single['book_uuid'], 'book-uuid-1');
     });
 
+    test('句式集删除会级联清理句子、练习进度与错题', () async {
+      await db.insert('sentence_sets', {
+        'id': 'set-1',
+        'name': 'Set',
+        'sentence_count': 1,
+        'created_at': '2026-10-01T00:00:00Z',
+        'updated_at': '2026-10-01T00:00:00Z',
+      });
+      await db.insert('sentences', {
+        'id': 'sentence-1',
+        'set_id': 'set-1',
+        'english': 'Hello.',
+        'chinese': '你好。',
+        'sort_index': 1.0,
+      });
+      await db.insert('attempted_sentence_ids', {
+        'set_id': 'set-1',
+        'sentence_id': 'sentence-1',
+      });
+      await db.insert('practiced_sentence_ids', {
+        'set_id': 'set-1',
+        'sentence_id': 'sentence-1',
+      });
+      await db.insert('wrong_sentences', {
+        'id': 'wrong-1',
+        'sentence_id': 'sentence-1',
+        'set_id': 'set-1',
+        'english': 'Hello.',
+        'chinese': '你好。',
+        'score': 1,
+        'user_answer': 'x',
+        'created_at': '2026-10-01T00:00:00Z',
+        'wrong_count': 1,
+      });
+
+      final result = await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'sentence_sets',
+          seq: 1,
+          hlcMs: 3000,
+          key: {'id': 'set-1'},
+          op: 'delete',
+        ),
+      ], db: db);
+      expect(result.applied, 1);
+      expect(await db.query('sentence_sets'), isEmpty);
+      expect(await db.query('sentences'), isEmpty);
+      expect(await db.query('attempted_sentence_ids'), isEmpty);
+      expect(await db.query('practiced_sentence_ids'), isEmpty);
+      expect(await db.query('wrong_sentences'), isEmpty);
+    });
+
     test('每日统计的计数增量可累加', () async {
       await SyncApplyService.applyOps([
         makeOp(

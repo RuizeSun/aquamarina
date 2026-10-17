@@ -9,7 +9,19 @@ import 'sync_schema.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 13;
+  static const int schemaVersion = 14;
+
+  /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
+  static const String sentenceSetsTableSql = '''
+          CREATE TABLE IF NOT EXISTS sentence_sets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            sentence_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        ''';
 
   static Database? _db;
 
@@ -506,6 +518,10 @@ class DatabaseService {
         if (oldVersion < 13) {
           await migrateToV13(db);
         }
+        // 13 → 14：句式集元数据入库（便于事务与增量同步）
+        if (oldVersion < 14) {
+          await migrateToV14(db);
+        }
       },
     );
   }
@@ -588,6 +604,7 @@ class DatabaseService {
   /// 3. 索引：跨设备稳定键与顺序查询；
   /// 4. 安装同步系统表、oplog 表与触发器。
   static Future<void> migrateToV13(Database db) async {
+    await db.execute(sentenceSetsTableSql);
     await _ensureColumn(db, 'word_books', 'uuid', 'TEXT');
     await _ensureColumn(db, 'word_book_entries', 'book_uuid', 'TEXT');
     await _ensureColumn(db, 'learning_sessions', 'uuid', 'TEXT');
@@ -635,6 +652,16 @@ class DatabaseService {
       'INTEGER NOT NULL DEFAULT 0',
     );
     logInfo('DatabaseService', 'v13 同步 schema 迁移完成');
+  }
+
+  /// v13 → v14：句式集元数据表 + 同步触发器安装。
+  ///
+  /// Prefs → DB 的数据搬运由 `SentenceSetService.load()` 惰性完成，
+  /// 这样旧备份恢复后也能触发迁移。
+  static Future<void> migrateToV14(Database db) async {
+    await db.execute(sentenceSetsTableSql);
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v14 句式集 schema 迁移完成');
   }
 
   /// 为表中 uuid 为空的行生成 UUID（按 rowid 更新，幂等）。
