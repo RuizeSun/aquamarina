@@ -41,6 +41,12 @@ class DueWordsGroup {
 }
 
 class LearningService {
+  /// 单条 SQL 中 `IN (...)` 的安全绑定参数上限（与 DictionaryService 一致）。
+  ///
+  /// 老版本 Android 的 SQLite 默认上限只有 999，超过会直接报
+  /// `too many SQL variables`；分批查询同时也能降低单次查询的解析开销。
+  static const int _maxQueryChunkSize = 900;
+
   static String _todayStr() {
     final now = DateTime.now();
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
@@ -189,16 +195,26 @@ class LearningService {
         .map((w) => w.trim().toLowerCase())
         .toSet()
         .toList();
-    final placeholders = cleanedDueWords.map((_) => '?').join(',');
-    final maps = await db.rawQuery('''
-      SELECT e.word, e.book_id, b.title FROM word_book_entries e
-      JOIN word_books b ON b.id = e.book_id
-      WHERE LOWER(e.word) IN ($placeholders)
-    ''', cleanedDueWords);
     final wordBooksMap = <String, List<Map<String, dynamic>>>{};
-    for (final m in maps) {
-      final word = (m['word'] as String).toLowerCase();
-      wordBooksMap.putIfAbsent(word, () => []).add(m);
+    for (
+      var start = 0;
+      start < cleanedDueWords.length;
+      start += _maxQueryChunkSize
+    ) {
+      final end = start + _maxQueryChunkSize < cleanedDueWords.length
+          ? start + _maxQueryChunkSize
+          : cleanedDueWords.length;
+      final chunk = cleanedDueWords.sublist(start, end);
+      final placeholders = chunk.map((_) => '?').join(',');
+      final maps = await db.rawQuery('''
+        SELECT e.word, e.book_id, b.title FROM word_book_entries e
+        JOIN word_books b ON b.id = e.book_id
+        WHERE LOWER(e.word) IN ($placeholders)
+      ''', chunk);
+      for (final m in maps) {
+        final word = (m['word'] as String).toLowerCase();
+        wordBooksMap.putIfAbsent(word, () => []).add(m);
+      }
     }
 
     // 按词书聚合
@@ -636,49 +652,35 @@ class LearningService {
   }) async {
     final db = await DatabaseService.database;
 
-    // 如果指定了词书，先取出该词书中的所有单词集合
-    Set<String>? bookWords;
-    if (bookId != null) {
-      final maps = await db.query(
-        'word_book_entries',
-        columns: ['word'],
-        where: 'book_id = ?',
-        whereArgs: [bookId],
-      );
-      bookWords = maps.map((m) => m['word'] as String).toSet();
-    }
-
     List<Map<String, dynamic>> wordMaps;
     if (status == 0) {
-      // 等待学习：出现在词书中但还没有学习记录
+      // 等待学习：出现在词书中但还没有学习记录。
+      // 词书过滤直接下推到 SQL，避免先把整本词书读进 Dart 再过滤。
+      final bookFilter = bookId == null ? '' : 'AND e.book_id = ?';
       wordMaps = await db.rawQuery('''
         SELECT DISTINCT e.word FROM word_book_entries e
         WHERE e.word NOT IN (
           SELECT r.word FROM user_word_records r
         )
+        $bookFilter
         ORDER BY e.word COLLATE NOCASE
-      ''');
+      ''', [if (bookId != null) bookId]);
     } else {
-      final sql = status == 1
-          ? '''
-        SELECT DISTINCT r.word FROM user_word_records r
-        WHERE r.is_mastered = 0
-        ORDER BY r.word COLLATE NOCASE
-      '''
+      // status == 1：已学习（未掌握）；status == 2 / null：已掌握
+      final isMastered = status == 1 ? 0 : 1;
+      final bookFilter = bookId == null
+          ? ''
           : '''
+        AND EXISTS (
+          SELECT 1 FROM word_book_entries e
+          WHERE e.book_id = ? AND e.word = r.word
+        )''';
+      wordMaps = await db.rawQuery('''
         SELECT DISTINCT r.word FROM user_word_records r
-        WHERE r.is_mastered = 1
+        WHERE r.is_mastered = ?
+        $bookFilter
         ORDER BY r.word COLLATE NOCASE
-      ''';
-      wordMaps = await db.rawQuery(sql);
-    }
-
-    // 按词书筛选（仅保留出现在该词书中的单词）
-    if (bookWords != null) {
-      final bookWordsSet = bookWords;
-      wordMaps = wordMaps
-          .where((m) => bookWordsSet.contains(m['word'] as String))
-          .toList();
+      ''', [isMastered, if (bookId != null) bookId]);
     }
 
     // 仅查询结果单词的来源词书映射，避免全表 JOIN
@@ -687,13 +689,17 @@ class LearningService {
         .toSet()
         .toList();
     final sourceMap = <String, Set<String>>{};
-    if (resultWords.isNotEmpty) {
-      final placeholders = resultWords.map((_) => '?').join(',');
+    for (var start = 0; start < resultWords.length; start += _maxQueryChunkSize) {
+      final end = start + _maxQueryChunkSize < resultWords.length
+          ? start + _maxQueryChunkSize
+          : resultWords.length;
+      final chunk = resultWords.sublist(start, end);
+      final placeholders = chunk.map((_) => '?').join(',');
       final bookMaps = await db.rawQuery('''
         SELECT e.word, b.title FROM word_book_entries e
         JOIN word_books b ON b.id = e.book_id
         WHERE e.word IN ($placeholders)
-      ''', resultWords);
+      ''', chunk);
       for (final m in bookMaps) {
         final word = m['word'] as String;
         final title = m['title'] as String;
