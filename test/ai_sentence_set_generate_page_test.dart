@@ -17,7 +17,7 @@ class _FakeProfileService extends AiProfileService {
   _FakeProfileService(this.profile);
 
   @override
-  Future<void> load() async {}
+  Future<void> load({bool force = false}) async {}
 
   @override
   AiProfile? get defaultProfile => profile;

@@ -63,6 +63,11 @@ class AiProfileService extends ChangeNotifier {
   List<AiProfile> _profiles = [];
   bool _loaded = false;
 
+  /// 全局配置版本号：任何实例修改配置后自增，
+  /// 其它实例的 [load] 发现版本变化才重新读取 SecureStorage。
+  static int _revision = 0;
+  int _loadedRevision = -1;
+
   AiProfileService({FlutterSecureStorage? secureStorage, Dio? dio})
     : _secureStorage = secureStorage ?? const FlutterSecureStorage(),
       _dio = dio ?? Dio();
@@ -91,11 +96,18 @@ class AiProfileService extends ChangeNotifier {
     }
   }
 
-  /// 加载所有配置
-  Future<void> load() async {
+  /// 加载所有配置。
+  ///
+  /// 已加载且全局版本未变化时直接返回：避免每次 AI 批改都重新读取
+  /// SharedPreferences + 多个 SecureStorage key（Android Keystore 读取较慢）。
+  /// 传入 [force] 可强制重新加载。
+  Future<void> load({bool force = false}) async {
+    if (_loaded && !force && _loadedRevision == _revision) return;
+
     final prefs = await SharedPreferences.getInstance();
 
-    // 读取配置列表
+    // 读取配置列表（先清空，避免设置被外部清除后仍保留旧内存数据）
+    _profiles = [];
     final jsonStr = prefs.getString(_prefsProfilesKey);
     if (jsonStr != null) {
       try {
@@ -121,6 +133,7 @@ class AiProfileService extends ChangeNotifier {
     }
 
     _loaded = true;
+    _loadedRevision = _revision;
     logInfo('AiProfileService', '加载完成，共 ${_profiles.length} 个配置');
     notifyListeners();
   }
@@ -134,6 +147,7 @@ class AiProfileService extends ChangeNotifier {
     _profiles.add(p);
     await _saveProfiles();
     await _saveApiKey(p.id, p.apiKey);
+    _bumpRevision();
     logInfo('AiProfileService', '添加配置: "${p.name}" id=${p.id}');
     notifyListeners();
   }
@@ -148,6 +162,7 @@ class AiProfileService extends ChangeNotifier {
     _profiles[index] = profile;
     await _saveProfiles();
     await _saveApiKey(profile.id, profile.apiKey);
+    _bumpRevision();
     notifyListeners();
   }
 
@@ -156,6 +171,7 @@ class AiProfileService extends ChangeNotifier {
     _profiles.removeWhere((p) => p.id == id);
     await _saveProfiles();
     await _secureStorage.delete(key: _secureKeyFor(id));
+    _bumpRevision();
     logInfo('AiProfileService', '删除配置: id=$id');
     notifyListeners();
   }
@@ -166,7 +182,14 @@ class AiProfileService extends ChangeNotifier {
       return p.copyWith(isDefault: p.id == id);
     }).toList();
     await _saveProfiles();
+    _bumpRevision();
     notifyListeners();
+  }
+
+  /// 标记配置已变更：让其它实例在下次 [load] 时重新读取
+  void _bumpRevision() {
+    _revision++;
+    _loadedRevision = _revision;
   }
 
   /// 获取默认配置 ID（用于快速读取）

@@ -25,6 +25,7 @@ class AiPracticePage extends StatefulWidget {
 class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
   final SentenceSetService _setService = SentenceSetService.instance;
   final AiSentenceService _sentenceService = AiSentenceService();
+  final AiProfileService _profileService = AiProfileService();
 
   // 仪表盘状态
   bool _isLoading = true;
@@ -153,8 +154,12 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
       final setId = _selectedSet!.id!;
       total = _selectedSet!.sentenceCount;
       // 进度按「练过即算」，已答对数单独统计（「不重复练习」的跳过依据）
-      attempted = (await _sentenceService.getAttemptedSentenceIds(setId)).length;
-      practiced = (await _sentenceService.getPracticedSentenceIds(setId)).length;
+      attempted = (await _sentenceService.getAttemptedSentenceIds(
+        setId,
+      )).length;
+      practiced = (await _sentenceService.getPracticedSentenceIds(
+        setId,
+      )).length;
     }
     if (mounted) {
       setState(() {
@@ -173,9 +178,8 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
   /// 检查是否需要弹出隐私政策
   /// 返回 true 表示已同意或无需检查，false 表示用户不同意已退出
   Future<bool> _checkPrivacyPolicy() async {
-    final profileService = AiProfileService();
-    await profileService.load();
-    final profile = profileService.defaultProfile;
+    await _profileService.load();
+    final profile = _profileService.defaultProfile;
 
     // 非 Aquamarina 官方配置，无需检查隐私政策
     if (profile == null ||
