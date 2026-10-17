@@ -772,27 +772,62 @@ class LearningService {
     final now = DateTime.now().toIso8601String();
 
     await db.transaction((txn) async {
-      for (final word in cleaned) {
-        final updated = await txn.update(
+      for (
+        var start = 0;
+        start < cleaned.length;
+        start += _maxQueryChunkSize
+      ) {
+        final end = start + _maxQueryChunkSize < cleaned.length
+            ? start + _maxQueryChunkSize
+            : cleaned.length;
+        final chunk = cleaned.sublist(start, end);
+        final placeholders = List.filled(chunk.length, '?').join(',');
+
+        final existing = await txn.query(
           'user_word_records',
-          {'is_mastered': 1, 'last_reviewed_at': now},
-          where: 'word = ?',
-          whereArgs: [word],
+          columns: ['word'],
+          where: 'word IN ($placeholders)',
+          whereArgs: chunk,
         );
-        if (updated == 0) {
-          // 该词还没有学习记录，直接插入一条已掌握记录
-          await txn.insert('user_word_records', {
-            'word': word,
-            'stage': 0,
-            'is_weak': 0,
-            'is_mastered': 1,
-            'next_review_date': null,
-            'last_reviewed_at': now,
-            'review_count': 0,
-            'created_at': now,
-          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        final existingSet = existing
+            .map((m) => (m['word'] as String).toLowerCase())
+            .toSet();
+
+        await txn.rawUpdate(
+          'UPDATE user_word_records SET is_mastered = 1, '
+          'last_reviewed_at = ? WHERE word IN ($placeholders)',
+          [now, ...chunk],
+        );
+
+        final missing = chunk
+            .where((word) => !existingSet.contains(word))
+            .toList(growable: false);
+        if (missing.isNotEmpty) {
+          // 还没有学习记录的词：补插一条已掌握记录
+          final batch = txn.batch();
+          for (final word in missing) {
+            batch.insert(
+              'user_word_records',
+              {
+                'word': word,
+                'stage': 0,
+                'is_weak': 0,
+                'is_mastered': 1,
+                'next_review_date': null,
+                'last_reviewed_at': now,
+                'review_count': 0,
+                'created_at': now,
+              },
+              conflictAlgorithm: ConflictAlgorithm.ignore,
+            );
+          }
+          await batch.commit(noResult: true);
         }
-        await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+
+        await txn.rawDelete(
+          'DELETE FROM wrong_words WHERE word IN ($placeholders)',
+          chunk,
+        );
       }
     });
   }
@@ -804,13 +839,24 @@ class LearningService {
     if (cleaned.isEmpty) return;
 
     await db.transaction((txn) async {
-      for (final word in cleaned) {
-        await txn.delete(
-          'user_word_records',
-          where: 'word = ?',
-          whereArgs: [word],
+      for (
+        var start = 0;
+        start < cleaned.length;
+        start += _maxQueryChunkSize
+      ) {
+        final end = start + _maxQueryChunkSize < cleaned.length
+            ? start + _maxQueryChunkSize
+            : cleaned.length;
+        final chunk = cleaned.sublist(start, end);
+        final placeholders = List.filled(chunk.length, '?').join(',');
+        await txn.rawDelete(
+          'DELETE FROM user_word_records WHERE word IN ($placeholders)',
+          chunk,
         );
-        await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+        await txn.rawDelete(
+          'DELETE FROM wrong_words WHERE word IN ($placeholders)',
+          chunk,
+        );
       }
     });
   }

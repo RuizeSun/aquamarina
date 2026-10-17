@@ -108,26 +108,36 @@ class WordBookService {
     return maps.map((m) => m['word'] as String).toList();
   }
 
-  /// 批量添加单词到词书（去重，使用事务加速）
+  /// 批量添加单词到词书（去重，使用 batch + 事务加速）
   static Future<int> addWordsToBook(int bookId, List<String> words) async {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
-    int added = 0;
 
-    await db.transaction((txn) async {
-      for (final word in words) {
-        try {
-          await txn.insert('word_book_entries', {
-            'book_id': bookId,
-            'word': word.trim().toLowerCase(),
-            'added_at': now,
-          });
-          added++;
-        } catch (e) {
-          // UNIQUE 约束冲突，跳过
+    // 先去重、去空，避免把重复/空词传给数据库
+    final cleaned = words
+        .map((w) => w.trim().toLowerCase())
+        .where((w) => w.isNotEmpty)
+        .toSet()
+        .toList();
+
+    int added = 0;
+    if (cleaned.isNotEmpty) {
+      await db.transaction((txn) async {
+        // 一次 batch 提交所有插入，避免逐词一次平台通道往返
+        final batch = txn.batch();
+        for (final word in cleaned) {
+          batch.insert(
+            'word_book_entries',
+            {'book_id': bookId, 'word': word, 'added_at': now},
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
         }
-      }
-    });
+        final results = await batch.commit();
+        for (final result in results) {
+          if (result is int && result > 0) added++;
+        }
+      });
+    }
 
     // 更新词书词数
     final count =
