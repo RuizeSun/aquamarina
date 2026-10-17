@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -62,25 +63,125 @@ class DictionaryService {
     }
   }
 
+  /// 词典数据库文件名（顺序仅供校验/日志使用）
+  static const List<String> _dictionaryDbNames = ['ec_dict.db', 'ce_dict.db'];
+
+  /// SQLite 数据库文件头（16 字节）
+  static const String _sqliteHeader = 'SQLite format 3\u0000';
+
   static Future<void> _doExtract() async {
     final dir = await getApplicationSupportDirectory();
-    // 如果文件都已存在，无需重复解压
-    final ecPath = p.join(dir.path, 'ec_dict.db');
-    final cePath = p.join(dir.path, 'ce_dict.db');
-    if (await File(ecPath).exists() && await File(cePath).exists()) {
-      return;
+    final directoryPath = dir.path;
+
+    // 只有「完整且可识别」的数据库才跳过解压。
+    // 旧实现仅检查文件是否存在：若上次解压中途被杀，会留下半截文件，
+    // 之后永远认为已解压成功，词典查询持续报 malformed。
+    var allValid = true;
+    for (final name in _dictionaryDbNames) {
+      if (!await _isValidSqliteFile(p.join(directoryPath, name))) {
+        allValid = false;
+        break;
+      }
     }
+    if (allValid) return;
+
+    // 清理损坏文件与可能残留的临时文件
+    for (final name in _dictionaryDbNames) {
+      await _deleteIfExists(p.join(directoryPath, name));
+      await _deleteIfExists(p.join(directoryPath, '$name.tmp'));
+    }
+
+    final zipPath = p.join(directoryPath, 'databases.zip.tmp');
+    await _deleteIfExists(zipPath);
+
     final byteData = await rootBundle.load('assets/databases.zip');
     final bytes = byteData.buffer.asUint8List(
       byteData.offsetInBytes,
       byteData.lengthInBytes,
     );
-    final archive = ZipDecoder().decodeBytes(bytes);
-    for (final entry in archive) {
-      if (entry.isFile) {
-        final entryPath = p.join(dir.path, entry.name);
-        await File(entryPath).writeAsBytes(entry.content as List<int>);
+    await File(zipPath).writeAsBytes(bytes, flush: true);
+
+    try {
+      // 解压放到后台 isolate：zip 解压后约 133MB，在主 isolate 同步执行
+      // 会直接卡住 UI（首启数秒甚至 ANR）。
+      await Isolate.run(() => _extractDictionaryZip(zipPath, directoryPath));
+    } finally {
+      await _deleteIfExists(zipPath);
+    }
+
+    // 解压完成后再次校验，避免写盘失败/磁盘满导致半截文件被长期使用
+    for (final name in _dictionaryDbNames) {
+      final path = p.join(directoryPath, name);
+      if (!await _isValidSqliteFile(path)) {
+        await _deleteIfExists(path);
+        throw FileSystemException('词典数据库解压后校验失败，请重试', path);
       }
+    }
+    logInfo('DictionaryService', '词典数据库解压完成');
+  }
+
+  /// 在后台 isolate 中执行的实际解压逻辑。
+  ///
+  /// 只依赖 `dart:io` / `archive`，不访问 Flutter 绑定；
+  /// 使用 `InputFileStream` + `OutputFileStream` 流式解压，
+  /// 同一时刻只持有一个文件的压缩/解压缓冲，避免把 133MB 全部读入内存。
+  static Future<void> _extractDictionaryZip(
+    String zipPath,
+    String directoryPath,
+  ) async {
+    final archive = ZipDecoder().decodeStream(
+      InputFileStream(zipPath),
+      verify: true,
+    );
+    try {
+      for (final entry in archive) {
+        if (!entry.isFile) continue;
+        // 取 basename，避免 zip 内路径穿越写入目录外
+        final name = p.basename(entry.name);
+        if (!_dictionaryDbNames.contains(name)) continue;
+
+        final targetPath = p.join(directoryPath, name);
+        final tmpPath = '$targetPath.tmp';
+        final output = OutputFileStream(tmpPath);
+        try {
+          entry.writeContent(output);
+        } finally {
+          await output.close();
+        }
+        entry.closeSync();
+
+        final target = File(targetPath);
+        if (await target.exists()) await target.delete();
+        await File(tmpPath).rename(targetPath);
+      }
+    } finally {
+      archive.clearSync();
+    }
+  }
+
+  /// 校验文件是否为完整的 SQLite 数据库（文件头魔数 + 最小长度）
+  static Future<bool> _isValidSqliteFile(String path) async {
+    final file = File(path);
+    if (!await file.exists()) return false;
+    if (await file.length() < 512) return false;
+
+    final raf = await file.open();
+    try {
+      final header = await raf.read(_sqliteHeader.length);
+      if (header.length < _sqliteHeader.length) return false;
+      for (var i = 0; i < _sqliteHeader.length; i++) {
+        if (header[i] != _sqliteHeader.codeUnitAt(i)) return false;
+      }
+      return true;
+    } finally {
+      await raf.close();
+    }
+  }
+
+  static Future<void> _deleteIfExists(String path) async {
+    final file = File(path);
+    if (await file.exists()) {
+      await file.delete();
     }
   }
 
