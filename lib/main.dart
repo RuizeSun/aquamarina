@@ -235,13 +235,23 @@ class _MainShellState extends State<MainShell> {
   final GlobalKey<VocabularyPageState> _vocabularyKey = GlobalKey();
   final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
+  /// 启动后延迟检查更新的定时器（dispose 时必须取消，避免泄漏与测试报错）
+  Timer? _updateTimer;
+
   @override
   void initState() {
     super.initState();
     // 初始化 TTS 服务
     TtsService.instance.init();
     // 延迟检测应用更新（等待首屏渲染完成）
-    Future.delayed(const Duration(seconds: 3), _checkForUpdate);
+    _updateTimer = Timer(const Duration(seconds: 3), _checkForUpdate);
+  }
+
+  @override
+  void dispose() {
+    _updateTimer?.cancel();
+    _updateTimer = null;
+    super.dispose();
   }
 
   /// 检查应用更新，发现新版本时弹窗提示。
