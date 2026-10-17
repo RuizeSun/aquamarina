@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/ai_profile.dart';
@@ -77,6 +78,10 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
 
   bool _loading = true;
   bool _generating = false;
+
+  /// 当前生成请求的取消令牌；离开页面或用户主动取消时触发。
+  CancelToken? _cancelToken;
+
   bool _nameEditedByUser = false;
   int _progressDone = 0;
   int _progressTotal = 0;
@@ -111,6 +116,8 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
 
   @override
   void dispose() {
+    _cancelToken?.cancel();
+    _cancelToken = null;
     _nameController.dispose();
     super.dispose();
   }
@@ -239,12 +246,16 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
       _liveSentences.clear();
     });
 
+    final cancelToken = CancelToken();
+    _cancelToken = cancelToken;
+
     try {
       final result = await _generator.generate(
         profile: profile,
         entries: _entries,
         difficulty: _difficulty,
         sentencesPerWord: _sentencesPerWord,
+        cancelToken: cancelToken,
         onProgress: (done, total) {
           if (!mounted) return;
           setState(() {
@@ -265,16 +276,38 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         },
       );
       if (!mounted) return;
+      if (cancelToken.isCancelled) {
+        // 用户取消/离开页面：丢弃部分结果，避免继续写库
+        setState(() => _generating = false);
+        return;
+      }
       await _persistResult(result);
     } on AiSentenceGenerateException catch (e) {
       if (!mounted) return;
+      if (cancelToken.isCancelled) {
+        setState(() => _generating = false);
+        return;
+      }
       setState(() => _generating = false);
       await _showErrorDialog('生成失败', e.message);
     } catch (e) {
       if (!mounted) return;
+      if (cancelToken.isCancelled) {
+        setState(() => _generating = false);
+        return;
+      }
       setState(() => _generating = false);
       await _showErrorDialog('生成失败', '$e');
+    } finally {
+      if (identical(_cancelToken, cancelToken)) {
+        _cancelToken = null;
+      }
     }
+  }
+
+  /// 主动取消正在进行的生成请求。
+  void _cancelGeneration() {
+    _cancelToken?.cancel();
   }
 
   /// 生成完成后写入句式集，并回传结果给调用方
@@ -517,17 +550,17 @@ class _AiSentenceSetGeneratePageState extends State<AiSentenceSetGeneratePage> {
         ],
         SizedBox(
           height: 52,
-          child: FilledButton.icon(
-            onPressed: (_generating || _tooManyWords) ? null : _startGeneration,
-            icon: _generating
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.auto_awesome),
-            label: Text(_generating ? '生成中…' : '开始生成'),
-          ),
+          child: _generating
+              ? OutlinedButton.icon(
+                  onPressed: _cancelGeneration,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: const Text('取消生成'),
+                )
+              : FilledButton.icon(
+                  onPressed: _tooManyWords ? null : _startGeneration,
+                  icon: const Icon(Icons.auto_awesome),
+                  label: const Text('开始生成'),
+                ),
         ),
       ],
     );

@@ -12,7 +12,18 @@ class AiService {
   /// Aquamarina 服务的内置公共 API Key
   static const String _aquamarinaApiKey = 'aquamarinapublicapi';
 
-  AiService({Dio? dio}) : _dio = dio ?? Dio();
+  AiService({Dio? dio})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              // 必须在底层统一设置：chat / chatStream 都依赖默认配置。
+              // 否则服务端只建立连接不返回数据时，UI 会永远停在「AI 正在批改」。
+              connectTimeout: const Duration(seconds: 10),
+              sendTimeout: const Duration(seconds: 60),
+              receiveTimeout: const Duration(seconds: 120),
+            ),
+          );
 
   /// 构建请求头和 URL
   (Map<String, String>, String) _buildRequest(AiProfile profile) {
