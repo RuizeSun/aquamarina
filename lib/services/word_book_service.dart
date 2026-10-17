@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import '../models/word_book.dart';
 import 'database_service.dart';
 import 'dictionary_service.dart';
@@ -68,6 +69,7 @@ class WordBookService {
     final now = DateTime.now().toIso8601String();
     final id = await db.insert('word_books', {
       ...book.toMap(),
+      'uuid': const Uuid().v4(),
       'created_at': now,
       'updated_at': now,
     });
@@ -128,12 +130,24 @@ class WordBookService {
 
     int added = 0;
     if (cleaned.isNotEmpty) {
+      // 同步需要跨设备稳定的词书标识（v13 新增列）
+      final bookRows = await db.query(
+        'word_books',
+        columns: ['uuid'],
+        where: 'id = ?',
+        whereArgs: [bookId],
+        limit: 1,
+      );
+      final bookUuid = bookRows.isEmpty
+          ? null
+          : bookRows.first['uuid'] as String?;
       await db.transaction((txn) async {
         // 一次 batch 提交所有插入，避免逐词一次平台通道往返
         final batch = txn.batch();
         for (final word in cleaned) {
           batch.insert('word_book_entries', {
             'book_id': bookId,
+            'book_uuid': bookUuid,
             'word': word,
             'added_at': now,
           }, conflictAlgorithm: ConflictAlgorithm.ignore);

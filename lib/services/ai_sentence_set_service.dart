@@ -125,8 +125,8 @@ class SentenceSetService extends ChangeNotifier {
       'sentences',
       where: 'set_id = ?',
       whereArgs: [setId],
-      // 按 rowid（插入顺序）排序；id 是随机 UUID，按 id 排序会得到随机顺序
-      orderBy: 'rowid ASC',
+      // 按同步顺序键排序；旧数据在 v13 迁移时已按 rowid 回填
+      orderBy: 'sort_index ASC, rowid ASC',
     );
     return maps.map((m) => _rowToSentence(m)).toList();
   }
@@ -134,6 +134,7 @@ class SentenceSetService extends ChangeNotifier {
   Future<void> addSentence(Sentence sentence) async {
     final db = await DatabaseService.database;
     final id = const Uuid().v4();
+    final nextSortIndex = await _nextSortIndex(db, sentence.setId);
     await db.insert('sentences', {
       'id': id,
       'set_id': sentence.setId,
@@ -141,9 +142,21 @@ class SentenceSetService extends ChangeNotifier {
       'chinese': sentence.chinese,
       'extra_words': jsonEncode(sentence.extraWords),
       'created_at': DateTime.now().toIso8601String(),
+      'sort_index': nextSortIndex,
     });
     await _updateSentenceCount(sentence.setId);
     notifyListeners();
+  }
+
+  /// 同一句式集内追加句子的顺序键。
+  Future<double> _nextSortIndex(DatabaseExecutor db, String setId) async {
+    final rows = await db.rawQuery(
+      'SELECT COALESCE(MAX(sort_index), 0) AS m FROM sentences '
+      'WHERE set_id = ?',
+      [setId],
+    );
+    final maxValue = (rows.first['m'] as num?)?.toDouble() ?? 0;
+    return maxValue + 1;
   }
 
   Future<void> updateSentence(Sentence sentence) async {
@@ -191,6 +204,7 @@ class SentenceSetService extends ChangeNotifier {
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
     final batch = db.batch();
+    var sortIndex = await _nextSortIndex(db, setId);
     for (final s in newSentences) {
       batch.insert('sentences', {
         'id': const Uuid().v4(),
@@ -199,7 +213,9 @@ class SentenceSetService extends ChangeNotifier {
         'chinese': s.chinese,
         'extra_words': jsonEncode(s.extraWords),
         'created_at': now,
+        'sort_index': sortIndex,
       });
+      sortIndex += 1;
     }
     await batch.commit(noResult: true);
     await _updateSentenceCount(setId);

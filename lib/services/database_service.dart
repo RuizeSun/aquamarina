@@ -2,11 +2,14 @@ import 'package:flutter/foundation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
+
 import 'log_service.dart';
+import 'sync_schema.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 12;
+  static const int schemaVersion = 13;
 
   static Database? _db;
 
@@ -358,6 +361,9 @@ class DatabaseService {
         // ── AI 生成句式集「消耗预估」矫正样本 ──
         await db.execute(aiEstimateSamplesTableSql);
         await db.execute(aiEstimateSamplesIndexSql);
+
+        // ── v13：同步就绪 schema（uuid / sort_index / oplog / 触发器） ──
+        await migrateToV13(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -496,6 +502,10 @@ class DatabaseService {
           await db.execute(attemptedSentenceIdsTableSql);
           await db.execute(attemptedSentenceIdsBackfillSql);
         }
+        // 12 → 13：同步就绪 schema（稳定 ID、顺序键、oplog 与触发器）
+        if (oldVersion < 13) {
+          await migrateToV13(db);
+        }
       },
     );
   }
@@ -566,6 +576,136 @@ class DatabaseService {
       )
     ''');
     await db.execute(wrongSentencesUniqueIndexSql);
+  }
+
+  /// v12 → v13：为同步准备稳定标识、顺序键与捕获层。
+  ///
+  /// 幂等：新装、升级、重复执行均安全。内容：
+  /// 1. 补列：`word_books.uuid`、`word_book_entries.book_uuid`、
+  ///    `learning_sessions.uuid`、`vocab_test_history.uuid`、
+  ///    `sentences.sort_index`；
+  /// 2. 回填：为存量行生成 UUID、从词书回填条目的 book_uuid、按 rowid 回填句子顺序；
+  /// 3. 索引：跨设备稳定键与顺序查询；
+  /// 4. 安装同步系统表、oplog 表与触发器。
+  static Future<void> migrateToV13(Database db) async {
+    await _ensureColumn(db, 'word_books', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'word_book_entries', 'book_uuid', 'TEXT');
+    await _ensureColumn(db, 'learning_sessions', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'vocab_test_history', 'uuid', 'TEXT');
+    await _ensureColumn(db, 'sentences', 'sort_index', 'REAL');
+
+    await _backfillUuid(db, 'word_books');
+    await _backfillUuid(db, 'learning_sessions');
+    await _backfillUuid(db, 'vocab_test_history');
+    await _backfillBookUuid(db);
+    await _backfillSentenceSortIndex(db);
+
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_word_books_uuid '
+      'ON word_books(uuid)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_sessions_uuid '
+      'ON learning_sessions(uuid)',
+    );
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_test_history_uuid '
+      'ON vocab_test_history(uuid)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_book_entries_book_uuid '
+      'ON word_book_entries(book_uuid)',
+    );
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sentences_set_sort '
+      'ON sentences(set_id, sort_index)',
+    );
+
+    await SyncSchema.ensure(db);
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'baseline_hlc',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    logInfo('DatabaseService', 'v13 同步 schema 迁移完成');
+  }
+
+  /// 为表中 uuid 为空的行生成 UUID（按 rowid 更新，幂等）。
+  static Future<void> _backfillUuid(Database db, String table) async {
+    final rows = await db.rawQuery(
+      'SELECT rowid AS rid FROM "$table" '
+      'WHERE "uuid" IS NULL OR "uuid" = \'\'',
+    );
+    if (rows.isEmpty) return;
+    for (final row in rows) {
+      await db.update(
+        table,
+        {'uuid': const Uuid().v4()},
+        where: 'rowid = ?',
+        whereArgs: [row['rid']],
+      );
+    }
+  }
+
+  /// 从 word_books.uuid 回填 word_book_entries.book_uuid。
+  static Future<void> _backfillBookUuid(Database db) async {
+    final rows = await db.rawQuery(
+      'SELECT rowid AS rid, book_id FROM word_book_entries '
+      'WHERE "book_uuid" IS NULL OR "book_uuid" = \'\'',
+    );
+    for (final row in rows) {
+      final bookId = row['book_id'];
+      if (bookId == null) continue;
+      final books = await db.query(
+        'word_books',
+        columns: ['uuid'],
+        where: 'id = ?',
+        whereArgs: [bookId],
+        limit: 1,
+      );
+      if (books.isEmpty) continue;
+      final uuid = books.first['uuid'] as String?;
+      if (uuid == null || uuid.isEmpty) continue;
+      await db.update(
+        'word_book_entries',
+        {'book_uuid': uuid},
+        where: 'rowid = ?',
+        whereArgs: [row['rid']],
+      );
+    }
+  }
+
+  /// 按 rowid 顺序为每个句式集的句子回填 `sort_index`。
+  ///
+  /// 只处理 `sort_index IS NULL` 的行，重复执行不会重排已有顺序。
+  static Future<void> _backfillSentenceSortIndex(Database db) async {
+    final sets = await db.rawQuery('SELECT DISTINCT set_id FROM sentences');
+    for (final setRow in sets) {
+      final setId = setRow['set_id'];
+      if (setId is! String) continue;
+      final maxRows = await db.rawQuery(
+        'SELECT COALESCE(MAX(sort_index), 0) AS m FROM sentences '
+        'WHERE set_id = ?',
+        [setId],
+      );
+      final maxValue = (maxRows.first['m'] as num?)?.toDouble() ?? 0;
+      final rows = await db.rawQuery(
+        'SELECT rowid AS rid FROM sentences '
+        'WHERE set_id = ? AND sort_index IS NULL ORDER BY rowid ASC',
+        [setId],
+      );
+      var index = maxValue + 1;
+      for (final row in rows) {
+        await db.update(
+          'sentences',
+          {'sort_index': index},
+          where: 'rowid = ?',
+          whereArgs: [row['rid']],
+        );
+        index += 1;
+      }
+    }
   }
 
   /// 检查表中是否存在指定列，缺失则添加（幂等，可安全重复调用）

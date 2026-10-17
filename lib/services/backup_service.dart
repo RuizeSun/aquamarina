@@ -12,6 +12,7 @@ import 'package:sqflite/sqflite.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 'mimo_tts_credentials.dart';
+import 'sync_schema.dart';
 import 'theme_mode_service.dart';
 import 'tts_service.dart';
 
@@ -221,6 +222,7 @@ class BackupService {
     }
 
     // 校验元信息（可选；旧备份可能没有）
+    DateTime? backupCreatedAt;
     final metaEntry = archive.findFile(_metaFileName);
     if (metaEntry != null) {
       try {
@@ -229,6 +231,10 @@ class BackupService {
                 as Map<String, dynamic>;
         if (meta['app'] != 'aquamarina') {
           throw const BackupException('不是 Aquamarina 的备份文件');
+        }
+        final createdAt = meta['created_at'];
+        if (createdAt is String) {
+          backupCreatedAt = DateTime.tryParse(createdAt);
         }
       } catch (e) {
         if (e is BackupException) rethrow;
@@ -316,6 +322,16 @@ class BackupService {
         await DatabaseService.database;
       } catch (_) {
         throw const BackupException('数据库文件已替换，但打开失败，请重启应用');
+      }
+
+      // 2d-2. 快照来自其它设备：清空其 oplog，并以备份创建时间为基线
+      try {
+        await SyncSchema.resetRuntimeState(
+          await DatabaseService.database,
+          baseline: backupCreatedAt ?? DateTime.now(),
+        );
+      } catch (e) {
+        logWarning('BackupService', '重置同步运行时状态失败（不影响恢复）: $e');
       }
 
       // 2e. 热更新 TTS 与主题设置（无需重启即可生效）

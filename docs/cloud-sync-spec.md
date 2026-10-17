@@ -148,10 +148,10 @@ for chunk in pull():
 | 0 | PoC：Rain S3 读写/列举/删除 | ✅ 已完成（path-style + `cn-nb1`） |
 | 1 | 配置与凭据、S3 客户端封装、连接测试、设置页 UI | ✅ 已完成 |
 | 2 | 设备隔离快照上传/下载 + manifest（引导/灾备能力） | ✅ 已完成 |
-| 3 | schema v13 + `sentence_sets` 入库 + 触发器生成器 | 待开始 |
-| 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | 待开始 |
-| 5 | 自动同步编排、GC、冲突/状态 UI | 待开始 |
-| 6 | 收敛性/幂等/崩溃/迁移测试与文档 | 待开始 |
+| 3 | schema v13 + 触发器生成器（`sentence_sets` 入库暂缓） | ✅ 已完成（DB 内 13 张表） |
+| 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
+| 5 | 自动同步编排、GC、冲突/状态 UI | 🚧 手动「增量同步」已接入；自动触发 / GC 待开始 |
+| 6 | 收敛性/幂等/崩溃/迁移测试与文档 | 🚧 单测 + 真实 S3 双设备 E2E 已通过；崩溃注入待补 |
 
 > 阶段 2 的快照能力不会白做：它就是阶段 3+ 的 checkpoint/bootstrap 载体。
 
@@ -165,11 +165,25 @@ for chunk in pull():
 | `lib/services/cloud_sync_service.dart` | 设备隔离快照上传/恢复、清单维护、历史清理、恢复前本机快照 |
 | `lib/pages/settings/cloud_sync_config_page.dart` | 配置表单、连接测试、设备标识管理 |
 | `lib/pages/settings/sections/cloud_sync_section.dart` | 云同步入口、上传、设备选择与恢复 |
-| `lib/services/backup_service.dart` | 新增 `localOnlyPrefPrefix`：云同步配置不进入备份、不被恢复覆盖 |
+| `lib/services/backup_service.dart` | 新增 `localOnlyPrefPrefix`：云同步配置不进入备份、不被恢复覆盖；恢复后清理快照携带的 oplog 并写入同步基线 |
+| `lib/services/sync_table_spec.dart` | 同步表规格 + oplog 表 / 触发器生成 |
+| `lib/services/sync_schema.dart` | 同步系统表、v13 安装、恢复后运行时状态重置 |
+| `lib/services/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
+| `lib/services/sync_apply_service.dart` | 幂等应用、行版本门禁、计数增量、墓碑、父级重试 |
+| `lib/services/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
 
 已通过的验证：
 
 - `flutter analyze`：新增文件无告警；
-- 22 个单元测试通过（配置校验/清单模型/设备隔离/损坏清单跳过）；
-- 真实 Rain S3 集成测试通过（Bucket/PUT/GET/LIST/DELETE）。
+- 183 个测试通过（含 v13 迁移、触发器捕获、捕获/应用引擎、词书父级重试、墓碑与计数）；
+- 真实 Rain S3 集成测试通过（连接自检、设备清单、**双设备增量同步收敛**）。
+
+### 当前已知限制
+
+- `sentence_sets` 元数据仍在 SharedPreferences 中，暂只通过完整快照同步；
+- 增量同步为手动触发；自动同步、GC 与冲突明细 UI 待下一阶段；
+- 首次接入云同步时，历史数据不会被追溯为 oplog：
+  建议先「立即上传备份」并在其它设备「从云端恢复」，再使用增量同步；
+- 未配置云同步时触发器仍会记录 oplog（用于后续启用），长期不启用会占用少量空间，
+  后续将通过「未配置时定期清理」或 `capture_enabled` 开关解决。
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 
@@ -120,6 +121,7 @@ class StudyTimerService with WidgetsBindingObserver {
 
     _generation++;
     _sessionId = await db.insert('learning_sessions', {
+      'uuid': const Uuid().v4(),
       'session_type': type.value,
       'started_at': now.toIso8601String(),
       'ended_at': null,

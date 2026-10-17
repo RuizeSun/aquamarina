@@ -2,10 +2,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
+import 'package:aquamarina/services/cloud_sync_engine.dart';
 import 'package:aquamarina/services/cloud_sync_service.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
 import 'package:aquamarina/services/s3_storage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'sync_test_support.dart';
 
 /// 真实对象存储集成测试（默认跳过）。
 ///
@@ -100,5 +103,83 @@ void main() {
     }
 
     expect(await service.fetchManifest(deviceId), isNull);
+  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+
+  test('两台设备通过真实 S3 增量同步并收敛', () async {
+    final e2eConfig = CloudSyncConfig.create(
+      endpointInput: env['S3_ENDPOINT'] ?? 'cn-nb1.rains3.com',
+      bucket: env['S3_BUCKET'] ?? 'aquamarina-test',
+      region: env['S3_REGION'] ?? 'cn-nb1',
+      prefix: '${config!.prefix}/e2e-${DateTime.now().millisecondsSinceEpoch}',
+      pathStyle: config.pathStyle,
+    );
+    const deviceA = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+    const deviceB = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+
+    final storageA = S3StorageService(
+      config: e2eConfig,
+      accessKey: accessKey!,
+      secretKey: secretKey!,
+    );
+    final storageB = S3StorageService(
+      config: e2eConfig,
+      accessKey: accessKey,
+      secretKey: secretKey,
+    );
+    final dbA = await openSyncTestDb();
+    final dbB = await openSyncTestDb();
+
+    try {
+      await dbA.insert('word_notes', {
+        'word': 'apple',
+        'note': 'from A',
+        'is_favorited': 0,
+        'updated_at': '2026-10-01T00:00:00Z',
+      });
+      final engineA = CloudSyncEngine.forTesting(
+        config: e2eConfig,
+        deviceId: deviceA,
+        deviceName: '设备 A',
+        storage: storageA,
+        database: dbA,
+      );
+      final engineB = CloudSyncEngine.forTesting(
+        config: e2eConfig,
+        deviceId: deviceB,
+        deviceName: '设备 B',
+        storage: storageB,
+        database: dbB,
+      );
+
+      var result = await engineA.run(pull: false);
+      expect(result.pushedOps, greaterThanOrEqualTo(1));
+
+      result = await engineB.run(pull: true, push: false);
+      expect(result.pulledOps, greaterThanOrEqualTo(1));
+      expect((await dbB.query('word_notes')).single['note'], 'from A');
+
+      await dbB.update(
+        'word_notes',
+        {
+          'note': 'from B',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        where: 'word = ?',
+        whereArgs: ['apple'],
+      );
+      result = await engineB.run(pull: false);
+      expect(result.pushedOps, greaterThanOrEqualTo(1));
+
+      result = await engineA.run(pull: true, push: false);
+      expect(result.pulledOps, greaterThanOrEqualTo(1));
+      expect((await dbA.query('word_notes')).single['note'], 'from B');
+    } finally {
+      try {
+        final objects = await storageA.list('${e2eConfig.prefix}/');
+        await storageA.deleteMany(objects.map((e) => e.key));
+      } catch (_) {}
+      await dbA.close();
+      await dbB.close();
+    }
   }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 }

@@ -1,5 +1,6 @@
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 import '../models/user_word_record.dart';
 import 'database_service.dart';
 import 'log_service.dart';
@@ -1196,6 +1197,7 @@ class LearningService {
     final db = await DatabaseService.database;
     final accuracy = totalCount > 0 ? (correctCount / totalCount) : 0.0;
     await db.insert('vocab_test_history', {
+      'uuid': const Uuid().v4(),
       'date': DateTime.now().toIso8601String(),
       'total_count': totalCount,
       'correct_count': correctCount,

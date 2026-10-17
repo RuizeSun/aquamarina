@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/cloud_sync_manifest.dart';
+import '../../../services/cloud_sync_engine.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
 import '../cloud_sync_config_page.dart';
@@ -68,6 +69,89 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     );
     if (changed == true) {
       await _load();
+    }
+  }
+
+  /// 增量同步：拉取其它设备的变更并上传本机 oplog。
+  Future<void> _incrementalSync() async {
+    if (_busy) return;
+    final engine = await _createEngineSafely();
+    if (engine == null) return;
+    if (!mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final result = await runWithProgressDialog<CloudSyncRunResult>(
+        context,
+        title: '增量同步',
+        task: (update) async {
+          update('正在同步词书、学习记录、笔记与错题…');
+          return engine.run();
+        },
+      );
+      await _load();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: Icon(
+            result.hasErrors
+                ? Icons.warning_amber_rounded
+                : Icons.cloud_done_outlined,
+            color: result.hasErrors ? Colors.orange : Colors.green,
+          ),
+          title: Text(result.hasErrors ? '同步完成（有告警）' : '同步完成'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '拉取：${result.pulledChunks} 个变更包 / '
+                  '${result.pulledOps} 条操作\n'
+                  '上传：${result.pushedChunks} 个变更包 / '
+                  '${result.pushedOps} 条操作\n'
+                  '冲突：${result.conflicts} 条（已保留较新数据）\n'
+                  '本机待上传：${result.remainingLocalOps} 条',
+                ),
+                if (result.errors.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '告警（前 ${result.errors.length > 3 ? 3 : result.errors.length} 条）：',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  for (final error in result.errors.take(3))
+                    Text(
+                      '• $error',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      _showSnack('同步失败：$e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<CloudSyncEngine?> _createEngineSafely() async {
+    try {
+      return await CloudSyncEngine.create();
+    } catch (e) {
+      _showSnack('$e', isError: true);
+      return null;
     }
   }
 
@@ -368,6 +452,16 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         ),
         ListTile(
           leading: Icon(
+            Icons.sync_outlined,
+            color: _configured ? colorScheme.primary : colorScheme.outline,
+          ),
+          title: const Text('增量同步'),
+          subtitle: const Text('只传输变更：词书、单词记录、笔记、错题与学习统计'),
+          enabled: _configured && !_busy,
+          onTap: _configured && !_busy ? _incrementalSync : null,
+        ),
+        ListTile(
+          leading: Icon(
             Icons.cloud_upload_outlined,
             color: _configured ? colorScheme.primary : colorScheme.outline,
           ),
@@ -417,9 +511,11 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Text(
-            '当前版本提供「设备隔离快照」备份：每次上传都会保留历史版本，'
-            '任何设备都不会覆盖其它设备的云端备份。\n'
-            '记录级自动合并（词书/笔记/错题跨设备增量同步）将在后续版本接入，'
+            '「增量同步」按设备 oplog 只传输变更，支持词书、单词记录、笔记、'
+            '错题与学习统计的跨设备合并；删除通过墓碑同步，重复应用幂等。\n'
+            '「立即上传备份」提供设备隔离的完整快照（含历史版本），'
+            '用于灾备与新设备引导；恢复仍是覆盖式。\n'
+            '句式集元数据（SharedPreferences）暂通过完整快照同步，'
             '详见 docs/cloud-sync-spec.md。',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
