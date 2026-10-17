@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/ai_profile.dart';
 import '../services/ai_profile_service.dart';
@@ -57,6 +59,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
   List<String>? _availableModels;
   bool _isLoadingModels = false;
 
+  /// API Key 输入的防抖：避免每敲一个字符就请求一次 /models
+  Timer? _modelsDebounce;
+
   /// 非新建模式且已有 profile 才视为编辑
   bool get _isEditing => !widget.isNew && widget.profile != null;
 
@@ -111,26 +116,29 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     _temperature = p?.temperature;
     _balanceThreshold = p?.balanceThreshold;
 
-    // DeepSeek 类型：监听 API Key 输入变化，自动拉取模型列表
-    if (_type == AiProfileType.deepseek) {
-      _apiKeyController.addListener(_onApiKeyChanged);
-      // 如果已有 API Key，立即拉取
-      if (_apiKeyController.text.trim().isNotEmpty) {
-        _fetchModels();
-      }
-    }
-  }
-
-  void _onApiKeyChanged() {
+    // API Key 变化时按当前类型决定是否自动拉取模型列表
+    _apiKeyController.addListener(_onApiKeyChanged);
     if (_type == AiProfileType.deepseek &&
-        _apiKeyController.text.trim().isNotEmpty &&
-        (_availableModels == null)) {
+        _apiKeyController.text.trim().isNotEmpty) {
+      // 编辑已有 DeepSeek 配置：立即拉取一次
       _fetchModels();
     }
   }
 
+  void _onApiKeyChanged() {
+    if (_type != AiProfileType.deepseek) return;
+    _modelsDebounce?.cancel();
+    if (_apiKeyController.text.trim().isEmpty) return;
+    if (_availableModels != null) return;
+    _modelsDebounce = Timer(const Duration(milliseconds: 600), () {
+      if (!mounted || _isLoadingModels) return;
+      _fetchModels();
+    });
+  }
+
   @override
   void dispose() {
+    _modelsDebounce?.cancel();
     _nameController.dispose();
     _baseUrlController.dispose();
     _apiKeyController.dispose();
@@ -147,6 +155,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
   }
 
   Future<void> _fetchModels() async {
+    if (_isLoadingModels) return;
     final apiKey = _apiKeyController.text.trim();
     final baseUrl = _baseUrlController.text.trim();
     if (apiKey.isEmpty) return;
