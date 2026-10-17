@@ -20,6 +20,9 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
   bool _isLoading = true;
   List<String> _voices = [];
 
+  /// 音色列表请求序号：切换服务商后丢弃上一家的异步结果
+  int _voicesRequestId = 0;
+
   // ── MiMo TTS 相关状态 ──────────────────────────
   final TextEditingController _mimoApiKeyController = TextEditingController();
   final TextEditingController _mimoInstructionController =
@@ -98,9 +101,20 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
   }
 
   Future<void> _loadVoices() async {
+    final provider = _settings.provider;
+    final requestId = ++_voicesRequestId;
+    // 先清空上一家的音色，避免切换服务商后旧音色仍可被展示 / 选中
+    if (_voices.isNotEmpty) {
+      setState(() => _voices = []);
+    }
     try {
-      final voices = await TtsService.instance.getVoices();
-      if (mounted) setState(() => _voices = voices);
+      final voices = await TtsService.instance.getVoices(provider: provider);
+      if (!mounted ||
+          requestId != _voicesRequestId ||
+          provider != _settings.provider) {
+        return;
+      }
+      setState(() => _voices = voices);
     } catch (_) {
       // 静默处理
     }
@@ -262,6 +276,14 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
         );
       }
     } else {
+      if (_voices.isEmpty) {
+        children.add(
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: Text('暂无可用音色，请检查网络后重试')),
+          ),
+        );
+      }
       for (final voice in _voices) {
         children.add(
           _buildVoiceTile(
@@ -286,7 +308,8 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
             ),
           ),
           const Divider(height: 1),
-          SizedBox(height: 340, child: ListView(children: children)),
+          // 使用 Flexible 而非固定高度：矮屏 / 键盘弹出时不会溢出，内容多时可滚动
+          Flexible(child: ListView(shrinkWrap: true, children: children)),
         ],
       ),
     );
@@ -523,9 +546,6 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
                     )
                   : const Icon(Icons.arrow_drop_down),
               onTap: () {
-                if (_voices.isEmpty && _settings.provider != TtsProvider.mimo) {
-                  return;
-                }
                 showModalBottomSheet(
                   context: context,
                   builder: (context) => _buildVoiceSheet(context, colorScheme),

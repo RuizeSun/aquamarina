@@ -6,22 +6,11 @@ import 'package:dio/dio.dart';
 
 import 'log_service.dart';
 import 'mimo_tts_credentials.dart';
+import 'mimo_voice_catalog.dart';
 import 'tts_engine.dart';
 import 'tts_settings.dart';
 
-/// MiMo 预置音色（用于设置页分组展示）
-class MimoVoice {
-  /// API `audio.voice` 字段取值，同时也是音色名
-  final String id;
-
-  /// 分组名（默认 / 中文 / 英文）
-  final String language;
-
-  /// 性别 / 说明
-  final String hint;
-
-  const MimoVoice(this.id, this.language, this.hint);
-}
+export 'mimo_voice_catalog.dart' show MimoVoice;
 
 /// 基于小米 MiMo TTS（OpenAI 兼容 `chat/completions`）的在线语音合成引擎
 ///
@@ -58,18 +47,8 @@ class MimoTtsEngine implements TtsEngine {
   /// 默认音色（中国集群为「冰糖」，其他集群为 Mia）
   static const String defaultVoice = TtsSettings.defaultMimoVoice;
 
-  /// `mimo-v2.5-tts` 支持的预置音色
-  static const List<MimoVoice> presetVoices = [
-    MimoVoice('mimo_default', '默认', '因集群而异，中国集群为「冰糖」'),
-    MimoVoice('冰糖', '中文', '女性'),
-    MimoVoice('茉莉', '中文', '女性'),
-    MimoVoice('苏打', '中文', '男性'),
-    MimoVoice('白桦', '中文', '男性'),
-    MimoVoice('Mia', '英文', '女性'),
-    MimoVoice('Chloe', '英文', '女性'),
-    MimoVoice('Milo', '英文', '男性'),
-    MimoVoice('Dean', '英文', '男性'),
-  ];
+  /// `mimo-v2.5-tts` 支持的预置音色（设置页分组展示 / 音色校验共用）
+  static const List<MimoVoice> presetVoices = mimoPresetVoices;
 
   /// 输出音频格式：mp3 体积小且 audioplayers 可直接播放
   static const String _outputFormat = 'mp3';

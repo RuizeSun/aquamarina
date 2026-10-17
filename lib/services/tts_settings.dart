@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'mimo_voice_catalog.dart';
+
 /// TTS 服务商
 ///
 /// 注意：枚举值以 `index` 形式持久化到 SharedPreferences，
@@ -44,6 +46,35 @@ class TtsSettings {
   /// MiMo TTS 默认音色（中国集群为「冰糖」，其他集群为 Mia）
   static const String defaultMimoVoice = 'mimo_default';
 
+  /// MiMo 预置音色 ID 集合（用于过滤「串台」的历史音色）
+  static final Set<String> mimoVoiceIds = {
+    for (final voice in mimoPresetVoices) voice.id,
+  };
+
+  /// Edge 音色短名的形态，如 `en-US-AriaNeural` / `zh-CN-liaoning-XiaobeiNeural`
+  static final RegExp _edgeVoiceIdPattern = RegExp(
+    r'^[a-z]{2,3}-[A-Z]{2}-[\w-]+Neural$',
+  );
+
+  /// 判断音色 ID 是否属于 Edge
+  static bool isEdgeVoice(String voiceId) =>
+      _edgeVoiceIdPattern.hasMatch(voiceId.trim());
+
+  /// 校验音色与服务商是否匹配，不匹配时返回 `null`。
+  ///
+  /// 历史版本存在「Edge 下显示并保存了 MiMo 音色」的问题（反之亦然），
+  /// 这里按服务商做一次兜底过滤，让引擎回退到该服务商的默认音色。
+  static String? sanitizeVoice(TtsProvider provider, String? voiceId) {
+    final voice = voiceId?.trim();
+    if (voice == null || voice.isEmpty) return null;
+    if (provider == TtsProvider.mimo) {
+      // MiMo 不接受 Edge 的音色；其他未知音色保留，便于兼容后续新增预置音色
+      return isEdgeVoice(voice) ? null : voice;
+    }
+    // Edge / 系统不接受 MiMo 预置音色
+    return mimoVoiceIds.contains(voice) ? null : voice;
+  }
+
   final bool enabled;
   final TtsProvider provider;
   final double volume;
@@ -82,7 +113,8 @@ class TtsSettings {
 
   /// 当前服务商实际使用的音色（未设置时返回该服务商的默认音色）
   String? get effectiveVoiceName {
-    if (voiceName != null && voiceName!.isNotEmpty) return voiceName;
+    final voice = sanitizeVoice(provider, voiceName);
+    if (voice != null) return voice;
     return provider == TtsProvider.mimo ? defaultMimoVoice : null;
   }
 
@@ -101,13 +133,19 @@ class TtsSettings {
     String? mimoStyleTag,
     bool clearVoiceName = false,
   }) {
+    final nextProvider = provider ?? this.provider;
+    // 切换服务商时自动丢弃属于上一家的音色，避免 MiMo / Edge 音色互相污染
+    final nextVoiceName = sanitizeVoice(
+      nextProvider,
+      clearVoiceName ? null : (voiceName ?? this.voiceName),
+    );
     return TtsSettings(
       enabled: enabled ?? this.enabled,
-      provider: provider ?? this.provider,
+      provider: nextProvider,
       volume: volume ?? this.volume,
       rate: rate ?? this.rate,
       pitch: pitch ?? this.pitch,
-      voiceName: clearVoiceName ? null : (voiceName ?? this.voiceName),
+      voiceName: nextVoiceName,
       autoReadBrowse: autoReadBrowse ?? this.autoReadBrowse,
       autoReadRecall: autoReadRecall ?? this.autoReadRecall,
       mimoBaseUrl: mimoBaseUrl ?? this.mimoBaseUrl,
@@ -131,24 +169,26 @@ class TtsSettings {
   /// 写入新服务商的音色配置。
   static Future<String?> loadVoiceFor(TtsProvider provider) async {
     final prefs = await SharedPreferences.getInstance();
-    return provider == TtsProvider.mimo
+    final stored = provider == TtsProvider.mimo
         ? prefs.getString(_keyVoiceMimo)
         : prefs.getString(_keyVoice);
+    return sanitizeVoice(provider, stored);
   }
 
   static Future<TtsSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     final provider = providerFromIndex(prefs.getInt(_keyProvider));
+    final storedVoice = provider == TtsProvider.mimo
+        ? prefs.getString(_keyVoiceMimo)
+        : prefs.getString(_keyVoice);
     return TtsSettings(
       enabled: prefs.getBool(_keyEnabled) ?? true,
       provider: provider,
       volume: prefs.getDouble(_keyVolume) ?? 1.0,
       rate: prefs.getDouble(_keyRate) ?? 1.0,
       pitch: prefs.getDouble(_keyPitch) ?? 1.0,
-      // 音色按服务商分别读取
-      voiceName: provider == TtsProvider.mimo
-          ? prefs.getString(_keyVoiceMimo)
-          : prefs.getString(_keyVoice),
+      // 音色按服务商分别读取，并过滤掉串台的历史音色
+      voiceName: sanitizeVoice(provider, storedVoice),
       autoReadBrowse: prefs.getBool(_keyAutoReadBrowse) ?? true,
       autoReadRecall: prefs.getBool(_keyAutoReadRecall) ?? true,
       mimoBaseUrl: prefs.getString(_keyMimoBaseUrl) ?? defaultMimoBaseUrl,
@@ -165,10 +205,11 @@ class TtsSettings {
     await prefs.setDouble(_keyVolume, volume);
     await prefs.setDouble(_keyRate, rate);
     await prefs.setDouble(_keyPitch, pitch);
-    // 音色按服务商分别写入，切换服务商时各留各的
+    // 音色按服务商分别写入，切换服务商时各留各的；不匹配的音色不落盘
+    final voice = sanitizeVoice(provider, voiceName);
     final voiceKey = provider == TtsProvider.mimo ? _keyVoiceMimo : _keyVoice;
-    if (voiceName != null && voiceName!.isNotEmpty) {
-      await prefs.setString(voiceKey, voiceName!);
+    if (voice != null) {
+      await prefs.setString(voiceKey, voice);
     } else {
       await prefs.remove(voiceKey);
     }

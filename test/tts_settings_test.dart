@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:aquamarina/pages/settings/sections/tts_section.dart';
 import 'package:aquamarina/services/mimo_tts_engine.dart';
+import 'package:aquamarina/services/tts_service.dart';
 import 'package:aquamarina/services/tts_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -109,6 +110,107 @@ void main() {
 
       const picked = TtsSettings(provider: TtsProvider.mimo, voiceName: '茉莉');
       expect(picked.effectiveVoiceName, '茉莉');
+    });
+  });
+
+  group('音色与服务商匹配', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    test('Edge 下丢弃历史遗留的 MiMo 音色', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'tts_provider': TtsProvider.edge.index,
+        'tts_voice': 'mimo_default',
+      });
+
+      final settings = await TtsSettings.load();
+      expect(settings.provider, TtsProvider.edge);
+      expect(settings.voiceName, isNull);
+      expect(settings.effectiveVoiceName, isNull);
+      expect(await TtsSettings.loadVoiceFor(TtsProvider.edge), isNull);
+    });
+
+    test('MiMo 下丢弃历史遗留的 Edge 音色', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'tts_provider': TtsProvider.mimo.index,
+        'tts_voice_mimo': 'en-US-AriaNeural',
+      });
+
+      final settings = await TtsSettings.load();
+      expect(settings.voiceName, isNull);
+      expect(settings.effectiveVoiceName, TtsSettings.defaultMimoVoice);
+    });
+
+    test('匹配的音色正常保留', () async {
+      expect(
+        TtsSettings.sanitizeVoice(TtsProvider.edge, 'en-US-AriaNeural'),
+        'en-US-AriaNeural',
+      );
+      expect(
+        TtsSettings.sanitizeVoice(
+          TtsProvider.edge,
+          'zh-CN-liaoning-XiaobeiNeural',
+        ),
+        'zh-CN-liaoning-XiaobeiNeural',
+      );
+      expect(TtsSettings.sanitizeVoice(TtsProvider.mimo, '冰糖'), '冰糖');
+      expect(
+        TtsSettings.sanitizeVoice(TtsProvider.edge, 'mimo_default'),
+        isNull,
+      );
+      expect(
+        TtsSettings.sanitizeVoice(TtsProvider.mimo, 'zh-CN-XiaoxiaoNeural'),
+        isNull,
+      );
+      expect(
+        TtsSettings.sanitizeVoice(
+          TtsProvider.mimo,
+          'zh-CN-liaoning-XiaobeiNeural',
+        ),
+        isNull,
+      );
+    });
+
+    test('copyWith 切换服务商时自动清理不匹配音色', () {
+      const edge = TtsSettings(
+        provider: TtsProvider.edge,
+        voiceName: 'en-US-AriaNeural',
+      );
+      expect(edge.copyWith(provider: TtsProvider.mimo).voiceName, isNull);
+
+      const mimo = TtsSettings(provider: TtsProvider.mimo, voiceName: 'Mia');
+      expect(mimo.copyWith(provider: TtsProvider.edge).voiceName, isNull);
+
+      // 服务商不变时不会误删合法音色，但会拦截串台音色
+      expect(edge.copyWith(volume: 0.5).voiceName, 'en-US-AriaNeural');
+      expect(edge.copyWith(voiceName: 'mimo_default').voiceName, isNull);
+    });
+
+    test('保存时不会把 MiMo 音色写入 Edge 音色槽', () async {
+      await const TtsSettings(
+        provider: TtsProvider.edge,
+        voiceName: 'mimo_default',
+      ).save();
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('tts_voice'), isNull);
+    });
+
+    test('音色列表按服务商返回，不串用当前引擎', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'tts_provider': TtsProvider.edge.index,
+      });
+
+      final mimoVoices = await TtsService.instance.getVoices(
+        provider: TtsProvider.mimo,
+      );
+      expect(mimoVoices, hasLength(MimoTtsEngine.presetVoices.length));
+      expect(mimoVoices, contains(TtsSettings.defaultMimoVoice));
+      expect(
+        await TtsService.instance.getVoices(provider: TtsProvider.system),
+        isEmpty,
+      );
     });
   });
 
@@ -293,6 +395,31 @@ void main() {
       );
       // 试听测试模块对所有服务商可用
       expect(find.text('试听'), findsOneWidget);
+    });
+
+    testWidgets('Edge 服务商不会显示 MiMo 音色', (tester) async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'tts_enabled': true,
+        'tts_provider': TtsProvider.edge.index,
+        // 历史脏数据：MiMo 音色被写进了 Edge 的音色槽
+        'tts_voice': 'mimo_default',
+      });
+
+      await pumpSection(tester);
+
+      expect(find.text('当前：Edge'), findsOneWidget);
+      // 音色行回退到默认音色，不再显示 MiMo 音色
+      expect(find.text('mimo_default'), findsNothing);
+      expect(find.text('默认音色'), findsOneWidget);
+
+      // 音色弹窗中不应出现 MiMo 预置音色
+      await tester.tap(find.text('音色'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('选择音色'), findsAny);
+      for (final voice in MimoTtsEngine.presetVoices) {
+        expect(find.text(voice.id), findsNothing);
+      }
     });
 
     testWidgets('测试文本为空时点击试听给出提示', (tester) async {
