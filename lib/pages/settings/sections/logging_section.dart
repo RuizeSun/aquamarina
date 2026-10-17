@@ -90,7 +90,9 @@ class LoggingSection extends StatelessWidget {
             if (!context.mounted) return;
             messenger.showSnackBar(
               SnackBar(
-                content: Text(success ? '日志导出成功' : '暂无日志可导出'),
+                content: Text(
+                  success ? '日志导出成功' : '日志导出失败或暂无可导出日志',
+                ),
                 behavior: SnackBarBehavior.floating,
               ),
             );

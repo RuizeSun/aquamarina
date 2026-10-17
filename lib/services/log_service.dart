@@ -228,7 +228,7 @@ class LogService {
       return true;
     } catch (e) {
       debugPrint('LogService.exportAndShare error: $e');
-      return true;
+      return false;
     }
   }
 }
