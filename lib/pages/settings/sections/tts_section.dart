@@ -51,7 +51,11 @@ class _TtsSettingsSectionState extends State<TtsSettingsSection> {
 
   @override
   void dispose() {
-    _persistDebounce?.cancel();
+    // 防抖窗口内直接离开页面时，先把最后一次修改落盘，避免丢失
+    if (_persistDebounce?.isActive ?? false) {
+      _persistDebounce!.cancel();
+      unawaited(TtsService.instance.updateSettings(_settings));
+    }
     _mimoApiKeyController.dispose();
     _mimoInstructionController.dispose();
     _mimoStyleTagController.dispose();
