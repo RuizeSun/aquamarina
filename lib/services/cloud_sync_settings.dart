@@ -90,6 +90,9 @@ class CloudSyncConfig {
   /// 启动 / 回到前台时自动增量同步（默认开启）。
   final bool autoSync;
 
+  /// 自动同步最小间隔（分钟），同时用于前台轮询。
+  final int autoSyncIntervalMinutes;
+
   const CloudSyncConfig({
     required this.endpoint,
     this.port,
@@ -100,6 +103,7 @@ class CloudSyncConfig {
     required this.pathStyle,
     required this.retainCount,
     this.autoSync = true,
+    this.autoSyncIntervalMinutes = 5,
   });
 
   bool get isConfigured => endpoint.isNotEmpty && bucket.isNotEmpty;
@@ -118,6 +122,7 @@ class CloudSyncConfig {
     bool pathStyle = true,
     int retainCount = defaultRetainCount,
     bool autoSync = true,
+    int autoSyncIntervalMinutes = 5,
   }) {
     final parsed = S3Endpoint.parse(endpointInput);
     final bucketName = bucket.trim();
@@ -134,6 +139,9 @@ class CloudSyncConfig {
     if (retainCount < minRetainCount || retainCount > maxRetainCount) {
       throw const CloudSyncException('保留份数需在 1-50 之间');
     }
+    if (autoSyncIntervalMinutes < 1 || autoSyncIntervalMinutes > 60) {
+      throw const CloudSyncException('自动同步间隔需在 1-60 分钟之间');
+    }
     return CloudSyncConfig(
       endpoint: parsed.host,
       port: parsed.port,
@@ -144,6 +152,7 @@ class CloudSyncConfig {
       pathStyle: pathStyle,
       retainCount: retainCount,
       autoSync: autoSync,
+      autoSyncIntervalMinutes: autoSyncIntervalMinutes,
     );
   }
 
@@ -229,6 +238,8 @@ class CloudSyncConfig {
       pathStyle: pathStyle,
       retainCount: retainCount.clamp(minRetainCount, maxRetainCount),
       autoSync: json['auto_sync'] is bool ? json['auto_sync'] as bool : true,
+      autoSyncIntervalMinutes:
+          (json['auto_sync_interval_minutes'] as int?)?.clamp(1, 60) ?? 5,
     );
   }
 
@@ -242,6 +253,7 @@ class CloudSyncConfig {
     'path_style': pathStyle,
     'retain_count': retainCount,
     'auto_sync': autoSync,
+    'auto_sync_interval_minutes': autoSyncIntervalMinutes,
   };
 
   CloudSyncConfig copyWith({
@@ -254,6 +266,7 @@ class CloudSyncConfig {
     bool? pathStyle,
     int? retainCount,
     bool? autoSync,
+    int? autoSyncIntervalMinutes,
   }) {
     return CloudSyncConfig(
       endpoint: endpoint ?? this.endpoint,
@@ -265,6 +278,8 @@ class CloudSyncConfig {
       pathStyle: pathStyle ?? this.pathStyle,
       retainCount: retainCount ?? this.retainCount,
       autoSync: autoSync ?? this.autoSync,
+      autoSyncIntervalMinutes:
+          autoSyncIntervalMinutes ?? this.autoSyncIntervalMinutes,
     );
   }
 }

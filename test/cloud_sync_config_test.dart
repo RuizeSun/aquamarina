@@ -159,6 +159,33 @@ void main() {
       final legacy = open.toJson()..remove('auto_sync');
       expect(CloudSyncConfig.fromJson(legacy).autoSync, isTrue);
     });
+
+    test('自动同步间隔持久化、旧配置兼容与范围校验', () {
+      final config = CloudSyncConfig.create(
+        endpointInput: 'https://example.com',
+        bucket: 'valid-bucket',
+        region: 'us-east-1',
+        autoSyncIntervalMinutes: 15,
+      );
+      expect(config.autoSyncIntervalMinutes, 15);
+      final restored = CloudSyncConfig.fromJson(
+        jsonDecode(jsonEncode(config.toJson())) as Map<String, dynamic>,
+      );
+      expect(restored.autoSyncIntervalMinutes, 15);
+
+      final legacy = config.toJson()..remove('auto_sync_interval_minutes');
+      expect(CloudSyncConfig.fromJson(legacy).autoSyncIntervalMinutes, 5);
+
+      expect(
+        () => CloudSyncConfig.create(
+          endpointInput: 'https://example.com',
+          bucket: 'valid-bucket',
+          region: 'us-east-1',
+          autoSyncIntervalMinutes: 0,
+        ),
+        throwsA(isA<CloudSyncException>()),
+      );
+    });
   });
 
   group('CloudSyncUtils', () {

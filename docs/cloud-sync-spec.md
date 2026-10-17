@@ -150,7 +150,7 @@ for chunk in pull():
 | 2 | 设备隔离快照上传/下载 + manifest（引导/灾备能力） | ✅ 已完成 |
 | 3 | schema v13 + 触发器生成器（`sentence_sets` 于 v14 入库） | ✅ 已完成（DB 内 14 张同步表） |
 | 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
-| 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 自动同步（启动/回前台 + 15 分钟冷却）、保守 chunk GC 已完成；冲突明细 UI 待补 |
+| 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 启动/回前台同步、学习结束事件同步、前台轮询（1/5/15/30 分钟）、保守 chunk GC 均已完成 |
 | 6 | 收敛性/幂等/崩溃/迁移测试与文档 | ✅ 单测 + 真实 S3 双设备 E2E + 上传失败 / 损坏 chunk 重试已通过 |
 
 > 阶段 2 的快照能力不会白做：它就是阶段 3+ 的 checkpoint/bootstrap 载体。
@@ -171,14 +171,16 @@ for chunk in pull():
 | `lib/services/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
 | `lib/services/sync_apply_service.dart` | 幂等应用、行版本门禁、计数增量、墓碑、父级重试 |
 | `lib/services/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
-| `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、15 分钟冷却、并发保护 |
+| `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、按配置间隔冷却、并发保护 |
+| `lib/services/cloud_sync_foreground_sync_service.dart` | 前台轮询、生命周期启停、事件同步后重置计时 |
+| `lib/services/cloud_sync_activity_sync_service.dart` | 学习结束事件同步：2 秒防抖、push 优先、按需 pull |
 | `lib/services/cloud_sync_maintenance_service.dart` | 保守 chunk GC（每设备保留最近 1000 个 + 180 天） |
 | `lib/services/ai_sentence_set_service.dart` | 句式集元数据迁入 SQLite（v14），CRUD 走事务并纳入触发器同步 |
 
 已通过的验证：
 
 - `flutter analyze`：新增文件无告警；
-- 191 个测试（188 本地 + 3 项真实 S3 集成）通过：含 v13/v14 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、上传失败与损坏 chunk 重试；
+- 198 个测试（195 本地 + 3 项真实 S3 集成）通过：含 v13/v14 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、**双设备增量同步收敛**）。
 
 ### 当前已知限制

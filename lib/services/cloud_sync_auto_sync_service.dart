@@ -9,9 +9,12 @@ class CloudSyncAutoSyncService {
   CloudSyncAutoSyncService._();
 
   /// 自动同步最小间隔，避免频繁切前后台造成网络与耗电压力。
-  static const Duration cooldown = Duration(minutes: 15);
+  /// 实际值来自 `CloudSyncConfig.autoSyncIntervalMinutes`。
+  static const Duration defaultCooldown = Duration(minutes: 5);
 
   static bool _running = false;
+
+  static bool get isRunning => _running;
 
   static Future<void> maybeSync({bool force = false}) async {
     if (_running) return;
@@ -29,6 +32,11 @@ class CloudSyncAutoSyncService {
 
     final state = await CloudSyncSettings.loadState();
     final last = state.lastAutoSyncAt;
+    final cooldown = Duration(
+      minutes: config.autoSyncIntervalMinutes > 0
+          ? config.autoSyncIntervalMinutes
+          : defaultCooldown.inMinutes,
+    );
     if (!force && last != null && DateTime.now().difference(last) < cooldown) {
       return;
     }

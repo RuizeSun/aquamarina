@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
 
 import '../../../models/cloud_sync_manifest.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
+import '../../../services/cloud_sync_foreground_sync_service.dart';
 import '../../../services/sync_capture_service.dart';
 import 'cloud_sync_progress.dart';
 
@@ -33,6 +35,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
   bool _pathStyle = true;
   int _retainCount = CloudSyncConfig.defaultRetainCount;
   bool _autoSync = true;
+  int _autoSyncIntervalMinutes = 5;
   bool _obscureAccessKey = true;
   bool _obscureSecretKey = true;
   bool _loading = true;
@@ -72,6 +75,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         _pathStyle = config.pathStyle;
         _retainCount = config.retainCount;
         _autoSync = config.autoSync;
+        _autoSyncIntervalMinutes = config.autoSyncIntervalMinutes;
       }
       _accessKeyController.text = credentials?.accessKey ?? '';
       _secretKeyController.text = credentials?.secretKey ?? '';
@@ -90,6 +94,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       pathStyle: _pathStyle,
       retainCount: _retainCount,
       autoSync: _autoSync,
+      autoSyncIntervalMinutes: _autoSyncIntervalMinutes,
     );
   }
 
@@ -219,6 +224,8 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       try {
         await SyncCaptureService.setCaptureEnabled(enabled: true);
       } catch (_) {}
+      // 按新配置重建前台轮询（关闭自动同步时会自动停止）
+      unawaited(CloudSyncForegroundSyncService.instance.start());
       if (!mounted) return;
       _showSnack('配置已保存');
       Navigator.of(context).pop(true);
@@ -295,6 +302,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
     try {
       await SyncCaptureService.setCaptureEnabled(enabled: false);
     } catch (_) {}
+    CloudSyncForegroundSyncService.instance.stop();
     if (!mounted) return;
     _endpointController.clear();
     _bucketController.clear();
@@ -481,9 +489,32 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('启动 / 回到前台时自动同步'),
-                    subtitle: const Text('两次自动同步至少间隔 15 分钟；失败会静默重试，不影响手动同步'),
+                    subtitle: const Text('学习结束后会立即同步一次；前台按下方间隔轮询，失败静默重试'),
                     value: _autoSync,
                     onChanged: (value) => setState(() => _autoSync = value),
+                  ),
+                  DropdownButtonFormField<int>(
+                    initialValue: _autoSyncIntervalMinutes,
+                    decoration: const InputDecoration(
+                      labelText: '自动同步间隔',
+                      helperText: '仅影响前台轮询与自动同步冷却；学习结束后仍会立即同步',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [1, 5, 15, 30]
+                        .map(
+                          (value) => DropdownMenuItem<int>(
+                            value: value,
+                            child: Text('$value 分钟'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: _autoSync
+                        ? (value) {
+                            if (value != null) {
+                              setState(() => _autoSyncIntervalMinutes = value);
+                            }
+                          }
+                        : null,
                   ),
                   _sectionTitle('访问凭据'),
                   TextFormField(
