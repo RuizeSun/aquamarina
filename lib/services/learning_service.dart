@@ -5,13 +5,23 @@ import 'database_service.dart';
 import 'log_service.dart';
 
 class DailyStats {
+  /// 今日到期的单词级错词数量（wrong_words 表）。
+  ///
+  /// 注意：这里**不能**混入句型错题（wrong_sentences）——
+  /// 句型错题属于「句型练习」模块，若计入单词复习队列，会导致
+  /// 只要句型有错题就永远无法开始学习新词。
   final int wrongWordCount;
+
+  /// 错题本中的句型错题数量（wrong_sentences 表，仅用于展示）。
+  final int wrongSentenceCount;
+
   final int dueReviewCount;
   final int todayLearnedCount;
   final int todayReviewedCount;
 
   DailyStats({
     required this.wrongWordCount,
+    required this.wrongSentenceCount,
     required this.dueReviewCount,
     required this.todayLearnedCount,
     required this.todayReviewedCount,
@@ -42,7 +52,16 @@ class LearningService {
     final db = await DatabaseService.database;
     final today = _todayStr();
 
-    final wrongCount =
+    final wrongWordCount =
+        Sqflite.firstIntValue(
+          await db.rawQuery(
+            'SELECT COUNT(*) FROM wrong_words WHERE scheduled_date <= ?',
+            [today],
+          ),
+        ) ??
+        0;
+
+    final wrongSentenceCount =
         Sqflite.firstIntValue(
           await db.rawQuery('SELECT COUNT(*) FROM wrong_sentences'),
         ) ??
@@ -84,7 +103,8 @@ class LearningService {
         0;
 
     return DailyStats(
-      wrongWordCount: wrongCount,
+      wrongWordCount: wrongWordCount,
+      wrongSentenceCount: wrongSentenceCount,
       dueReviewCount: dueCount,
       todayLearnedCount: learnedCount,
       todayReviewedCount: reviewedCount,
@@ -813,6 +833,7 @@ class LearningService {
     logDebug('LearningService', '保存批量学习结果: ${results.length} 个单词, isReview=$isReview');
     final db = await DatabaseService.database;
     final now = DateTime.now().toIso8601String();
+    final today = _todayStr();
 
     await db.transaction((txn) async {
       for (final entry in results.entries) {
@@ -820,12 +841,30 @@ class LearningService {
         final result = entry.value;
 
         if (result == 'mastered') {
-          await txn.update(
+          final updated = await txn.update(
             'user_word_records',
             {'is_mastered': 1, 'last_reviewed_at': now},
             where: 'word = ?',
             whereArgs: [word],
           );
+          if (updated == 0) {
+            // 首次学习时直接标记「已掌握」：此时还没有学习记录，
+            // 必须补插一条，否则单词会一直停留在「等待学习」。
+            await txn.insert(
+              'user_word_records',
+              {
+                'word': word,
+                'stage': 0,
+                'is_weak': 0,
+                'is_mastered': 1,
+                'next_review_date': null,
+                'last_reviewed_at': now,
+                'review_count': 0,
+                'created_at': now,
+              },
+              conflictAlgorithm: ConflictAlgorithm.ignore,
+            );
+          }
           await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
         } else if (result == 'forgot') {
           // 忘记 → 回到低 Stage 并标记为弱词（不删除记录，保留学习历史）
@@ -875,7 +914,7 @@ class LearningService {
               'created_at': now,
             });
           }
-          await txn.delete('wrong_words', where: 'word = ?', whereArgs: [word]);
+          await _upsertWrongWord(txn, word, today, now);
         } else {
           final isWeak = result == 'hard' ? 1 : 0;
 
@@ -934,8 +973,11 @@ class LearningService {
               whereArgs: [word],
             );
 
-            // hard 或 easy 但未掌握：如已有 wrong_words 记录则删除
-            if (result == 'easy' && newStage <= 5) {
+            if (result == 'hard') {
+              // hard：加入今日错词队列，稍后强制重做
+              await _upsertWrongWord(txn, word, today, now);
+            } else {
+              // easy：移出错词队列（包括本次晋升为已掌握的情况）
               await txn.delete(
                 'wrong_words',
                 where: 'word = ?',
@@ -960,6 +1002,10 @@ class LearningService {
               'review_count': 0,
               'created_at': now,
             });
+
+            if (result == 'hard') {
+              await _upsertWrongWord(txn, word, today, now);
+            }
           }
         }
       }
@@ -982,6 +1028,32 @@ class LearningService {
       wrongCount: wrongCount,
     );
   }
+  /// 将单词加入今日错词队列（已存在则把计划日期更新为今天）。
+  ///
+  /// 与 `wrong_sentences`（句型错题）区分：本表只服务单词复习流程，
+  /// `getDailyStats` / `getTodayWrongWords` / `getDueReviews` 都依赖它。
+  static Future<void> _upsertWrongWord(
+    DatabaseExecutor txn,
+    String word,
+    String today,
+    String now,
+  ) async {
+    final updated = await txn.update(
+      'wrong_words',
+      {'scheduled_date': today},
+      where: 'word = ?',
+      whereArgs: [word],
+    );
+    if (updated == 0) {
+      await txn.insert(
+        'wrong_words',
+        {'word': word, 'scheduled_date': today, 'created_at': now},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  }
+
+
 
   static Future<UserWordRecord?> getRecord(String word) async {
     final db = await DatabaseService.database;

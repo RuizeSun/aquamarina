@@ -217,7 +217,8 @@ class ProfilePageState extends State<ProfilePage> {
                   _buildStatItem(
                     icon: Icons.error_outline,
                     label: '待纠正',
-                    value: stats?.wrongWordCount ?? 0,
+                    // 这里展示的是「句型错题本」条数（与单词待复习队列分开统计）
+                    value: stats?.wrongSentenceCount ?? 0,
                   ),
                 ],
               ),
