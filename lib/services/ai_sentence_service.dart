@@ -7,6 +7,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_profile_service.dart';
 import '../services/ai_service.dart';
 import 'database_service.dart';
+import 'learning_service.dart';
 import 'log_service.dart';
 import 'sentence_eval_cache_service.dart';
 
@@ -209,6 +210,7 @@ class AiSentenceService {
         row,
         conflictAlgorithm: ConflictAlgorithm.ignore,
       );
+      LearningService.invalidateStatsCache();
       return;
     }
 
@@ -228,6 +230,7 @@ class AiSentenceService {
       where: 'id = ?',
       whereArgs: [existing.first['id']],
     );
+    LearningService.invalidateStatsCache();
   }
 
   /// 从错题本中移除（[sentenceId] 为 [wrongSentenceKey] 生成的主键）
@@ -238,12 +241,14 @@ class AiSentenceService {
       where: 'sentence_id = ?',
       whereArgs: [sentenceId],
     );
+    LearningService.invalidateStatsCache();
   }
 
   /// 清空错题本
   Future<void> clearWrongSentences() async {
     final db = await _db;
     await db.delete('wrong_sentences');
+    LearningService.invalidateStatsCache();
   }
 
   // ===== 批改结果缓存（SQLite） =====

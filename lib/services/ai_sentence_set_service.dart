@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
 import 'database_service.dart';
+import 'learning_service.dart';
 
 /// 句式集管理服务（单例，各页面共享同一数据源以确保实时同步）
 class SentenceSetService extends ChangeNotifier {
@@ -103,6 +104,7 @@ class SentenceSetService extends ChangeNotifier {
       whereArgs: [id],
     );
     await db.delete('wrong_sentences', where: 'set_id = ?', whereArgs: [id]);
+    LearningService.invalidateStatsCache();
     notifyListeners();
   }
 
@@ -203,11 +205,15 @@ class SentenceSetService extends ChangeNotifier {
       'set': {
         'name': set.name,
         'description': set.description,
-        'sentences': sentences.map((s) => {
-          'english': s.english,
-          'chinese': s.chinese,
-          'extra_words': s.extraWords,
-        }).toList(),
+        'sentences': sentences
+            .map(
+              (s) => {
+                'english': s.english,
+                'chinese': s.chinese,
+                'extra_words': s.extraWords,
+              },
+            )
+            .toList(),
       },
     });
   }
@@ -334,7 +340,10 @@ class SentenceSetService extends ChangeNotifier {
 /// [SentenceSetException]，而不是静默导入乱码数据。
 String decodeSentenceSetFileBytes(List<int> bytes) {
   // 剥离 UTF-8 BOM（EF BB BF），避免开头 U+FEFF 导致 JSON 解析失败。
-  if (bytes.length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xEF &&
+      bytes[1] == 0xBB &&
+      bytes[2] == 0xBF) {
     bytes = bytes.sublist(3);
   }
 

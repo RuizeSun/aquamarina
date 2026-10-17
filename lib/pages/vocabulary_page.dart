@@ -95,12 +95,15 @@ class VocabularyPageState extends State<VocabularyPage>
         }
       }
 
-      // 获取今日统计
-      _stats = await LearningService.getDailyStats();
-      // 获取连续打卡
-      _streak = await LearningService.getStreak();
-      // 获取今日打卡进度
-      _goalProgress = await LearningService.getTodayGoalProgress();
+      // 获取今日统计 / 连续打卡 / 打卡进度（并行）
+      final summary = await Future.wait<dynamic>([
+        LearningService.getDailyStats(),
+        LearningService.getStreak(),
+        LearningService.getTodayGoalProgress(),
+      ]);
+      _stats = summary[0] as DailyStats;
+      _streak = summary[1] as int;
+      _goalProgress = summary[2] as Map<String, dynamic>;
       // 读取是否强制要求先复习（缓存到 state，避免 build 中重复创建 Future）
       _requireReviewBeforeLearning =
           prefs.getBool(_requireReviewBeforeLearningKey) ?? true;
@@ -196,9 +199,9 @@ class VocabularyPageState extends State<VocabularyPage>
     if (!mounted) return;
 
     if (spellingEntries.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前待复习单词无可用释义，无法快速拼写')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前待复习单词无可用释义，无法快速拼写')));
       return;
     }
 

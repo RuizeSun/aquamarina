@@ -38,10 +38,16 @@ class ProfilePageState extends State<ProfilePage> {
     setState(() => _isLoading = true);
 
     try {
-      final stats = await LearningService.getDailyStats();
-      final streak = await LearningService.getStreak();
-      final goalProgress = await LearningService.getTodayGoalProgress();
-      final todayDuration = await StudyTimerService.getTodayTotalSeconds();
+      final summary = await Future.wait<dynamic>([
+        LearningService.getDailyStats(),
+        LearningService.getStreak(),
+        LearningService.getTodayGoalProgress(),
+        StudyTimerService.getTodayTotalSeconds(),
+      ]);
+      final stats = summary[0] as DailyStats;
+      final streak = summary[1] as int;
+      final goalProgress = summary[2] as Map<String, dynamic>;
+      final todayDuration = summary[3] as int;
       if (!mounted) return;
       setState(() {
         _stats = stats;

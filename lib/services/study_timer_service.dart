@@ -308,18 +308,24 @@ class StudyTimerService with WidgetsBindingObserver {
   static Future<List<Map<String, dynamic>>> getWeeklyDuration() async {
     final db = await DatabaseService.database;
     final now = DateTime.now();
-    final results = <Map<String, dynamic>>[];
+    final today = DateTime(now.year, now.month, now.day);
+    final startStr = _dateStr(today.subtract(const Duration(days: 6)));
 
+    // 一次 GROUP BY 查询，避免 7 次串行 SUM
+    final rows = await db.rawQuery(
+      'SELECT date, COALESCE(SUM(duration_seconds), 0) AS total '
+      'FROM learning_sessions WHERE date >= ? GROUP BY date',
+      [startStr],
+    );
+    final byDate = <String, int>{
+      for (final row in rows)
+        row['date'] as String: (row['total'] as int?) ?? 0,
+    };
+
+    final results = <Map<String, dynamic>>[];
     for (int i = 6; i >= 0; i--) {
-      final date = now.subtract(Duration(days: i));
-      final dateStr = _dateStr(date);
-      final total = Sqflite.firstIntValue(
-        await db.rawQuery(
-          'SELECT COALESCE(SUM(duration_seconds), 0) FROM learning_sessions WHERE date = ?',
-          [dateStr],
-        ),
-      );
-      results.add({'date': dateStr, 'duration_seconds': total ?? 0});
+      final dateStr = _dateStr(today.subtract(Duration(days: i)));
+      results.add({'date': dateStr, 'duration_seconds': byDate[dateStr] ?? 0});
     }
     return results;
   }

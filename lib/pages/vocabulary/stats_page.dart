@@ -42,40 +42,56 @@ class _StatsPageState extends State<StatsPage> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
-    final streak = await LearningService.getStreak();
-    final weekly = await LearningService.getWeeklyActivity();
-    final monthly = await LearningService.getMonthlyActivity(
-      _displayedMonth.year,
-      _displayedMonth.month,
-    );
+    try {
+      // 互不依赖的查询并行执行，避免 9 次串行 await 叠加加载时间
+      final results = await Future.wait<dynamic>([
+        LearningService.getStreak(),
+        LearningService.getWeeklyActivity(),
+        LearningService.getMonthlyActivity(
+          _displayedMonth.year,
+          _displayedMonth.month,
+        ),
+        StudyTimerService.getTodayTotalSeconds(),
+        StudyTimerService.getTotalDuration(),
+        StudyTimerService.getDurationByType(),
+        StudyTimerService.getWeeklyDuration(),
+        LearningService.getVocabTestHistory(limit: 50),
+        LearningService.getVocabTestStats(),
+      ]);
 
-    // 学习时长数据
-    final todaySeconds = await StudyTimerService.getTodayTotalSeconds();
-    final totalSeconds = await StudyTimerService.getTotalDuration();
-    final byType = await StudyTimerService.getDurationByType();
-    final weeklyDuration = await StudyTimerService.getWeeklyDuration();
+      if (!mounted) return;
+      final streak = results[0] as int;
+      final weekly = results[1] as List<Map<String, dynamic>>;
+      final monthly = results[2] as List<Map<String, dynamic>>;
+      final todaySeconds = results[3] as int;
+      final totalSeconds = results[4] as int;
+      final byType = results[5] as Map<String, int>;
+      final weeklyDuration = results[6] as List<Map<String, dynamic>>;
+      final testHistory = results[7] as List<Map<String, dynamic>>;
+      final testStats = results[8] as Map<String, dynamic>;
 
-    // 词汇测试历史数据
-    final testHistory = await LearningService.getVocabTestHistory(limit: 50);
-    final testStats = await LearningService.getVocabTestStats();
-
-    if (!mounted) return;
-    setState(() {
-      _streak = streak;
-      _weeklyData = weekly;
-      _monthlyData = monthly;
-      _monthlyCheckInCount = monthly
-          .where((d) => d['completed'] == true)
-          .length;
-      _todayDurationSeconds = todaySeconds;
-      _totalDurationSeconds = totalSeconds;
-      _durationByType = byType;
-      _weeklyDurationData = weeklyDuration;
-      _vocabTestHistory = testHistory;
-      _vocabTestCount = testStats['count'] as int? ?? 0;
-      _vocabTestAvgAccuracy = testStats['avgAccuracy'] as double? ?? 0.0;
-      _isLoading = false;
-    });
+      setState(() {
+        _streak = streak;
+        _weeklyData = weekly;
+        _monthlyData = monthly;
+        _monthlyCheckInCount = monthly
+            .where((d) => d['completed'] == true)
+            .length;
+        _todayDurationSeconds = todaySeconds;
+        _totalDurationSeconds = totalSeconds;
+        _durationByType = byType;
+        _weeklyDurationData = weeklyDuration;
+        _vocabTestHistory = testHistory;
+        _vocabTestCount = testStats['count'] as int? ?? 0;
+        _vocabTestAvgAccuracy = testStats['avgAccuracy'] as double? ?? 0.0;
+        _isLoading = false;
+      });
+    } catch (_) {
+      // 任一查询失败也要结束 loading，避免页面永久转圈
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   Future<void> _changeMonth(int offset) async {

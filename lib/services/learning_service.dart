@@ -47,14 +47,59 @@ class LearningService {
   /// `too many SQL variables`；分批查询同时也能降低单次查询的解析开销。
   static const int _maxQueryChunkSize = 900;
 
-  static String _todayStr() {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  // ─── 每日统计短缓存 ────────────────────────────────
+  //
+  // 启动时 VocabularyPage 与 ProfilePage 会同时请求统计；
+  // 用 in-flight 复用 + 2 秒 TTL，避免重复执行 4 条 SQL。
+  static Future<DailyStats>? _dailyStatsInFlight;
+  static DailyStats? _dailyStatsCache;
+  static DateTime? _dailyStatsCachedAt;
+  static const Duration _dailyStatsTtl = Duration(seconds: 2);
+
+  static String _dateStr(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
   }
+
+  static String _todayStr() => _dateStr(DateTime.now());
 
   // ─── 每日统计 ──────────────────────────────────────
 
-  static Future<DailyStats> getDailyStats() async {
+  /// 获取今日统计（带短 TTL / in-flight 复用）。
+  ///
+  /// [force] 为 true 时忽略缓存（例如用户主动下拉刷新）。
+  static Future<DailyStats> getDailyStats({bool force = false}) async {
+    final now = DateTime.now();
+    if (!force &&
+        _dailyStatsCache != null &&
+        _dailyStatsCachedAt != null &&
+        now.difference(_dailyStatsCachedAt!) < _dailyStatsTtl) {
+      return _dailyStatsCache!;
+    }
+    final inFlight = _dailyStatsInFlight;
+    if (!force && inFlight != null) return inFlight;
+
+    final future = _computeDailyStats();
+    _dailyStatsInFlight = future;
+    try {
+      final stats = await future;
+      _dailyStatsCache = stats;
+      _dailyStatsCachedAt = DateTime.now();
+      return stats;
+    } finally {
+      if (identical(_dailyStatsInFlight, future)) {
+        _dailyStatsInFlight = null;
+      }
+    }
+  }
+
+  /// 清除每日统计缓存（学习结果 / 错题变化后调用）
+  static void invalidateStatsCache() {
+    _dailyStatsCache = null;
+    _dailyStatsCachedAt = null;
+  }
+
+  static Future<DailyStats> _computeDailyStats() async {
     final db = await DatabaseService.database;
     final today = _todayStr();
 
@@ -420,6 +465,7 @@ class LearningService {
 
     // 每次写入后检查是否达标
     await _checkAndMarkCompleted();
+    invalidateStatsCache();
   }
 
   /// 检查今日学习数是否达到目标，达标则标记 completed=1 并记录当日目标值
@@ -556,48 +602,45 @@ class LearningService {
   }
 
   /// 获取最近7天的每日复习数（用于图表展示）
+  ///
+  /// 一次 `WHERE date >= ?` 查询后在内存补齐缺失日期，
+  /// 替代原先 7 次串行 SQL。
   static Future<List<Map<String, dynamic>>> getWeeklyActivity() async {
     final db = await DatabaseService.database;
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final start = today.subtract(const Duration(days: 6));
+    final startStr = _dateStr(start);
+
+    final rows = await db.query(
+      'daily_activity',
+      columns: [
+        'date',
+        'words_learned',
+        'words_reviewed',
+        'correct_count',
+        'wrong_count',
+        'completed',
+      ],
+      where: 'date >= ?',
+      whereArgs: [startStr],
+    );
+    final byDate = <String, Map<String, dynamic>>{
+      for (final row in rows) row['date'] as String: row,
+    };
+
     final results = <Map<String, dynamic>>[];
-
     for (int i = 6; i >= 0; i--) {
-      final date = now.subtract(Duration(days: i));
-      final dateStr =
-          '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-      final row = await db.query(
-        'daily_activity',
-        columns: [
-          'words_learned',
-          'words_reviewed',
-          'correct_count',
-          'wrong_count',
-          'completed',
-        ],
-        where: 'date = ?',
-        whereArgs: [dateStr],
-      );
-
-      if (row.isNotEmpty) {
-        results.add({
-          'date': dateStr,
-          'words_learned': row.first['words_learned'] ?? 0,
-          'words_reviewed': row.first['words_reviewed'] ?? 0,
-          'correct_count': row.first['correct_count'] ?? 0,
-          'wrong_count': row.first['wrong_count'] ?? 0,
-          'completed': row.first['completed'] ?? 0,
-        });
-      } else {
-        results.add({
-          'date': dateStr,
-          'words_learned': 0,
-          'words_reviewed': 0,
-          'correct_count': 0,
-          'wrong_count': 0,
-          'completed': 0,
-        });
-      }
+      final dateStr = _dateStr(today.subtract(Duration(days: i)));
+      final row = byDate[dateStr];
+      results.add({
+        'date': dateStr,
+        'words_learned': row?['words_learned'] ?? 0,
+        'words_reviewed': row?['words_reviewed'] ?? 0,
+        'correct_count': row?['correct_count'] ?? 0,
+        'wrong_count': row?['wrong_count'] ?? 0,
+        'completed': row?['completed'] ?? 0,
+      });
     }
     return results;
   }
@@ -637,6 +680,7 @@ class LearningService {
     );
 
     await db.delete('wrong_words', where: 'word = ?', whereArgs: [cleaned]);
+    invalidateStatsCache();
   }
 
   // ─── 单词总览（按状态查询与管理） ─────────────────
@@ -832,6 +876,7 @@ class LearningService {
         );
       }
     });
+    invalidateStatsCache();
   }
 
   /// 批量重置学习状态（删除学习记录，回到等待学习）
@@ -857,6 +902,7 @@ class LearningService {
         );
       }
     });
+    invalidateStatsCache();
   }
 
   // ─── 批量保存学习/复习结果 ─────────────────────

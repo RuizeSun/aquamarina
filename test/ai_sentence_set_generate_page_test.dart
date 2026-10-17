@@ -271,13 +271,9 @@ void main() {
     expect(find.text('已生成 2 句'), findsOneWidget);
     expect(find.text('I eat an apple every morning.'), findsOneWidget);
     expect(find.text('She likes bananas with yogurt.'), findsOneWidget);
-    // 生成中不允许再次点击
-    expect(
-      tester
-          .widget<FilledButton>(find.widgetWithText(FilledButton, '生成中…'))
-          .onPressed,
-      isNull,
-    );
+    // 生成中提供取消入口（不再允许重复开始）
+    expect(find.widgetWithText(OutlinedButton, '取消生成'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, '开始生成'), findsNothing);
 
     // 放行并收尾，避免测试结束时仍有未完成的 Future
     generator.gate.complete();
