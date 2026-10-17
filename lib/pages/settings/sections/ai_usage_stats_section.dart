@@ -152,9 +152,9 @@ class _AiUsageStatsSectionState extends State<AiUsageStatsSection> {
           ),
           Text(
             value,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
         ],
       ),
@@ -167,161 +167,161 @@ class _AiUsageStatsSectionState extends State<AiUsageStatsSection> {
     final (symbol, decimals, grouping) = _costFormat();
     final s = _summary;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: SegmentedButton<_AiUsageRange>(
-                segments: _AiUsageRange.values
-                    .map(
-                      (r) => ButtonSegment(
-                        value: r,
-                        label: Text(r.label),
-                      ),
-                    )
-                    .toList(),
-                selected: {_range},
-                onSelectionChanged: (sel) {
-                  if (sel.isEmpty) return;
-                  setState(() => _range = sel.first);
-                  _load();
-                },
-                showSelectedIcon: false,
-                style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              ),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: '刷新',
-              onPressed: _loading ? null : _load,
-              icon: _loading
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-
-
-        if (_loading) ...[
-          const SizedBox(height: 40),
-          const Center(child: CircularProgressIndicator()),
-          const SizedBox(height: 40),
-        ] else ...[
-          _statTile(
-            colorScheme: colorScheme,
-            icon: Icons.receipt_long_outlined,
-            color: colorScheme.primary,
-            label: '请求数',
-            value: _group(s.requests),
-          ),
-          const SizedBox(height: 8),
-          _statTile(
-            colorScheme: colorScheme,
-            icon: Icons.memory_outlined,
-            color: Colors.orange.shade800,
-            label: '未缓存输入 Tokens',
-            value: _group(s.cacheMissTokens),
-          ),
-          const SizedBox(height: 8),
-          _statTile(
-            colorScheme: colorScheme,
-            icon: Icons.savings_outlined,
-            color: Colors.green.shade700,
-            label: '缓存命中输入 Tokens',
-            value: _group(s.cacheHitTokens),
-          ),
-          const SizedBox(height: 8),
-          _statTile(
-            colorScheme: colorScheme,
-            icon: Icons.output_outlined,
-            color: Colors.blue.shade700,
-            label: '输出 Tokens',
-            value: _group(s.completionTokens),
-          ),
-          const SizedBox(height: 8),
-          _statTile(
-            colorScheme: colorScheme,
-            icon: Icons.payments_outlined,
-            color: Colors.purple.shade700,
-            label: '估算费用',
-            value: AiUsageService.formatMoney(
-              s.cost,
-              symbol: symbol,
-              decimals: decimals,
-              grouping: grouping,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '费用为估算值，按各请求发生时对应配置的计费与币种设置计算；'
-            'Aquamarina 官方不支持用量与计费统计。',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 16),
-
-          Text('最近请求记录', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 4),
-          if (_records.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Center(
-                child: Column(
-                  children: [
-                    Icon(
-                      Icons.inbox_outlined,
-                      size: 40,
-                      color: colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '该时间段内暂无记录',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            )
-          else ...[
-            for (final r in _records) _recordTile(r),
-            if (s.requests > _recordLimit)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  '仅显示最近 $_recordLimit 条，共 ${_group(s.requests)} 次请求',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<_AiUsageRange>(
+                  segments: _AiUsageRange.values
+                      .map((r) => ButtonSegment(value: r, label: Text(r.label)))
+                      .toList(),
+                  selected: {_range},
+                  onSelectionChanged: (sel) {
+                    if (sel.isEmpty) return;
+                    setState(() => _range = sel.first);
+                    _load();
+                  },
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
                   ),
                 ),
               ),
-          ],
-          const SizedBox(height: 8),
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-            leading: Icon(
-              Icons.delete_sweep_outlined,
-              color: colorScheme.error,
-            ),
-            title: Text('清空统计', style: TextStyle(color: colorScheme.error)),
-            subtitle: const Text('删除所有 AI 调用记录与统计'),
-            onTap: _clearAll,
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: '刷新',
+                onPressed: _loading ? null : _load,
+                icon: _loading
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+              ),
+            ],
           ),
+          const SizedBox(height: 8),
+
+          if (_loading) ...[
+            const SizedBox(height: 40),
+            const Center(child: CircularProgressIndicator()),
+            const SizedBox(height: 40),
+          ] else ...[
+            _statTile(
+              colorScheme: colorScheme,
+              icon: Icons.receipt_long_outlined,
+              color: colorScheme.primary,
+              label: '请求数',
+              value: _group(s.requests),
+            ),
+            const SizedBox(height: 8),
+            _statTile(
+              colorScheme: colorScheme,
+              icon: Icons.memory_outlined,
+              color: Colors.orange.shade800,
+              label: '未缓存输入 Tokens',
+              value: _group(s.cacheMissTokens),
+            ),
+            const SizedBox(height: 8),
+            _statTile(
+              colorScheme: colorScheme,
+              icon: Icons.savings_outlined,
+              color: Colors.green.shade700,
+              label: '缓存命中输入 Tokens',
+              value: _group(s.cacheHitTokens),
+            ),
+            const SizedBox(height: 8),
+            _statTile(
+              colorScheme: colorScheme,
+              icon: Icons.output_outlined,
+              color: Colors.blue.shade700,
+              label: '输出 Tokens',
+              value: _group(s.completionTokens),
+            ),
+            const SizedBox(height: 8),
+            _statTile(
+              colorScheme: colorScheme,
+              icon: Icons.payments_outlined,
+              color: Colors.purple.shade700,
+              label: '估算费用',
+              value: AiUsageService.formatMoney(
+                s.cost,
+                symbol: symbol,
+                decimals: decimals,
+                grouping: grouping,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '费用为估算值，按各请求发生时对应配置的计费与币种设置计算；'
+              'Aquamarina 官方不支持用量与计费统计。',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            Text('最近请求记录', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 4),
+            if (_records.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Center(
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.inbox_outlined,
+                        size: 40,
+                        color: colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.4,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '该时间段内暂无记录',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else ...[
+              for (final r in _records) _recordTile(r),
+              if (s.requests > _recordLimit)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    '仅显示最近 $_recordLimit 条，共 ${_group(s.requests)} 次请求',
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+            ],
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                Icons.delete_sweep_outlined,
+                color: colorScheme.error,
+              ),
+              title: Text('清空统计', style: TextStyle(color: colorScheme.error)),
+              subtitle: const Text('删除所有 AI 调用记录与统计'),
+              onTap: _clearAll,
+            ),
+          ],
         ],
-      ],
+      ),
     );
   }
-
 
   Widget _recordTile(AiUsageRecord r) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -365,9 +365,9 @@ class _AiUsageStatsSectionState extends State<AiUsageStatsSection> {
         ),
         subtitle: Text(
           '${_time(r.createdAt)} · $tokenInfo',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: colorScheme.onSurfaceVariant),
         ),
         trailing: Text(
           r.formatCost() ?? '—',
@@ -382,4 +382,3 @@ class _AiUsageStatsSectionState extends State<AiUsageStatsSection> {
     );
   }
 }
-
