@@ -341,9 +341,30 @@ class _SearchPageState extends State<SearchPage> {
     final query = _searchController.text.trim();
 
     if (_isSearching) {
-      content = const Center(
-        key: ValueKey('searching'),
-        child: CircularProgressIndicator(),
+      content = Center(
+        key: const ValueKey('searching'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            // 首次启动词典解压时给出明确反馈（否则用户只看到无说明的转圈）
+            ValueListenableBuilder<String?>(
+              valueListenable: DictionaryService.preparationStatus,
+              builder: (context, status, _) {
+                if (status == null) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: Text(
+                    status,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
       );
     } else if (_errorMessage != null) {
       content = Center(

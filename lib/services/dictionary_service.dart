@@ -39,6 +39,10 @@ class DictionaryService {
   /// 解压 Future，防止 databases.zip 的并发重复解压
   static Future<void>? _extractFuture;
 
+  /// 词典准备状态：首次启动解压期间供 UI 展示提示。
+  static final ValueNotifier<String?> preparationStatus =
+      ValueNotifier<String?>(null);
+
   // ─── 初始化 ──────────────────────────────────────────
 
   static Future<void> _initFfi() async {
@@ -85,39 +89,44 @@ class DictionaryService {
     }
     if (allValid) return;
 
-    // 清理损坏文件与可能残留的临时文件
-    for (final name in _dictionaryDbNames) {
-      await _deleteIfExists(p.join(directoryPath, name));
-      await _deleteIfExists(p.join(directoryPath, '$name.tmp'));
-    }
-
-    final zipPath = p.join(directoryPath, 'databases.zip.tmp');
-    await _deleteIfExists(zipPath);
-
-    final byteData = await rootBundle.load('assets/databases.zip');
-    final bytes = byteData.buffer.asUint8List(
-      byteData.offsetInBytes,
-      byteData.lengthInBytes,
-    );
-    await File(zipPath).writeAsBytes(bytes, flush: true);
-
+    preparationStatus.value = '正在准备词典（首次启动需要解压）…';
     try {
-      // 解压放到后台 isolate：zip 解压后约 133MB，在主 isolate 同步执行
-      // 会直接卡住 UI（首启数秒甚至 ANR）。
-      await Isolate.run(() => _extractDictionaryZip(zipPath, directoryPath));
-    } finally {
-      await _deleteIfExists(zipPath);
-    }
-
-    // 解压完成后再次校验，避免写盘失败/磁盘满导致半截文件被长期使用
-    for (final name in _dictionaryDbNames) {
-      final path = p.join(directoryPath, name);
-      if (!await _isValidSqliteFile(path)) {
-        await _deleteIfExists(path);
-        throw FileSystemException('词典数据库解压后校验失败，请重试', path);
+      // 清理损坏文件与可能残留的临时文件
+      for (final name in _dictionaryDbNames) {
+        await _deleteIfExists(p.join(directoryPath, name));
+        await _deleteIfExists(p.join(directoryPath, '$name.tmp'));
       }
+
+      final zipPath = p.join(directoryPath, 'databases.zip.tmp');
+      await _deleteIfExists(zipPath);
+
+      final byteData = await rootBundle.load('assets/databases.zip');
+      final bytes = byteData.buffer.asUint8List(
+        byteData.offsetInBytes,
+        byteData.lengthInBytes,
+      );
+      await File(zipPath).writeAsBytes(bytes, flush: true);
+
+      try {
+        // 解压放到后台 isolate：zip 解压后约 133MB，在主 isolate 同步执行
+        // 会直接卡住 UI（首启数秒甚至 ANR）。
+        await Isolate.run(() => _extractDictionaryZip(zipPath, directoryPath));
+      } finally {
+        await _deleteIfExists(zipPath);
+      }
+
+      // 解压完成后再次校验，避免写盘失败/磁盘满导致半截文件被长期使用
+      for (final name in _dictionaryDbNames) {
+        final path = p.join(directoryPath, name);
+        if (!await _isValidSqliteFile(path)) {
+          await _deleteIfExists(path);
+          throw FileSystemException('词典数据库解压后校验失败，请重试', path);
+        }
+      }
+      logInfo('DictionaryService', '词典数据库解压完成');
+    } finally {
+      preparationStatus.value = null;
     }
-    logInfo('DictionaryService', '词典数据库解压完成');
   }
 
   /// 在后台 isolate 中执行的实际解压逻辑。
