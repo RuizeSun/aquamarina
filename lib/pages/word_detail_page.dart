@@ -133,48 +133,52 @@ class _WordDetailPageState extends State<WordDetailPage> {
   /// 弹出笔记编辑对话框
   Future<void> _editNote() async {
     final controller = TextEditingController(text: _note ?? '');
-    final hasNote = _note != null && _note!.isNotEmpty;
+    try {
+      final hasNote = _note != null && _note!.isNotEmpty;
 
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('笔记 · ${widget.word}'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 6,
-          minLines: 3,
-          decoration: const InputDecoration(
-            hintText: '记录词根词缀、记忆方法、例句或易混淆点…',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('取消'),
-          ),
-          if (hasNote)
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(''),
-              style: TextButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.error,
-              ),
-              child: const Text('删除'),
+      final result = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('笔记 · ${widget.word}'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 6,
+            minLines: 3,
+            decoration: const InputDecoration(
+              hintText: '记录词根词缀、记忆方法、例句或易混淆点…',
+              border: OutlineInputBorder(),
             ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text),
-            child: const Text('保存'),
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('取消'),
+            ),
+            if (hasNote)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(''),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
+                child: const Text('删除'),
+              ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
 
-    if (result == null) return;
-    final trimmed = result.trim();
-    await WordNoteService.saveNote(widget.word, trimmed);
-    if (!mounted) return;
-    setState(() => _note = trimmed.isEmpty ? null : trimmed);
+      if (result == null) return;
+      final trimmed = result.trim();
+      await WordNoteService.saveNote(widget.word, trimmed);
+      if (!mounted) return;
+      setState(() => _note = trimmed.isEmpty ? null : trimmed);
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override

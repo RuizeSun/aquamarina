@@ -54,9 +54,7 @@ class _SentenceNoteBarState extends State<SentenceNoteBar> {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text(
-            target ? '已收藏该句' : '已取消收藏该句',
-          ),
+          content: Text(target ? '已收藏该句' : '已取消收藏该句'),
           duration: const Duration(seconds: 1),
           behavior: SnackBarBehavior.floating,
         ),
@@ -66,54 +64,58 @@ class _SentenceNoteBarState extends State<SentenceNoteBar> {
   /// 弹出句子笔记编辑对话框
   Future<void> _editNote() async {
     final controller = TextEditingController();
-    final sentenceId = _sentence.id;
-    if (sentenceId != null && sentenceId.isNotEmpty) {
-      final note = await SentenceNoteService.getSentenceNote(sentenceId);
-      if (mounted) controller.text = note?.note ?? '';
-    }
-    final hasNote = controller.text.trim().isNotEmpty;
-    if (!mounted) return;
+    try {
+      final sentenceId = _sentence.id;
+      if (sentenceId != null && sentenceId.isNotEmpty) {
+        final note = await SentenceNoteService.getSentenceNote(sentenceId);
+        if (mounted) controller.text = note?.note ?? '';
+      }
+      final hasNote = controller.text.trim().isNotEmpty;
+      if (!mounted) return;
 
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('句子笔记'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLines: 6,
-          minLines: 3,
-          decoration: const InputDecoration(
-            hintText: '记录句型要点、易错点或例句…',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('取消'),
-          ),
-          if (hasNote)
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(''),
-              style: TextButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.error,
-              ),
-              child: const Text('删除'),
+      final result = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('句子笔记'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLines: 6,
+            minLines: 3,
+            decoration: const InputDecoration(
+              hintText: '记录句型要点、易错点或例句…',
+              border: OutlineInputBorder(),
             ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(controller.text),
-            child: const Text('保存'),
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('取消'),
+            ),
+            if (hasNote)
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(''),
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                ),
+                child: const Text('删除'),
+              ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
 
-    if (result == null) return;
-    final trimmed = result.trim();
-    await SentenceNoteService.saveNote(_sentence, trimmed);
-    if (!mounted) return;
-    setState(() => _hasNote = trimmed.isNotEmpty);
+      if (result == null) return;
+      final trimmed = result.trim();
+      await SentenceNoteService.saveNote(_sentence, trimmed);
+      if (!mounted) return;
+      setState(() => _hasNote = trimmed.isNotEmpty);
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override

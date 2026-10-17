@@ -25,6 +25,17 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
   late Map<int, List<String>> _suggestions;
   late Map<int, bool> _searching;
 
+  /// 替换词输入框控制器：必须跨 build 复用并统一释放，
+  /// 否则每次 setState 都会新建 controller，导致光标/输入丢失且泄漏。
+  final Map<int, TextEditingController> _replacementControllers = {};
+
+  TextEditingController _replacementController(int index) {
+    return _replacementControllers.putIfAbsent(
+      index,
+      () => TextEditingController(text: _replacements[index] ?? ''),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -32,6 +43,15 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
     _replacements = {};
     _suggestions = {};
     _searching = {};
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _replacementControllers.values) {
+      controller.dispose();
+    }
+    _replacementControllers.clear();
+    super.dispose();
   }
 
   @override
@@ -152,7 +172,6 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
   Widget _buildMissingWordItem(int index) {
     final word = widget.missingWords[index];
     final action = _actions[index];
-    final replacement = _replacements[index];
     final suggestions = _suggestions[index] ?? [];
     final isSearching = _searching[index] ?? false;
 
@@ -215,9 +234,7 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
                           vertical: 8,
                         ),
                       ),
-                      controller: TextEditingController(
-                        text: replacement ?? '',
-                      ),
+                      controller: _replacementController(index),
                       onChanged: (value) {
                         _replacements[index] = value.trim();
                         _searchSuggestions(index, value.trim());
@@ -244,6 +261,7 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
                         onPressed: () {
                           setState(() {
                             _replacements[index] = suggestion;
+                            _replacementController(index).text = suggestion;
                           });
                         },
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -291,6 +309,7 @@ class _ImportWordsDialogState extends State<ImportWordsDialog> {
           if (action != MissingWordAction.replace) {
             _replacements.remove(index);
             _suggestions.remove(index);
+            _replacementControllers[index]?.clear();
           }
         });
       },

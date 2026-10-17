@@ -119,12 +119,13 @@ Future<void> showSentenceDetailSheet(
 
 /// 编辑句子笔记对话框（与 SentenceNoteBar 逻辑一致）
 Future<bool> _editSentenceNote(BuildContext context, Sentence sentence) async {
-  final existing = await SentenceNoteService.getSentenceNote(
-    sentence.id ?? '',
-  );
+  final existing = await SentenceNoteService.getSentenceNote(sentence.id ?? '');
   final controller = TextEditingController(text: existing?.note ?? '');
   final hasNote = controller.text.trim().isNotEmpty;
-  if (!context.mounted) return false;
+  if (!context.mounted) {
+    controller.dispose();
+    return false;
+  }
 
   final result = await showDialog<String>(
     context: context,
@@ -161,7 +162,11 @@ Future<bool> _editSentenceNote(BuildContext context, Sentence sentence) async {
     ),
   );
 
-  if (result == null) return false;
+  if (result == null) {
+    controller.dispose();
+    return false;
+  }
   await SentenceNoteService.saveNote(sentence, result.trim());
+  controller.dispose();
   return true;
 }
