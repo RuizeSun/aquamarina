@@ -729,32 +729,27 @@ class LearningService {
   }) async {
     final db = await DatabaseService.database;
 
-    Set<String>? bookWordSet;
-    if (bookId != null) {
-      final maps = await db.query(
-        'word_book_entries',
-        columns: ['word'],
-        where: 'book_id = ?',
-        whereArgs: [bookId],
-      );
-      bookWordSet = maps.map((m) => m['word'] as String).toSet();
-    }
+    // 词书过滤必须下推到 SQL：先 LIMIT 再在 Dart 里过滤会导致
+    // 从全库随机抽到的词大多不属于当前词书，最终数量远少于预期甚至为 0。
+    final bookFilter = bookId == null
+        ? ''
+        : '''
+        AND EXISTS (
+          SELECT 1 FROM word_book_entries e
+          WHERE e.book_id = ? AND e.word = r.word
+        )''';
+    final whereArgs = <Object?>[if (bookId != null) bookId];
 
     final limitClause = (count != null && count > 0) ? 'LIMIT $count' : '';
     final wordMaps = await db.rawQuery('''
       SELECT DISTINCT r.word FROM user_word_records r
       WHERE r.is_mastered = 1
+      $bookFilter
       ORDER BY RANDOM()
       $limitClause
-    ''');
+    ''', whereArgs);
 
-    var words = wordMaps.map((m) => m['word'] as String).toList();
-    if (bookWordSet != null) {
-      words = words.where((w) => bookWordSet!.contains(w)).toList();
-      if (count != null && count > 0 && words.length > count) {
-        words = words.sublist(0, count);
-      }
-    }
+    final words = wordMaps.map((m) => m['word'] as String).toList();
 
     // 词汇测试仅需要单词本身，直接返回（books 字段与测试逻辑无关，省略 JOIN 提升性能）
     return words.map((w) {
