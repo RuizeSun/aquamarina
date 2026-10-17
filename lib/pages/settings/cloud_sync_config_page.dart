@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../../models/cloud_sync_manifest.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
+import '../../../services/sync_capture_service.dart';
 import 'cloud_sync_progress.dart';
 
 /// 对象存储配置页。
@@ -31,6 +32,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
 
   bool _pathStyle = true;
   int _retainCount = CloudSyncConfig.defaultRetainCount;
+  bool _autoSync = true;
   bool _obscureAccessKey = true;
   bool _obscureSecretKey = true;
   bool _loading = true;
@@ -69,6 +71,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         _prefixController.text = config.prefix;
         _pathStyle = config.pathStyle;
         _retainCount = config.retainCount;
+        _autoSync = config.autoSync;
       }
       _accessKeyController.text = credentials?.accessKey ?? '';
       _secretKeyController.text = credentials?.secretKey ?? '';
@@ -86,6 +89,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       prefix: _prefixController.text,
       pathStyle: _pathStyle,
       retainCount: _retainCount,
+      autoSync: _autoSync,
     );
   }
 
@@ -211,6 +215,10 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       await CloudSyncSettings.saveConfig(resolvedConfig);
       await CloudSyncSettings.saveCredentials(resolvedCredentials);
       await CloudSyncSettings.saveDeviceName(_deviceNameController.text);
+      // 配置成功后开启变更捕获；失败不影响配置保存
+      try {
+        await SyncCaptureService.setCaptureEnabled(enabled: true);
+      } catch (_) {}
       if (!mounted) return;
       _showSnack('配置已保存');
       Navigator.of(context).pop(true);
@@ -283,6 +291,10 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
     );
     if (confirmed != true) return;
     await CloudSyncSettings.clearAll();
+    // 未配置云同步时停止捕获并清空 oplog，避免无处可去的变更持续累积
+    try {
+      await SyncCaptureService.setCaptureEnabled(enabled: false);
+    } catch (_) {}
     if (!mounted) return;
     _endpointController.clear();
     _bucketController.clear();
@@ -465,6 +477,13 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
                     onChanged: (value) {
                       if (value != null) setState(() => _retainCount = value);
                     },
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('启动 / 回到前台时自动同步'),
+                    subtitle: const Text('两次自动同步至少间隔 15 分钟；失败会静默重试，不影响手动同步'),
+                    value: _autoSync,
+                    onChanged: (value) => setState(() => _autoSync = value),
                   ),
                   _sectionTitle('访问凭据'),
                   TextFormField(

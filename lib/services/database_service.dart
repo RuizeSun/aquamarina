@@ -628,6 +628,12 @@ class DatabaseService {
       'baseline_hlc',
       "TEXT NOT NULL DEFAULT ''",
     );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'capture_enabled',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
     logInfo('DatabaseService', 'v13 同步 schema 迁移完成');
   }
 

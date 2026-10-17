@@ -94,6 +94,7 @@ void main() {
     });
 
     await DatabaseService.migrateToV13(db);
+    await db.update('sync_meta', {'capture_enabled': 1}, where: 'id = 1');
 
     final books = await db.query('word_books');
     expect(books.first['uuid'], isNotEmpty);
@@ -128,6 +129,7 @@ void main() {
 
   test('触发器捕获 INSERT / UPDATE 增量 / DELETE 与抑制标记', () async {
     await DatabaseService.migrateToV13(db);
+    await db.update('sync_meta', {'capture_enabled': 1}, where: 'id = 1');
 
     await db.insert('user_word_records', {
       'word': 'apple',
@@ -199,5 +201,23 @@ void main() {
       'review_count': 0,
     });
     expect(await _oplogCount(db, 'user_word_records'), before + 1);
+  });
+
+  test('未启用捕获时不写 oplog（避免未配置云同步时无限增长）', () async {
+    await DatabaseService.migrateToV13(db);
+    await db.insert('word_notes', {
+      'word': 'apple',
+      'note': 'not captured',
+      'is_favorited': 0,
+    });
+    expect(await _oplogCount(db, 'word_notes'), 0);
+
+    await db.update('sync_meta', {'capture_enabled': 1}, where: 'id = 1');
+    await db.insert('word_notes', {
+      'word': 'banana',
+      'note': 'captured',
+      'is_favorited': 0,
+    });
+    expect(await _oplogCount(db, 'word_notes'), 1);
   });
 }

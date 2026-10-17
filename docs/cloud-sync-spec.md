@@ -150,7 +150,7 @@ for chunk in pull():
 | 2 | 设备隔离快照上传/下载 + manifest（引导/灾备能力） | ✅ 已完成 |
 | 3 | schema v13 + 触发器生成器（`sentence_sets` 入库暂缓） | ✅ 已完成（DB 内 13 张表） |
 | 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
-| 5 | 自动同步编排、GC、冲突/状态 UI | 🚧 手动「增量同步」已接入；自动触发 / GC 待开始 |
+| 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 自动同步（启动/回前台 + 15 分钟冷却）、保守 chunk GC 已完成；冲突明细 UI 待补 |
 | 6 | 收敛性/幂等/崩溃/迁移测试与文档 | 🚧 单测 + 真实 S3 双设备 E2E 已通过；崩溃注入待补 |
 
 > 阶段 2 的快照能力不会白做：它就是阶段 3+ 的 checkpoint/bootstrap 载体。
@@ -171,19 +171,22 @@ for chunk in pull():
 | `lib/services/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
 | `lib/services/sync_apply_service.dart` | 幂等应用、行版本门禁、计数增量、墓碑、父级重试 |
 | `lib/services/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
+| `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、15 分钟冷却、并发保护 |
+| `lib/services/cloud_sync_maintenance_service.dart` | 保守 chunk GC（每设备保留最近 1000 个 + 180 天） |
 
 已通过的验证：
 
 - `flutter analyze`：新增文件无告警；
-- 183 个测试通过（含 v13 迁移、触发器捕获、捕获/应用引擎、词书父级重试、墓碑与计数）；
+- 186 个测试通过（含 v13 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、自动同步配置）；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、**双设备增量同步收敛**）。
 
 ### 当前已知限制
 
 - `sentence_sets` 元数据仍在 SharedPreferences 中，暂只通过完整快照同步；
-- 增量同步为手动触发；自动同步、GC 与冲突明细 UI 待下一阶段；
+- 冲突明细 UI 与崩溃注入测试待补；远程 GC 采用保守策略：
+  离线超过 180 天的设备可能错过已清理的 chunk，可用完整快照恢复；
 - 首次接入云同步时，历史数据不会被追溯为 oplog：
   建议先「立即上传备份」并在其它设备「从云端恢复」，再使用增量同步；
-- 未配置云同步时触发器仍会记录 oplog（用于后续启用），长期不启用会占用少量空间，
-  后续将通过「未配置时定期清理」或 `capture_enabled` 开关解决。
+- 未配置云同步时默认不捕获（`sync_meta.capture_enabled = 0`），
+  配置成功后自动开启；清除配置会停止捕获并清空 oplog。
 

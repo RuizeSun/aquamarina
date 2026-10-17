@@ -6,6 +6,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/cloud_sync_manifest.dart';
 import '../models/sync_op.dart';
 import 'database_service.dart';
+import 'sync_schema.dart';
 import 'sync_table_spec.dart';
 
 /// 一批待上传的本地操作。
@@ -224,6 +225,20 @@ class SyncCaptureService {
         await txn.delete(spec.oplogTable);
       }
     });
+  }
+
+  /// 开启 / 关闭本地变更捕获。
+  ///
+  /// 关闭时同时清空 oplog：未配置云同步时不保留无处可去的变更记录。
+  static Future<void> setCaptureEnabled({
+    required bool enabled,
+    Database? db,
+  }) async {
+    final database = await _db(db);
+    await SyncSchema.setCaptureEnabled(database, enabled);
+    if (!enabled) {
+      await clearAll(db: database);
+    }
   }
 
   static SyncOp _rowToOp(

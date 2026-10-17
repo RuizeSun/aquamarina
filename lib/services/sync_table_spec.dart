@@ -96,6 +96,7 @@ class SyncTableSpec {
     return 'CREATE TRIGGER IF NOT EXISTS "$name" '
         'AFTER $event ON "$table" '
         'WHEN (SELECT "applying" FROM "sync_meta" WHERE "id" = 1) = 0 '
+        'AND (SELECT "capture_enabled" FROM "sync_meta" WHERE "id" = 1) = 1 '
         'BEGIN\n  $body;\nEND';
   }
 

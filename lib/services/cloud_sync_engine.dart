@@ -2,6 +2,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/cloud_sync_manifest.dart';
 import '../models/sync_op.dart';
+import 'cloud_sync_maintenance_service.dart';
 import 'cloud_sync_service.dart';
 import 'cloud_sync_settings.dart';
 import 'database_service.dart';
@@ -84,7 +85,10 @@ class CloudSyncEngine {
   }) async {
     final db = await _db();
     final result = CloudSyncRunResult();
-    await db.update('sync_meta', {'device_id': deviceId}, where: 'id = 1');
+    await db.update('sync_meta', {
+      'device_id': deviceId,
+      'capture_enabled': 1,
+    }, where: 'id = 1');
 
     if (pull) {
       await _pull(db, result);
@@ -92,6 +96,12 @@ class CloudSyncEngine {
     if (push) {
       await _push(db, result, maxPushBatches);
     }
+    // 保守清理历史 chunk（内部有 7 天冷却，失败不影响同步）
+    await CloudSyncMaintenanceService.maybePruneOldChunks(
+      config: config,
+      storage: storage,
+      db: db,
+    );
 
     result.remainingLocalOps = await SyncCaptureService.pendingCount(db: db);
     try {

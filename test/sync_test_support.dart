@@ -1,5 +1,6 @@
 import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/database_service.dart';
+import 'package:aquamarina/services/sync_schema.dart';
 import 'package:aquamarina/services/sync_table_spec.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -38,6 +39,7 @@ Future<Database> openSyncTestDb() async {
   );
   await createSyncTestTables(db);
   await DatabaseService.migrateToV13(db);
+  await SyncSchema.setCaptureEnabled(db, true);
   return db;
 }
 

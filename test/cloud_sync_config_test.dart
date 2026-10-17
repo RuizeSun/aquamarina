@@ -143,6 +143,21 @@ void main() {
       expect(restored.prefix, 'app/data');
       expect(restored.pathStyle, isFalse);
       expect(restored.retainCount, 10);
+      expect(restored.autoSync, isTrue);
+    });
+
+    test('auto_sync 缺省为 true，显式关闭可持久化', () {
+      final open = CloudSyncConfig.create(
+        endpointInput: 'https://example.com',
+        bucket: 'valid-bucket',
+        region: 'us-east-1',
+        autoSync: false,
+      );
+      final fromJson = CloudSyncConfig.fromJson(open.toJson());
+      expect(fromJson.autoSync, isFalse);
+
+      final legacy = open.toJson()..remove('auto_sync');
+      expect(CloudSyncConfig.fromJson(legacy).autoSync, isTrue);
     });
   });
 

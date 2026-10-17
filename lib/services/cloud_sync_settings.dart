@@ -87,6 +87,9 @@ class CloudSyncConfig {
   final bool pathStyle;
   final int retainCount;
 
+  /// 启动 / 回到前台时自动增量同步（默认开启）。
+  final bool autoSync;
+
   const CloudSyncConfig({
     required this.endpoint,
     this.port,
@@ -96,6 +99,7 @@ class CloudSyncConfig {
     required this.prefix,
     required this.pathStyle,
     required this.retainCount,
+    this.autoSync = true,
   });
 
   bool get isConfigured => endpoint.isNotEmpty && bucket.isNotEmpty;
@@ -113,6 +117,7 @@ class CloudSyncConfig {
     String prefix = defaultPrefix,
     bool pathStyle = true,
     int retainCount = defaultRetainCount,
+    bool autoSync = true,
   }) {
     final parsed = S3Endpoint.parse(endpointInput);
     final bucketName = bucket.trim();
@@ -138,6 +143,7 @@ class CloudSyncConfig {
       prefix: normalizePrefix(prefix),
       pathStyle: pathStyle,
       retainCount: retainCount,
+      autoSync: autoSync,
     );
   }
 
@@ -222,6 +228,7 @@ class CloudSyncConfig {
       prefix: prefix,
       pathStyle: pathStyle,
       retainCount: retainCount.clamp(minRetainCount, maxRetainCount),
+      autoSync: json['auto_sync'] is bool ? json['auto_sync'] as bool : true,
     );
   }
 
@@ -234,6 +241,7 @@ class CloudSyncConfig {
     'prefix': prefix,
     'path_style': pathStyle,
     'retain_count': retainCount,
+    'auto_sync': autoSync,
   };
 
   CloudSyncConfig copyWith({
@@ -245,6 +253,7 @@ class CloudSyncConfig {
     String? prefix,
     bool? pathStyle,
     int? retainCount,
+    bool? autoSync,
   }) {
     return CloudSyncConfig(
       endpoint: endpoint ?? this.endpoint,
@@ -255,6 +264,7 @@ class CloudSyncConfig {
       prefix: prefix ?? this.prefix,
       pathStyle: pathStyle ?? this.pathStyle,
       retainCount: retainCount ?? this.retainCount,
+      autoSync: autoSync ?? this.autoSync,
     );
   }
 }
@@ -265,16 +275,22 @@ class CloudSyncRuntimeState {
   final String? lastUploadKey;
   final String? lastRestoredDeviceId;
   final String? lastError;
+  final DateTime? lastAutoSyncAt;
+  final DateTime? lastGcAt;
 
   const CloudSyncRuntimeState({
     this.lastSuccessAt,
     this.lastUploadKey,
     this.lastRestoredDeviceId,
     this.lastError,
+    this.lastAutoSyncAt,
+    this.lastGcAt,
   });
 
   factory CloudSyncRuntimeState.fromJson(Map<String, dynamic> json) {
     final lastSuccess = json['last_success_at'];
+    final lastAuto = json['last_auto_sync_at'];
+    final lastGc = json['last_gc_at'];
     return CloudSyncRuntimeState(
       lastSuccessAt: lastSuccess is int
           ? DateTime.fromMillisecondsSinceEpoch(lastSuccess)
@@ -282,6 +298,12 @@ class CloudSyncRuntimeState {
       lastUploadKey: json['last_upload_key'] as String?,
       lastRestoredDeviceId: json['last_restored_device_id'] as String?,
       lastError: json['last_error'] as String?,
+      lastAutoSyncAt: lastAuto is int
+          ? DateTime.fromMillisecondsSinceEpoch(lastAuto)
+          : null,
+      lastGcAt: lastGc is int
+          ? DateTime.fromMillisecondsSinceEpoch(lastGc)
+          : null,
     );
   }
 
@@ -290,6 +312,8 @@ class CloudSyncRuntimeState {
     'last_upload_key': lastUploadKey,
     'last_restored_device_id': lastRestoredDeviceId,
     'last_error': lastError,
+    'last_auto_sync_at': lastAutoSyncAt?.millisecondsSinceEpoch,
+    'last_gc_at': lastGcAt?.millisecondsSinceEpoch,
   };
 
   CloudSyncRuntimeState copyWith({
@@ -297,6 +321,8 @@ class CloudSyncRuntimeState {
     String? lastUploadKey,
     String? lastRestoredDeviceId,
     String? lastError,
+    DateTime? lastAutoSyncAt,
+    DateTime? lastGcAt,
     bool clearError = false,
   }) {
     return CloudSyncRuntimeState(
@@ -304,6 +330,8 @@ class CloudSyncRuntimeState {
       lastUploadKey: lastUploadKey ?? this.lastUploadKey,
       lastRestoredDeviceId: lastRestoredDeviceId ?? this.lastRestoredDeviceId,
       lastError: clearError ? null : (lastError ?? this.lastError),
+      lastAutoSyncAt: lastAutoSyncAt ?? this.lastAutoSyncAt,
+      lastGcAt: lastGcAt ?? this.lastGcAt,
     );
   }
 }

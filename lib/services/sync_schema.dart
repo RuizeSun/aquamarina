@@ -21,7 +21,8 @@ class SyncSchema {
       "applying" INTEGER NOT NULL DEFAULT 0,
       "hlc_ms" INTEGER NOT NULL DEFAULT 0,
       "hlc_counter" INTEGER NOT NULL DEFAULT 0,
-      "baseline_hlc" TEXT NOT NULL DEFAULT ''
+      "baseline_hlc" TEXT NOT NULL DEFAULT '',
+      "capture_enabled" INTEGER NOT NULL DEFAULT 0
     )
     ''',
     '''
@@ -71,6 +72,16 @@ class SyncSchema {
 
   static const String seedMetaSql =
       'INSERT OR IGNORE INTO "sync_meta" ("id") VALUES (1)';
+
+  /// 开启 / 关闭变更捕获。
+  ///
+  /// 未配置云同步时默认关闭，避免 oplog 无限增长；
+  /// 首次执行同步时由引擎开启（此前历史数据建议用完整快照引导）。
+  static Future<void> setCaptureEnabled(Database db, bool enabled) async {
+    await db.update('sync_meta', {
+      'capture_enabled': enabled ? 1 : 0,
+    }, where: 'id = 1');
+  }
 
   /// 幂等安装：系统表 → oplog 表 → 索引 → 触发器。
   ///
