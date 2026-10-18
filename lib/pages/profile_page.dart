@@ -35,7 +35,11 @@ class ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadData() async {
-    setState(() => _isLoading = true);
+    // 首次加载时显示 loading，后续同步/切 Tab 触发的刷新静默更新。
+    final isFirstLoad = _stats == null;
+    if (isFirstLoad) {
+      setState(() => _isLoading = true);
+    }
 
     try {
       final summary = await Future.wait<dynamic>([

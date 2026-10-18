@@ -5,6 +5,7 @@ import '../models/ai_sentence.dart';
 import '../services/ai_sentence_set_service.dart';
 import '../services/ai_sentence_service.dart';
 import '../services/ai_profile_service.dart';
+import '../services/log_service.dart';
 import 'ai_sentence_set_list_page.dart';
 import 'ai_practice_session_page.dart';
 import 'wrong_sentence_book_page.dart';
@@ -19,10 +20,10 @@ class AiPracticePage extends StatefulWidget {
   const AiPracticePage({super.key});
 
   @override
-  State<AiPracticePage> createState() => _AiPracticePageState();
+  State<AiPracticePage> createState() => AiPracticePageState();
 }
 
-class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
+class AiPracticePageState extends State<AiPracticePage> with RouteAware {
   final SentenceSetService _setService = SentenceSetService.instance;
   final AiSentenceService _sentenceService = AiSentenceService();
   final AiProfileService _profileService = AiProfileService();
@@ -521,6 +522,18 @@ class _AiPracticePageState extends State<AiPracticePage> with RouteAware {
         ),
       ),
     );
+  }
+
+  /// 供 MainShell 在云同步应用远端变更或切 Tab 时刷新。
+  ///
+  /// 后台刷新不应把异常抛给全局未捕获处理器，失败只记录日志，
+  /// 下一次切换 Tab / 同步会再次尝试。
+  Future<void> refresh() async {
+    try {
+      await _refreshAll();
+    } catch (e) {
+      logWarning('AiPracticePage', '刷新句式练习数据失败: $e');
+    }
   }
 
   /// 下拉刷新：重新加载句式集、练习设置与进度

@@ -11,6 +11,7 @@ import 'cloud_sync_settings.dart';
 import 'cloud_sync_version_gate_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
+import 'sync_data_change_notifier.dart';
 import 'sync_schema.dart';
 
 /// 首次接入时用户选择的数据处理方式。
@@ -165,6 +166,9 @@ class CloudSyncIntroductionService {
               '首次接入合并完成 inserted=${result.inserted} '
                   'updated=${result.updated} conflicts=${result.conflicts}',
             );
+            if (result.inserted > 0 || result.updated > 0) {
+              SyncDataChangeNotifier.instance.notifyRemoteDataChanged();
+            }
             return result;
           } finally {
             if (await file.exists()) await file.delete();
@@ -193,6 +197,8 @@ class CloudSyncIntroductionService {
         case CloudSyncIntroAction.useCloud:
           onProgress?.call('正在使用云端数据覆盖本机…');
           await service.restoreLatestDatasetSnapshot();
+          // 快照覆盖后业务表已经变化，即使后续增量没有新 chunk，也要刷新 UI。
+          SyncDataChangeNotifier.instance.notifyRemoteDataChanged();
           await CloudSyncSettings.saveIntroDecision(
             datasetId,
             action.storageValue,

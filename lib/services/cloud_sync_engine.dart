@@ -15,6 +15,7 @@ import 'log_service.dart';
 import 's3_storage_service.dart';
 import 'sync_apply_service.dart';
 import 'sync_capture_service.dart';
+import 'sync_data_change_notifier.dart';
 
 /// 同步进度阶段。
 enum CloudSyncRunPhase { pull, push }
@@ -25,6 +26,9 @@ class CloudSyncRunResult {
   int pushedOps = 0;
   int pulledChunks = 0;
   int pulledOps = 0;
+
+  /// 本次实际写入本地业务表的远端操作数（用于判断是否需要刷新 UI）。
+  int appliedOps = 0;
   int duplicates = 0;
   int conflicts = 0;
   int skippedMissingParent = 0;
@@ -214,15 +218,22 @@ class CloudSyncEngine {
         ((metaRows.first['restored_watermarks'] as int?) ?? 0) == 1;
 
     if (pull && !_shouldStop(result, deadline, isCancelled)) {
-      await _pull(
-        db,
-        result,
-        baseline,
-        restoredWatermarks: restoredWatermarks,
-        deadline: deadline,
-        isCancelled: isCancelled,
-        onProgress: onProgress,
-      );
+      try {
+        await _pull(
+          db,
+          result,
+          baseline,
+          restoredWatermarks: restoredWatermarks,
+          deadline: deadline,
+          isCancelled: isCancelled,
+          onProgress: onProgress,
+        );
+      } finally {
+        // 即使拉取中途失败/超时，已经提交到业务表的变更也必须通知 UI。
+        if (result.pulledChunks > 0 || result.appliedOps > 0) {
+          SyncDataChangeNotifier.instance.notifyRemoteDataChanged();
+        }
+      }
     }
     if (push &&
         !result.cancelled &&
@@ -608,6 +619,7 @@ class CloudSyncEngine {
         isCancelled: isCancelled,
       );
       result.pulledOps += ops.length;
+      result.appliedOps += apply.applied;
       if (apply.deferred) {
         result.budgetExhausted = !apply.cancelled;
         result.cancelled = apply.cancelled;

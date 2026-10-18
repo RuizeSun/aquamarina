@@ -9,6 +9,7 @@ import 'package:aquamarina/services/cloud_sync_engine.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
 import 'package:aquamarina/services/database_service.dart';
 import 'package:aquamarina/services/sync_capture_service.dart';
+import 'package:aquamarina/services/sync_data_change_notifier.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -94,6 +95,48 @@ void main() {
     expect(result.pulledOps, 0);
     rows = await db.query('word_notes');
     expect(rows.length, 1);
+  });
+
+  test('拉取到新数据后通知 UI 刷新，无新数据与纯上传不重复通知', () async {
+    var notifications = 0;
+    void listener() => notifications++;
+    SyncDataChangeNotifier.instance.addListener(listener);
+    addTearDown(() => SyncDataChangeNotifier.instance.removeListener(listener));
+
+    final ops = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'apple'},
+        data: {
+          'note': 'from B',
+          'is_favorited': 0,
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    storage.objects[_chunkKey(config, _deviceB, ops)] = SyncChunkCodec.encode(
+      ops,
+    );
+
+    await engine().run(push: false);
+    expect(notifications, 1);
+
+    // 已应用过的 chunk 不会再次通知。
+    await engine().run(push: false);
+    expect(notifications, 1);
+
+    // 只上传本机变更不涉及 UI 数据刷新。
+    await db.insert('word_notes', {
+      'word': 'banana',
+      'note': 'from A',
+      'is_favorited': 0,
+      'updated_at': '2026-10-02T00:00:00Z',
+    });
+    await engine().run(pull: false);
+    expect(notifications, 1);
   });
 
   test('推送本机 oplog 为不可变 chunk，成功后清空待上传', () async {

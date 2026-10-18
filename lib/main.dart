@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'pages/search_page.dart';
 import 'pages/vocabulary_page.dart';
-import 'pages/ai_practice_page.dart' show AiPracticePage, routeObserver;
+import 'pages/ai_practice_page.dart'
+    show AiPracticePage, AiPracticePageState, routeObserver;
 import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +15,7 @@ import 'services/cloud_sync_settings.dart';
 import 'services/cloud_sync_version_gate_service.dart';
 import 'services/database_service.dart';
 import 'services/dictionary_service.dart';
+import 'services/sync_data_change_notifier.dart';
 import 'services/tts_service.dart';
 import 'services/ai_profile_service.dart';
 import 'services/theme_mode_service.dart';
@@ -283,6 +285,8 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _selectedIndex = 0;
   final GlobalKey<VocabularyPageState> _vocabularyKey = GlobalKey();
+  final GlobalKey<AiPracticePageState> _aiPracticeKey =
+      GlobalKey<AiPracticePageState>();
   final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   /// 启动后延迟检查更新的定时器（dispose 时必须取消，避免泄漏与测试报错）
@@ -298,6 +302,8 @@ class _MainShellState extends State<MainShell> {
     TtsService.instance.init();
     // 云同步版本提示：后台同步只发布状态，由主界面负责弹窗。
     CloudSyncVersionGateService.instance.notice.addListener(_onVersionNotice);
+    // 自动同步把远端数据写入本地后，立即刷新当前可见的主 Tab。
+    SyncDataChangeNotifier.instance.addListener(_onRemoteDataChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(CloudSyncVersionGateService.instance.restore());
     });
@@ -310,6 +316,7 @@ class _MainShellState extends State<MainShell> {
     CloudSyncVersionGateService.instance.notice.removeListener(
       _onVersionNotice,
     );
+    SyncDataChangeNotifier.instance.removeListener(_onRemoteDataChanged);
     _updateTimer?.cancel();
     _updateTimer = null;
     super.dispose();
@@ -319,6 +326,21 @@ class _MainShellState extends State<MainShell> {
     final result = CloudSyncVersionGateService.instance.notice.value;
     if (!mounted || result == null || _versionDialogShowing) return;
     unawaited(_showVersionDialog(result));
+  }
+
+  /// 自动 / 手动云同步应用远端变更后刷新当前可见的主 Tab。
+  ///
+  /// 隐藏的 Tab 在用户切换时由 [_onTabSelected] 刷新，避免每次同步都对
+  /// 所有常驻页面重复查询数据库。
+  void _onRemoteDataChanged() {
+    if (!mounted) return;
+    if (_selectedIndex == 1) {
+      _vocabularyKey.currentState?.refresh();
+    } else if (_selectedIndex == 2) {
+      _aiPracticeKey.currentState?.refresh();
+    } else if (_selectedIndex == 3) {
+      _profileKey.currentState?.refresh();
+    }
   }
 
   Future<void> _showVersionDialog(CloudSyncCompatibilityResult result) async {
@@ -467,6 +489,10 @@ class _MainShellState extends State<MainShell> {
     if (index == 1) {
       _vocabularyKey.currentState?.refresh();
     }
+    // 切到句型练习Tab时立即刷新
+    if (index == 2) {
+      _aiPracticeKey.currentState?.refresh();
+    }
     // 切到个人Tab时立即刷新
     if (index == 3) {
       _profileKey.currentState?.refresh();
@@ -481,7 +507,7 @@ class _MainShellState extends State<MainShell> {
         children: [
           const SearchPage(),
           VocabularyPage(key: _vocabularyKey),
-          const AiPracticePage(),
+          AiPracticePage(key: _aiPracticeKey),
           ProfilePage(key: _profileKey),
         ],
       ),
