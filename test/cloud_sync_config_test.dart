@@ -161,6 +161,25 @@ void main() {
       expect(CloudSyncConfig.fromJson(legacy).autoSync, isTrue);
     });
 
+    test('后端身份只随 endpoint / bucket / prefix 等变化', () {
+      final config = CloudSyncConfig.create(
+        endpointInput: 'https://example.com',
+        bucket: 'valid-bucket',
+        region: 'us-east-1',
+        prefix: 'app/data',
+      );
+      expect(config.backendIdentity, config.backendIdentity);
+      final same = config.copyWith(
+        retainCount: 10,
+        autoSyncIntervalMinutes: 30,
+      );
+      expect(same.backendIdentity, config.backendIdentity);
+      final moved = config.copyWith(prefix: 'other/data');
+      expect(moved.backendIdentity, isNot(config.backendIdentity));
+      final otherBucket = config.copyWith(bucket: 'another-bucket');
+      expect(otherBucket.backendIdentity, isNot(config.backendIdentity));
+    });
+
     test('自动同步间隔持久化、旧配置兼容与范围校验', () {
       final config = CloudSyncConfig.create(
         endpointInput: 'https://example.com',

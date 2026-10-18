@@ -265,6 +265,34 @@ void main() {
     expect(await _oplogCount(db, 'word_notes'), 1);
   });
 
+  test('v18 迁移：后端标识与恢复水位列', () async {
+    await DatabaseService.migrateToV13(db);
+    await DatabaseService.migrateToV18(db);
+    expect(
+      await _columnsOf(db, 'sync_meta'),
+      containsAll(['backend_id', 'restored_watermarks']),
+    );
+
+    const source = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    final watermark = SyncWatermark(
+      deviceId: source,
+      lastHlc: SyncHlc(3000, 0).value,
+      lastChunkKey: 'prefix/devices/$source/chunks/key.jsonl.gz',
+    );
+    await SyncSchema.resetRuntimeState(
+      db,
+      baseline: DateTime.utc(2026, 10, 18),
+      watermarks: [watermark],
+    );
+
+    final stateRows = await db.query('sync_state');
+    expect(stateRows.single['device_id'], source);
+    expect(stateRows.single['last_hlc'], watermark.lastHlc);
+    expect(stateRows.single['last_chunk_key'], watermark.lastChunkKey);
+    final meta = (await db.query('sync_meta')).single;
+    expect(meta['restored_watermarks'], 1);
+  });
+
   test('v15 迁移：补齐水位列并回填 chunk 起始 HLC', () async {
     await DatabaseService.migrateToV13(db);
     await DatabaseService.migrateToV15(db);

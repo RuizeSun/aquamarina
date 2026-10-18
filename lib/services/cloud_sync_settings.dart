@@ -116,6 +116,20 @@ class CloudSyncConfig {
 
   bool get isConfigured => endpoint.isNotEmpty && bucket.isNotEmpty;
 
+  /// 后端身份指纹：用于检测 endpoint / bucket / prefix 等是否被切换。
+  ///
+  /// 不含任何密钥；仅用于在配置切换时清理旧的同步水位与去重记录。
+  String get backendIdentity => [
+    'v1',
+    endpoint.toLowerCase(),
+    port?.toString() ?? '',
+    useSsl ? '1' : '0',
+    region.toLowerCase(),
+    bucket.toLowerCase(),
+    prefix,
+    pathStyle ? '1' : '0',
+  ].join('|');
+
   String get displayEndpoint {
     final scheme = useSsl ? 'https' : 'http';
     return port == null ? '$scheme://$endpoint' : '$scheme://$endpoint:$port';

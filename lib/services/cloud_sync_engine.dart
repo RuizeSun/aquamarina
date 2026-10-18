@@ -137,6 +137,7 @@ class CloudSyncEngine {
     final db = await _db();
     final result = CloudSyncRunResult();
     final deadline = DateTime.now().add(maxDuration);
+    await _ensureBackend(db);
     await db.update('sync_meta', {
       'device_id': deviceId,
       'capture_enabled': 1,
@@ -144,19 +145,23 @@ class CloudSyncEngine {
 
     final metaRows = await db.query(
       'sync_meta',
-      columns: ['baseline_hlc'],
+      columns: ['baseline_hlc', 'restored_watermarks'],
       where: 'id = 1',
       limit: 1,
     );
     final baseline = metaRows.isEmpty
         ? ''
         : (metaRows.first['baseline_hlc'] as String? ?? '');
+    final restoredWatermarks =
+        metaRows.isNotEmpty &&
+        ((metaRows.first['restored_watermarks'] as int?) ?? 0) == 1;
 
     if (pull && !_shouldStop(result, deadline, isCancelled)) {
       await _pull(
         db,
         result,
         baseline,
+        restoredWatermarks: restoredWatermarks,
         deadline: deadline,
         isCancelled: isCancelled,
         onProgress: onProgress,
@@ -218,10 +223,55 @@ class CloudSyncEngine {
   CloudSyncDeviceMetaService get _meta =>
       CloudSyncDeviceMetaService(config: config, storage: storage);
 
+  /// 配置（endpoint / bucket / prefix 等）切换后，旧后端的同步水位、
+  /// 已应用记录、行版本与墓碑都不再适用。保留 oplog（本地待上传变更）
+  /// 与设备标识，但清空后端相关的运行时状态，避免 `startAfter` 使用旧键、
+  /// `sync_applied` 误判重复或旧 HLC 门禁跳过新数据。
+  Future<void> _ensureBackend(Database db) async {
+    final identity = config.backendIdentity;
+    final rows = await db.query(
+      'sync_meta',
+      columns: ['backend_id'],
+      where: 'id = 1',
+      limit: 1,
+    );
+    final current = rows.isEmpty
+        ? ''
+        : (rows.first['backend_id'] as String? ?? '');
+    if (current == identity) return;
+    await db.transaction((txn) async {
+      if (current.isNotEmpty) {
+        await txn.delete('sync_state');
+        await txn.delete('sync_chunks');
+        await txn.delete('sync_applied');
+        await txn.delete('sync_row_versions');
+        await txn.delete('sync_tombstones');
+        await txn.delete('sync_conflicts');
+        logWarning('CloudSyncEngine', '检测到对象存储配置已切换，已清理旧后端的同步水位与去重记录');
+        await txn.update('sync_meta', {
+          'backend_id': identity,
+          'baseline_hlc': '',
+          'restored_watermarks': 0,
+          'head_hlc': '',
+          'head_key': '',
+          'head_chunk_count': 0,
+          'head_dirty': 0,
+          'total_ops': 0,
+        }, where: 'id = 1');
+      } else {
+        // 首次记录后端身份（含从旧版本升级）：保留现有水位与恢复基线。
+        await txn.update('sync_meta', {
+          'backend_id': identity,
+        }, where: 'id = 1');
+      }
+    });
+  }
+
   Future<void> _pull(
     Database db,
     CloudSyncRunResult result,
     String baseline, {
+    required bool restoredWatermarks,
     required DateTime deadline,
     bool Function()? isCancelled,
     void Function(CloudSyncRunPhase phase, int done, int total)? onProgress,
@@ -249,9 +299,9 @@ class CloudSyncEngine {
 
     for (final sourceDevice in deviceIds) {
       final isOwn = sourceDevice == deviceId;
-      // 恢复快照后需要重放本机在 baseline 之后上传的 chunk；
-      // 没有基线时本机 chunk 已包含在本地数据中，直接跳过。
-      if (isOwn && baseline.isEmpty) continue;
+      // 旧格式恢复只有 baseline；新格式恢复会写入来源水位，本机也按水位
+      // 只补齐快照之后上传的 chunk。
+      if (isOwn && baseline.isEmpty && !restoredWatermarks) continue;
 
       final stateRows = await db.query(
         'sync_state',
@@ -263,14 +313,14 @@ class CloudSyncEngine {
       final lastKey = (state?['last_chunk_key'] as String?) ?? '';
       final lastHlc = (state?['last_hlc'] as String?) ?? '';
 
-      if (!isOwn) {
-        final head = await _meta.fetchHead(sourceDevice);
-        if (head != null &&
-            lastHlc.isNotEmpty &&
-            _compareHlc(head.latestHlc, lastHlc) <= 0) {
-          result.skippedByHead++;
-          continue;
-        }
+      // head 快速路径对本机同样适用：恢复水位已经明确了本机进度时，
+      // 不必每轮都 LIST 自己的全部 chunk。
+      final head = await _meta.fetchHead(sourceDevice);
+      if (head != null &&
+          lastHlc.isNotEmpty &&
+          _compareHlc(head.latestHlc, lastHlc) <= 0) {
+        result.skippedByHead++;
+        continue;
       }
 
       final objects = await storage.list(
@@ -282,7 +332,14 @@ class CloudSyncEngine {
           objects
               .where((o) => _isChunkKey(o.key))
               .where((o) => !appliedKeys.contains(o.key))
-              .where((o) => !_isAtOrBeforeBaseline(o.key, baseline))
+              .where(
+                (o) => _includeForRestore(
+                  o.key,
+                  lastHlc,
+                  baseline,
+                  restoredWatermarks: restoredWatermarks,
+                ),
+              )
               .toList()
             ..sort((a, b) => a.key.compareTo(b.key));
       if (candidates.isEmpty) continue;
@@ -663,6 +720,26 @@ class CloudSyncEngine {
       // 无法解析时视为“有更新”，强制走一次受控 LIST。
       return 1;
     }
+  }
+
+  /// 恢复快照后决定某个 chunk 是否需要拉取。
+  ///
+  /// - 新格式（[restoredWatermarks]）：按来源设备水位精确过滤，水位之前
+  ///   的 chunk 已包含在快照里；
+  /// - 旧格式：退回全局 baseline（快照创建时间）。
+  bool _includeForRestore(
+    String key,
+    String lastHlc,
+    String baseline, {
+    required bool restoredWatermarks,
+  }) {
+    if (restoredWatermarks) {
+      if (lastHlc.isEmpty) return true;
+      final start = _chunkStartHlc(key);
+      if (start == null) return true;
+      return _compareHlc(start.value, lastHlc) > 0;
+    }
+    return !_isAtOrBeforeBaseline(key, baseline);
   }
 
   /// 备份恢复后，基线之前的 chunk 已包含在快照中，应跳过以免重复计数。

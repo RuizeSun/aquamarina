@@ -265,6 +265,20 @@ class CloudSyncMaintenanceService {
             where: 'deleted_at < ? AND deleted_hlc < ?',
             whereArgs: [cutoff, globalMinHlc.value],
           );
+          // 行版本与墓碑同寿命清理：所有活跃设备都已越过且超过保留期后，
+          // 不再需要用它阻止极端迟到的事件；避免表无限增长。
+          final cutoffHlc = SyncHlc(
+            DateTime.now()
+                .toUtc()
+                .subtract(tombstoneRetention)
+                .millisecondsSinceEpoch,
+            0,
+          ).value;
+          await txn.delete(
+            'sync_row_versions',
+            where: 'hlc < ? AND hlc < ?',
+            whereArgs: [cutoffHlc, globalMinHlc.value],
+          );
         }
       });
     } catch (e) {

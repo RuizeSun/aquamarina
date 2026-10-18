@@ -3,6 +3,53 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/sync_op.dart';
 import 'sync_table_spec.dart';
 
+/// 快照中携带的“来源设备已应用到哪个 HLC”。
+///
+/// 新格式备份会把同步水位写入 `backup_meta.json` 后再删除 `sync_*` 表。
+/// 恢复时据此重建 `sync_state`，比单一“备份创建时间”更准确地判断
+/// 哪些 chunk 已经包含在快照中。
+class SyncWatermark {
+  final String deviceId;
+  final String lastHlc;
+  final String lastChunkKey;
+
+  const SyncWatermark({
+    required this.deviceId,
+    required this.lastHlc,
+    required this.lastChunkKey,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'device_id': deviceId,
+    'last_hlc': lastHlc,
+    'last_chunk_key': lastChunkKey,
+  };
+
+  /// 解析并校验；无效条目返回 null（旧备份兼容）。
+  static SyncWatermark? fromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final deviceId = raw['device_id'];
+    final lastHlc = raw['last_hlc'];
+    final lastChunkKey = raw['last_chunk_key'];
+    if (deviceId is! String ||
+        !RegExp(r'^[a-fA-F0-9-]{8,64}$').hasMatch(deviceId) ||
+        lastHlc is! String ||
+        lastHlc.isEmpty) {
+      return null;
+    }
+    try {
+      SyncHlc.parse(lastHlc);
+    } on FormatException {
+      return null;
+    }
+    return SyncWatermark(
+      deviceId: deviceId,
+      lastHlc: lastHlc,
+      lastChunkKey: lastChunkKey is String ? lastChunkKey : '',
+    );
+  }
+}
+
 /// 同步系统表与触发器安装入口。
 ///
 /// 该 schema 与业务 schema 同库，但只保存同步元数据：
@@ -27,7 +74,9 @@ class SyncSchema {
       "head_key" TEXT NOT NULL DEFAULT '',
       "head_chunk_count" INTEGER NOT NULL DEFAULT 0,
       "head_dirty" INTEGER NOT NULL DEFAULT 0,
-      "total_ops" INTEGER NOT NULL DEFAULT 0
+      "total_ops" INTEGER NOT NULL DEFAULT 0,
+      "backend_id" TEXT NOT NULL DEFAULT '',
+      "restored_watermarks" INTEGER NOT NULL DEFAULT 0
     )
     ''',
     '''
@@ -167,6 +216,18 @@ class SyncSchema {
       'total_ops',
       'INTEGER NOT NULL DEFAULT 0',
     );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'backend_id',
+      "TEXT NOT NULL DEFAULT ''",
+    );
+    await _ensureColumn(
+      db,
+      'sync_meta',
+      'restored_watermarks',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
     await _ensureColumn(db, 'sync_applied', 'hlc', 'TEXT');
     await _ensureColumn(db, 'sync_state', 'last_chunk_key', 'TEXT');
     await _ensureColumn(db, 'sync_chunks', 'min_hlc', 'TEXT');
@@ -184,6 +245,8 @@ class SyncSchema {
         'ON sync_chunks(device_id, min_hlc)',
     'CREATE INDEX IF NOT EXISTS idx_sync_tombstones_hlc '
         'ON sync_tombstones(deleted_hlc)',
+    'CREATE INDEX IF NOT EXISTS idx_sync_row_versions_hlc '
+        'ON sync_row_versions(hlc)',
     'CREATE INDEX IF NOT EXISTS idx_sync_conflicts_resolved '
         'ON sync_conflicts(resolved, created_at)',
     'CREATE INDEX IF NOT EXISTS idx_oplog_bulk_pending '
@@ -230,10 +293,13 @@ class SyncSchema {
   /// - 其 oplog 是本机的待上传变更，必须清空，避免被当作本机操作重复上传；
   /// - 其 `sync_applied` / `sync_chunks` / 行版本 / 墓碑代表快照已经包含的历史，
   ///   必须保留，否则会重复应用历史增量（计数类会翻倍）；
-  /// - 以 [baseline]（备份创建时间）为基线，拉取时跳过基线之前的 chunk。
+  /// - [watermarks] 非空时按“来源设备水位”重建 `sync_state`，并忽略
+  ///   [baseline] 的粗粒度过滤；为空时退回旧行为（按备份创建时间基线）。
   static Future<void> resetRuntimeState(
     Database db, {
     DateTime? baseline,
+    List<SyncWatermark>? watermarks,
+    String? backendId,
   }) async {
     final baselineHlc = baseline == null
         ? ''
@@ -245,6 +311,23 @@ class SyncSchema {
       await txn.delete('oplog_bulk');
       // 快照可能携带旧冲突记录；恢复后应以当前数据为准。
       await txn.delete('sync_conflicts');
+      if (watermarks != null) {
+        await txn.delete('sync_state');
+        await txn.delete('sync_chunks');
+        await txn.delete('sync_applied');
+        final now = DateTime.now().toUtc().toIso8601String();
+        for (final watermark in watermarks) {
+          await txn.insert('sync_state', {
+            'device_id': watermark.deviceId,
+            'last_seq': 0,
+            'last_hlc': watermark.lastHlc,
+            'last_chunk_key': watermark.lastChunkKey.isEmpty
+                ? null
+                : watermark.lastChunkKey,
+            'updated_at': now,
+          }, conflictAlgorithm: ConflictAlgorithm.replace);
+        }
+      }
       await txn.update('sync_meta', {
         'device_id': '',
         'applying': 0,
@@ -256,6 +339,8 @@ class SyncSchema {
         'head_chunk_count': 0,
         'head_dirty': 0,
         'total_ops': 0,
+        'restored_watermarks': watermarks == null ? 0 : 1,
+        'backend_id': ?backendId,
       }, where: 'id = 1');
     });
   }

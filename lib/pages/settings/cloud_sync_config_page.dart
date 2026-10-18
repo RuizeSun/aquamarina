@@ -7,6 +7,7 @@ import '../../../services/cloud_sync_bootstrap_service.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
 import '../../../services/cloud_sync_foreground_sync_service.dart';
+import '../../../services/cloud_sync_run_lock.dart';
 import '../../../services/sync_capture_service.dart';
 import 'cloud_sync_progress.dart';
 
@@ -348,11 +349,10 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       ),
     );
     if (confirmed != true) return;
-    await CloudSyncSettings.clearAll();
-    // 未配置云同步时停止捕获并清空 oplog，避免无处可去的变更持续累积
-    try {
+    await CloudSyncRunLock.runExclusive(() async {
+      await CloudSyncSettings.clearAll();
       await SyncCaptureService.setCaptureEnabled(enabled: false);
-    } catch (_) {}
+    });
     CloudSyncForegroundSyncService.instance.stop();
     if (!mounted) return;
     _endpointController.clear();

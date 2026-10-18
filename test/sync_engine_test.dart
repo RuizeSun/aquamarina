@@ -487,6 +487,84 @@ void main() {
       expect(await db.query('wrong_sentences'), isEmpty);
     });
 
+    test('父级删除后迟到的旧子表 op 不会复活孤儿句子', () async {
+      final createSet = makeOp(
+        entity: 'sentence_sets',
+        seq: 1,
+        hlcMs: 100,
+        key: {'id': 'set-1'},
+        data: {
+          'name': 'Set',
+          'description': '',
+          'sentence_count': 1,
+          'created_at': '2026-10-01T00:00:00Z',
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+      );
+      final createSentence = makeOp(
+        entity: 'sentences',
+        seq: 2,
+        hlcMs: 100,
+        key: {'id': 'sentence-1'},
+        data: {
+          'set_id': 'set-1',
+          'english': 'hello',
+          'chinese': '你好',
+          'extra_words': '[]',
+          'created_at': '2026-10-01T00:00:00Z',
+          'sort_index': 1.0,
+        },
+      );
+      await SyncApplyService.applyOps([createSet, createSentence], db: db);
+
+      await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'sentence_sets',
+          seq: 3,
+          hlcMs: 300,
+          key: {'id': 'set-1'},
+          op: 'delete',
+          deviceId: 'device-b',
+        ),
+      ], db: db);
+      expect(await db.query('sentences'), isEmpty);
+
+      // 句式集重建后，迟到但更旧的句子 op 也不应复活。
+      await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'sentence_sets',
+          seq: 4,
+          hlcMs: 400,
+          key: {'id': 'set-1'},
+          data: {
+            'name': 'Set again',
+            'description': '',
+            'sentence_count': 0,
+            'created_at': '2026-10-01T00:00:00Z',
+            'updated_at': '2026-10-03T00:00:00Z',
+          },
+          deviceId: 'device-b',
+        ),
+        makeOp(
+          entity: 'sentences',
+          seq: 5,
+          hlcMs: 200,
+          key: {'id': 'sentence-1'},
+          data: {
+            'set_id': 'set-1',
+            'english': 'stale',
+            'chinese': '旧',
+            'extra_words': '[]',
+            'created_at': '2026-10-01T00:00:00Z',
+            'sort_index': 1.0,
+          },
+          deviceId: 'device-b',
+        ),
+      ], db: db);
+
+      expect(await db.query('sentences'), isEmpty);
+    });
+
     test('时间预算按小批提交，下一次从已应用位置继续', () async {
       final ops = [
         for (var i = 0; i < 120; i++)

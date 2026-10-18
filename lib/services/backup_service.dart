@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -97,11 +98,16 @@ class BackupService {
     }
 
     ZipFileEncoder? encoder;
+    var syncWatermarks = const <SyncWatermark>[];
+    var syncBackendId = '';
     try {
       if (await dbFile.exists()) {
         // 由 SQLite 引擎生成与主连接一致（含 WAL 事务）的独立快照
         await DatabaseService.exportDatabaseCopy(tmpPath);
-        await _stripSyncRuntimeTables(tmpPath);
+        // 先读取副本里的同步水位，再删除运行时表；这样水位与快照数据一致。
+        final extracted = await _extractAndStripSyncRuntimeTables(tmpPath);
+        syncWatermarks = extracted.$1;
+        syncBackendId = extracted.$2;
       }
 
       encoder = ZipFileEncoder();
@@ -124,6 +130,11 @@ class BackupService {
             'app': 'aquamarina',
             'created_at': DateTime.now().toIso8601String(),
             'contains_api_keys': includeApiKeys,
+            if (syncBackendId.isNotEmpty) 'sync_backend_id': syncBackendId,
+            if (syncWatermarks.isNotEmpty)
+              'sync_watermarks': [
+                for (final watermark in syncWatermarks) watermark.toJson(),
+              ],
           }),
         ),
       );
@@ -150,17 +161,66 @@ class BackupService {
     }
   }
 
-  /// 从导出的 DB 副本中移除同步运行时表，减小快照体积。
+  /// 从导出的 DB 副本中读取同步水位，然后移除同步运行时表，减小快照体积。
   ///
-  /// 恢复流程会重新执行 `SyncSchema.ensure` 并写入同步基线，因此不会
-  /// 丢失业务数据，也不会重复应用历史 chunk。
-  static Future<void> _stripSyncRuntimeTables(String dbPath) async {
+  /// 水位会写入 `backup_meta.json`；恢复时用它重建 `sync_state`，从而只拉取
+  /// 快照真正未包含的 chunk。旧备份没有该字段时仍使用创建时间基线。
+  @visibleForTesting
+  static Future<(List<SyncWatermark>, String)>
+  extractAndStripSyncRuntimeTablesForTesting(String dbPath) =>
+      _extractAndStripSyncRuntimeTables(dbPath);
+
+  static Future<(List<SyncWatermark>, String)>
+  _extractAndStripSyncRuntimeTables(String dbPath) async {
     Database? db;
     try {
       db = await databaseFactory.openDatabase(
         dbPath,
         options: OpenDatabaseOptions(singleInstance: false),
       );
+      final byDevice = <String, SyncWatermark>{};
+      var backendId = '';
+      try {
+        final metaRows = await db.query(
+          'sync_meta',
+          columns: ['device_id', 'head_hlc', 'head_key', 'backend_id'],
+          where: 'id = 1',
+          limit: 1,
+        );
+        if (metaRows.isNotEmpty) {
+          final row = metaRows.first;
+          backendId = row['backend_id'] as String? ?? '';
+          final ownId = row['device_id'] as String? ?? '';
+          final headHlc = row['head_hlc'] as String? ?? '';
+          final headKey = row['head_key'] as String? ?? '';
+          final own = SyncWatermark.fromJson({
+            'device_id': ownId,
+            'last_hlc': headHlc,
+            'last_chunk_key': headKey,
+          });
+          if (own != null) byDevice[own.deviceId] = own;
+        }
+      } catch (_) {
+        // 旧库没有 head 列时忽略
+      }
+      try {
+        final stateRows = await db.query(
+          'sync_state',
+          columns: ['device_id', 'last_hlc', 'last_chunk_key'],
+        );
+        for (final row in stateRows) {
+          final watermark = SyncWatermark.fromJson(row);
+          if (watermark == null) continue;
+          final existing = byDevice[watermark.deviceId];
+          if (existing == null ||
+              watermark.lastHlc.compareTo(existing.lastHlc) > 0) {
+            byDevice[watermark.deviceId] = watermark;
+          }
+        }
+      } catch (_) {
+        // 旧库没有 sync_state 时忽略
+      }
+
       final rows = await db.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table' "
         "AND (name LIKE 'sync\\_%' ESCAPE '\\' OR name LIKE 'oplog\\_%' ESCAPE '\\')",
@@ -172,9 +232,11 @@ class BackupService {
         }
       }
       await db.execute('VACUUM');
+      return (byDevice.values.toList(growable: false), backendId);
     } catch (e) {
       // 瘦身失败不影响导出：恢复时仍会清理运行时状态
       logWarning('BackupService', '清理快照中的同步表失败（不影响导出）: $e');
+      return (const <SyncWatermark>[], '');
     } finally {
       await db?.close();
     }
@@ -322,6 +384,8 @@ class BackupService {
 
       // 校验元信息（可选；旧备份可能没有）
       DateTime? backupCreatedAt;
+      List<SyncWatermark>? backupWatermarks;
+      var backupBackendId = '';
       final metaBytes = _readSmallEntry(archive, _metaFileName, 1024 * 1024);
       if (metaBytes != null) {
         try {
@@ -334,6 +398,16 @@ class BackupService {
           if (createdAt is String) {
             backupCreatedAt = DateTime.tryParse(createdAt);
           }
+          final rawWatermarks = meta['sync_watermarks'];
+          if (rawWatermarks is List) {
+            final parsed = rawWatermarks
+                .map(SyncWatermark.fromJson)
+                .whereType<SyncWatermark>()
+                .toList(growable: false);
+            if (parsed.isNotEmpty) backupWatermarks = parsed;
+          }
+          final backendId = meta['sync_backend_id'];
+          if (backendId is String) backupBackendId = backendId;
         } catch (e) {
           if (e is BackupException) rethrow;
           throw const BackupException('备份文件的元信息损坏');
@@ -442,9 +516,25 @@ class BackupService {
           logWarning('BackupService', '重建同步 schema 失败（不影响恢复）: $e');
         }
         try {
+          // 水位只对导出它的那个对象存储后端有效；如果本机当前配置指向
+          // 另一个后端，退回“备份创建时间”基线，避免误跳过新后端的数据。
+          var watermarksToRestore = backupWatermarks;
+          if (watermarksToRestore != null && backupBackendId.isNotEmpty) {
+            try {
+              final localConfig = await CloudSyncSettings.loadConfig();
+              if (localConfig != null &&
+                  localConfig.isConfigured &&
+                  localConfig.backendIdentity != backupBackendId) {
+                logWarning('BackupService', '备份来自其它对象存储后端，忽略同步水位并退回 baseline');
+                watermarksToRestore = null;
+              }
+            } catch (_) {}
+          }
           await SyncSchema.resetRuntimeState(
             db,
             baseline: backupCreatedAt ?? DateTime.now(),
+            watermarks: watermarksToRestore,
+            backendId: backupBackendId.isEmpty ? null : backupBackendId,
           );
           // 恢复后数据基线已变：清空检查点水位，允许重新生成检查点。
           await CloudSyncSettings.saveState(

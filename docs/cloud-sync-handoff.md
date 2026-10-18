@@ -13,7 +13,7 @@
 - Flutter / Dart：本机 Flutter 3.47 / Dart 3.13；CI 使用 Flutter 3.44.8；`pubspec.yaml` SDK `^3.11.5`。
 - 状态管理：`ChangeNotifier` / 单例服务为主，没有引入 Provider/Riverpod/Bloc。
 - 本地存储：
-  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 17**；
+  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 18**；
   - 设置：`SharedPreferences`；
   - 密钥：`flutter_secure_storage`；
   - 备份：ZIP（`aquamarina.db` + `preferences.json` + 可选 `secure_storage.json` + `backup_meta.json`）。
@@ -293,10 +293,15 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
   2. 恢复前 `VACUUM INTO` 本机快照；
   3. `BackupService.importBackup` 覆盖 DB / Prefs；
   4. 重新打开数据库后调用 `SyncSchema.resetRuntimeState`：
-     - 清空快照携带的 oplog；
-     - 保留 `sync_applied` / `sync_chunks` / 行版本 / 墓碑（快照已包含其效果）；
-     - 清空 `sync_meta.device_id`，写入 `baseline_hlc = 备份创建时间`；
-  5. 引擎拉取时跳过 HLC ≤ baseline 的 chunk；本机推送成功的 chunk 会写入 `sync_chunks`，不会在下一轮被自己重放。
+     - 清空快照携带的 oplog / `oplog_bulk` / 冲突记录；
+     - 新格式快照从 `backup_meta.json` 读取 `sync_watermarks`，重建 `sync_state` 并置 `restored_watermarks=1`，同时清空旧 `sync_chunks` / `sync_applied`；
+     - 旧格式快照没有水位字段时保留原有同步表，并写入 `baseline_hlc = 备份创建时间`；
+  5. 引擎拉取：
+     - `restored_watermarks=1` 时按每个来源设备的水位精确过滤，水位之前的 chunk 已包含在快照里；
+     - 否则退回 HLC ≤ baseline 的粗粒度过滤；
+     - 本机推送成功的 chunk 会写入 `sync_chunks`，不会在下一轮被自己重放。
+
+> `backup_meta.json` 的 `sync_watermarks` 由 `BackupService` 在删除 `sync_*` 表之前从导出的 DB 副本读取，保证水位与快照数据一致。
 
 ### 2.11 变更捕获不变量
 
@@ -357,7 +362,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 
 ### 2.14 测试现状
 
-- `flutter test`：无 S3 环境变量时 **236 passed / 4 skipped**；设置真实 S3 后 **240 passed**；
+- `flutter test`：无 S3 环境变量时 **242 passed / 4 skipped**；设置真实 S3 后 **246 passed**；
 - 新增覆盖：gzip chunk、完整 SHA-256、时间预算续跑、`captured_at_ms` HLC、批量 oplog 回填、冲突持久化/解决/清理、检查点空库与退避、流式文件上传下载、网络策略；
 - 覆盖：
   - v13/v14/v15 迁移、UUID/顺序回填、触发器数量与抑制；
@@ -614,12 +619,13 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 
 ### 5.3 数据库迁移注意事项
 
-- 当前 `schemaVersion=17`；
+- 当前 `schemaVersion=18`；
 - `migrateToV13` 幂等，负责同步就绪列、oplog、触发器；
 - `migrateToV14` 创建 `sentence_sets` 并再次 `SyncSchema.ensure`；
 - `migrateToV15` 补齐 head/state/应用 HLC 列，并从 chunk 键回填 `sync_chunks.min_hlc`；
 - `migrateToV16` 为 oplog 补 `captured_at_ms`、重建触发器、创建 `sync_conflicts` / `total_ops`；
 - `migrateToV17` 创建 `oplog_bulk` 与批量 op 索引；
+- `migrateToV18` 为 `sync_meta` 补 `backend_id` / `restored_watermarks`，并创建行版本 HLC 索引；
 - 修改同步系统表结构（如 `sync_applied` 主键）时：
   - 已发布版本必须新增迁移重建表；
   - 未发布分支可直接改，但要在文档说明；
@@ -684,7 +690,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 ---
 
-## 7. 残余限制（v17 之后）
+## 7. 残余限制（v18 之后）
 
 以下不是阻塞性问题，但仍是后续可改进项：
 
@@ -696,6 +702,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
 6. **流式快照仍有磁盘峰值**：`VACUUM INTO` + 瘦身 `VACUUM` + ZIP 需要约 2–3 倍 DB 空间；未做剩余空间预检，未做 10 万/50 万级真机基准。
 7. **gzip / bulk op 滚动升级**：旧版本客户端不识别 `.jsonl.gz` 与 `op='bulk'`；发布时需确保所有设备升级。
 8. **并发锁是进程内锁**：`CloudSyncRunLock` 不能跨进程/跨 isolate 生效；单进程内已覆盖增量同步、快照上传/恢复、检查点与设备删除。
-9. **切换 endpoint / bucket / prefix 不会重建本地同步水位**：`sync_state` / `sync_chunks` / `sync_applied` / `sync_row_versions` 仍属于旧后端；如果新位置已有历史数据，可能出现 `startAfter` 过滤错误、seq 误判重复或旧 HLC 门禁。切换后建议从快照恢复，或先清除云同步配置并重新引导。
-10. **baseline 仍是“快照创建时间”的近似值**：如果快照源设备在导出前尚未拉全其它设备的变更，恢复后这些 chunk 的 HLC 可能 ≤ baseline 而被跳过；上传自动检查点前应先完成一次 pull。
-11. **GC 可能被没有 head/state 的设备目录阻塞**：只上传过快照、从未跑过增量同步的设备会被视为活跃且缺少 state，导致其它设备的历史 chunk 无法回收。
+9. **旧备份仍使用 baseline 近似**：新格式快照会在 `backup_meta.json` 写入 `sync_watermarks`，恢复后按来源水位精确过滤；旧版本导出的备份没有该字段，仍按“快照创建时间”跳过，快照源未拉全时可能漏数据。
+10. **切换回曾用过的后端会重新拉取该后端历史**：切换 endpoint / bucket / prefix 时会清空旧后端的运行时水位与去重记录；如果之后切回去，会按“新后端”重新应用历史 chunk，计数可能重复。建议用快照恢复而不是来回切换。
+11. **行版本 / 墓碑按 180 天 + 活跃设备水位清理**：离线超过 180 天的设备重新加入时，理论上仍可能带回已被清理的旧事件。
+12. **没有 head/state 的设备目录会被 GC 跳过**：这类目录（例如只上传过快照）不会参与活跃设备判断，也不会阻塞 GC；这是保守策略的一部分。

@@ -540,6 +540,122 @@ void main() {
     expect(await db.query('user_word_records'), isEmpty);
   });
 
+  test('按来源水位拉取：水位之前的 chunk 跳过，之后的继续应用', () async {
+    final oldOps = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'apple'},
+        data: {
+          'note': 'already in snapshot',
+          'is_favorited': 0,
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    final newOps = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 2,
+        hlcMs: 3000,
+        key: {'word': 'banana'},
+        data: {
+          'note': 'after snapshot',
+          'is_favorited': 0,
+          'updated_at': '2026-10-02T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    storage.objects[_chunkKey(config, _deviceB, oldOps)] =
+        SyncChunkCodec.encode(oldOps);
+    storage.objects[_chunkKey(config, _deviceB, newOps)] =
+        SyncChunkCodec.encode(newOps);
+    await db.update('sync_meta', {
+      'baseline_hlc': const SyncHlc(9000, 0).value,
+      'restored_watermarks': 1,
+    }, where: 'id = 1');
+    await db.insert('sync_state', {
+      'device_id': _deviceB,
+      'last_seq': 0,
+      'last_hlc': const SyncHlc(1000, 0).value,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    final result = await engine().run(pull: true, push: false);
+    expect(result.pulledChunks, 1);
+    final rows = await db.query('word_notes');
+    expect(rows.single['word'], 'banana');
+    expect(rows.single['note'], 'after snapshot');
+  });
+
+  test('切换对象存储配置会清理旧后端的同步水位', () async {
+    await db.update('sync_meta', {
+      'backend_id': 'old-backend',
+    }, where: 'id = 1');
+    await db.insert('sync_state', {
+      'device_id': _deviceB,
+      'last_seq': 0,
+      'last_hlc': const SyncHlc(1000, 0).value,
+      'last_chunk_key': 'old/devices/$_deviceB/chunks/a.jsonl.gz',
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+    await db.insert('sync_chunks', {
+      'device_id': _deviceB,
+      'chunk_key': 'old/devices/$_deviceB/chunks/a.jsonl.gz',
+      'sha256': 'a' * 64,
+      'applied_at': DateTime.now().toUtc().toIso8601String(),
+    });
+    await db.insert('sync_applied', {
+      'device_id': _deviceB,
+      'entity': 'word_notes',
+      'seq': 1,
+      'applied_at': DateTime.now().toUtc().toIso8601String(),
+    });
+    await db.insert('sync_row_versions', {
+      'entity': 'word_notes',
+      'key': '{"word":"apple"}',
+      'hlc': const SyncHlc(1000, 0).value,
+    });
+    await db.insert('sync_tombstones', {
+      'entity': 'word_notes',
+      'key': '{"word":"gone"}',
+      'deleted_hlc': const SyncHlc(1000, 0).value,
+      'deleted_at': DateTime.now().toUtc().toIso8601String(),
+    });
+
+    final nextConfig = CloudSyncConfig.create(
+      endpointInput: 'https://cn-nb1.rains3.com',
+      bucket: 'aquamarina-test',
+      region: 'cn-nb1',
+      prefix: 'another-prefix',
+    );
+    final nextEngine = CloudSyncEngine.forTesting(
+      config: nextConfig,
+      deviceId: _deviceA,
+      deviceName: '设备 A',
+      storage: FakeS3Storage(nextConfig),
+      database: db,
+    );
+    await nextEngine.run(pull: true, push: false);
+
+    for (final table in const [
+      'sync_state',
+      'sync_chunks',
+      'sync_applied',
+      'sync_row_versions',
+      'sync_tombstones',
+      'sync_conflicts',
+    ]) {
+      expect(await db.query(table), isEmpty, reason: table);
+    }
+    final meta = (await db.query('sync_meta')).single;
+    expect(meta['backend_id'], nextConfig.backendIdentity);
+    expect(meta['restored_watermarks'], 0);
+  });
+
   test('接管前的完整性判断覆盖预算/错误/缺失父级', () {
     final result = CloudSyncRunResult();
     expect(result.hasIncompleteWork, isFalse);

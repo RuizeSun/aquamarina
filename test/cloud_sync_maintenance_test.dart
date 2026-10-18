@@ -109,6 +109,16 @@ void main() {
       'deleted_hlc': _hlc(100),
       'deleted_at': now.subtract(const Duration(days: 200)).toIso8601String(),
     });
+    await db.insert('sync_row_versions', {
+      'entity': 'word_notes',
+      'key': '{"word":"old"}',
+      'hlc': _hlc(100),
+    });
+    await db.insert('sync_row_versions', {
+      'entity': 'word_notes',
+      'key': '{"word":"recent"}',
+      'hlc': _hlc(3000),
+    });
 
     final deleted = await CloudSyncMaintenanceService.pruneOldChunks(
       config: config,
@@ -130,6 +140,8 @@ void main() {
     final applied = await db.query('sync_applied');
     expect(applied.single['hlc'], _hlc(2000));
     expect(await db.query('sync_tombstones'), isEmpty);
+    final versions = await db.query('sync_row_versions');
+    expect(versions.single['key'], '{"word":"recent"}');
   });
 
   test('仍有活跃设备水位未越过时保留 chunk', () async {

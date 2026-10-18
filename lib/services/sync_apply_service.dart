@@ -338,6 +338,16 @@ class SyncApplyService {
     return ctx.versions['${op.entity}\u0000${op.keyFingerprint}'];
   }
 
+  /// 仅由键生成指纹（用于父级墓碑查询）。
+  static String _keyFingerprint(Map<String, dynamic> key) => SyncOp(
+    deviceId: 'local',
+    seq: 1,
+    hlc: const SyncHlc(0, 0),
+    entity: 'local',
+    key: key,
+    op: 'upsert',
+  ).keyFingerprint;
+
   static void _advanceVersion(_ApplyContext ctx, SyncOp op) {
     final key = '${op.entity}\u0000${op.keyFingerprint}';
     final current = ctx.versions[key];
@@ -361,6 +371,27 @@ class SyncApplyService {
       'deleted_hlc': op.hlc.value,
       'deleted_at': (op.deletedAt ?? DateTime.now().toUtc().toIso8601String()),
     };
+  }
+
+  /// 父级删除时给子表补墓碑，避免迟到的旧子表 op 在父级重建后复活。
+  static void _recordChildTombstone(
+    _ApplyContext ctx,
+    String entity,
+    Map<String, dynamic> key,
+    SyncOp parent,
+  ) {
+    _recordTombstone(
+      ctx,
+      SyncOp(
+        deviceId: parent.deviceId,
+        seq: parent.seq,
+        hlc: parent.hlc,
+        entity: entity,
+        key: key,
+        op: 'delete',
+        deletedAt: parent.deletedAt,
+      ),
+    );
   }
 
   static DateTime? _parseTs(Object? value) {
@@ -417,6 +448,33 @@ class SyncApplyService {
         return;
       case 'sentences':
         final id = op.key['id'];
+        // 先给级联删除的子表写墓碑，再删除；这样乱序到达的旧子表 op
+        // 不会在句子/句式集重建后复活。
+        final attemptedRows = await txn.query(
+          'attempted_sentence_ids',
+          columns: ['set_id'],
+          where: 'sentence_id = ?',
+          whereArgs: [id],
+        );
+        for (final row in attemptedRows) {
+          _recordChildTombstone(ctx, 'attempted_sentence_ids', {
+            'set_id': row['set_id'],
+            'sentence_id': id,
+          }, op);
+        }
+        final practicedRows = await txn.query(
+          'practiced_sentence_ids',
+          columns: ['set_id'],
+          where: 'sentence_id = ?',
+          whereArgs: [id],
+        );
+        for (final row in practicedRows) {
+          _recordChildTombstone(ctx, 'practiced_sentence_ids', {
+            'set_id': row['set_id'],
+            'sentence_id': id,
+          }, op);
+        }
+        _recordChildTombstone(ctx, 'wrong_sentences', {'sentence_id': id}, op);
         ctx.removeWritesWhere(
           (write) =>
               (write.spec.entity == 'attempted_sentence_ids' ||
@@ -450,6 +508,50 @@ class SyncApplyService {
         return;
       case 'sentence_sets':
         final setId = op.key['id'];
+        final sentenceRows = await txn.query(
+          'sentences',
+          columns: ['id'],
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        for (final row in sentenceRows) {
+          _recordChildTombstone(ctx, 'sentences', {'id': row['id']}, op);
+        }
+        final attemptedRows = await txn.query(
+          'attempted_sentence_ids',
+          columns: ['sentence_id'],
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        for (final row in attemptedRows) {
+          _recordChildTombstone(ctx, 'attempted_sentence_ids', {
+            'set_id': setId,
+            'sentence_id': row['sentence_id'],
+          }, op);
+        }
+        final practicedRows = await txn.query(
+          'practiced_sentence_ids',
+          columns: ['sentence_id'],
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        for (final row in practicedRows) {
+          _recordChildTombstone(ctx, 'practiced_sentence_ids', {
+            'set_id': setId,
+            'sentence_id': row['sentence_id'],
+          }, op);
+        }
+        final wrongRows = await txn.query(
+          'wrong_sentences',
+          columns: ['sentence_id'],
+          where: 'set_id = ?',
+          whereArgs: [setId],
+        );
+        for (final row in wrongRows) {
+          _recordChildTombstone(ctx, 'wrong_sentences', {
+            'sentence_id': row['sentence_id'],
+          }, op);
+        }
         ctx.removeWritesWhere(
           (write) =>
               (write.spec.entity == 'sentences' ||
@@ -506,9 +608,21 @@ class SyncApplyService {
       }
     }
 
+    // 墓碑优先于行版本：父级删除时会给子表写墓碑，阻止迟到的旧 op
+    // 在父级不存在（或已被重建）后重新插入孤儿数据。
+    final tombstone = ctx.tombstones['${op.entity}\u0000${op.keyFingerprint}'];
+    if (tombstone != null && tombstone.compareTo(op.hlc) >= 0) {
+      return _UpsertOutcome.skipped;
+    }
+
     if (spec.entity == 'word_book_entries') {
       final bookUuid = op.key['book_uuid'];
       final word = op.key['word'];
+      final parentTombstone = ctx
+          .tombstones['word_books\u0000${_keyFingerprint({'uuid': bookUuid})}'];
+      if (parentTombstone != null && parentTombstone.compareTo(op.hlc) >= 0) {
+        return _UpsertOutcome.skipped;
+      }
       var bookId = ctx.bookIdFor(bookUuid);
       if (bookId == null) {
         final books = await txn.query(
@@ -859,14 +973,37 @@ class _ApplyContext {
       }
     }
 
-    // 墓碑：只为 delete op 预载。
-    final deleteKeysByEntity = <String, Set<String>>{};
-    for (final op in ops.where((op) => op.isDelete)) {
-      deleteKeysByEntity
-          .putIfAbsent(op.entity, () => <String>{})
-          .add(op.keyFingerprint);
+    // 墓碑：普通 upsert / delete / bulk item 都预载，防止父级删除后旧子表
+    // op 重新插入孤儿数据。
+    final tombstoneKeysByEntity = <String, Set<String>>{};
+    void addTombstoneKey(String entity, Map<String, dynamic> key) {
+      tombstoneKeysByEntity
+          .putIfAbsent(entity, () => <String>{})
+          .add(_keyFingerprint(key));
+      // 词书条目需要父级墓碑：父词书删除后，迟到的旧条目 op 应被丢弃，
+      // 而不是在父级重建后重新插入。
+      if (entity == 'word_book_entries') {
+        final bookUuid = key['book_uuid'];
+        if (bookUuid != null) {
+          tombstoneKeysByEntity
+              .putIfAbsent('word_books', () => <String>{})
+              .add(_keyFingerprint({'uuid': bookUuid}));
+        }
+      }
     }
-    for (final entry in deleteKeysByEntity.entries) {
+
+    for (final op in ops) {
+      if (op.isBulk) {
+        for (final item in op.items) {
+          addTombstoneKey(item.entity, item.key);
+        }
+      } else {
+        tombstoneKeysByEntity
+            .putIfAbsent(op.entity, () => <String>{})
+            .add(op.keyFingerprint);
+      }
+    }
+    for (final entry in tombstoneKeysByEntity.entries) {
       final keys = entry.value.toList();
       for (var i = 0; i < keys.length; i += 400) {
         final slice = keys.sublist(i, (i + 400).clamp(0, keys.length));
