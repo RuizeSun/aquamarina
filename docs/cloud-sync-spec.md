@@ -16,19 +16,20 @@
 ## 2. 对象布局
 
 ```
-{prefix}/devices/{deviceId}/
-  meta.json                     # 设备名、平台、schemaVersion、lastSeen
-  manifest.json                 # 该设备快照索引（引导用）
-  snapshots/{utcTimestamp}.zip  # 全量快照（默认不含 API Key）
-  head.json                     # 最近一个 chunk 的键 / HLC / 数量（拉取前先读）
-  state.json                    # 本设备已应用到其它设备的水位线（GC 依据）
-  chunks/{hlc}-{sha256}.jsonl.gz    # gzip 压缩，完整 SHA-256
-  checkpoints/                       # 当前复用 snapshots/ 作为自动检查点
+{prefix}/
+  dataset/manifest.json                  # 唯一数据集清单（稳定 datasetId + 最新统一快照）
+  dataset/snapshots/{utcTimestamp}-{deviceId}.zip  # 统一快照（默认不含 API Key）
+  devices/{deviceId}/
+    meta.json                     # 设备名、平台、schemaVersion、lastSeen
+    head.json                     # 最近一个 chunk 的键 / HLC / 数量（拉取前先读）
+    state.json                    # 本设备已应用到其它设备的水位线（GC 依据）
+    chunks/{hlc}-{sha256}.jsonl.gz    # gzip 压缩，完整 SHA-256
 ```
 
 约束：
 
-- **每台设备只写自己的前缀**，对象写入后不可变（snapshots/chunks/checkpoints），因此不存在跨设备写冲突；`head.json` 与 `state.json` 也只由所属设备写。
+- **云端只有一份逻辑数据**：所有设备共用 `dataset/manifest.json` 与最新统一快照；`devices/{deviceId}/` 仅作为并发安全的写入分区与 GC 元数据，不代表独立数据。
+- **每台设备只写自己的前缀**，对象写入后不可变（snapshots/chunks），因此不存在跨设备写冲突；`head.json` 与 `state.json` 也只由所属设备写。
 - 只使用 `PUT / GET / HEAD / LIST / DELETE`；不依赖条件写、对象锁、厂商扩展头。
 - 设备发现使用 `LIST {prefix}/devices/` 的非递归 CommonPrefixes，不递归列举全部 chunk。
 - 单 chunk 上限 1 MB（未压缩 JSONL）或 500 条 op，先到者切分；上传前 gzip；单快照上限沿用 `BackupService.maxBackupSize`。
@@ -120,8 +121,12 @@ for chunk in pull():
 
 ## 7. 引导、检查点与回收
 
-- 新设备：首次配置时若本机为空，提示恢复云端最新快照（checkpoint）；设置页也提供「从最新检查点引导」，可随时灾备恢复。
-- 检查点频率（v16 已实现）：每 5000 条 op 或 7 天（先到者）自动上传完整快照，受「保留份数」约束。
+- 新设备：首次配置时若本机为空，提示用云端统一快照初始化；设置页也提供「从云端数据恢复」，用于灾备。
+- 首次接入（本机已有数据 + 云端已有数据）：每台设备询问一次，选择合并 / 以本机为准 / 以云端为准；选择结果按 datasetId 记录。
+  - 合并：上传本机基线并以非覆盖方式合并云端快照（插入缺失、LWW、计数器 max、集合取并集），随后更新统一快照；
+  - 以本机为准：忽略云端历史，用本机数据生成新的 datasetId 与统一快照；
+  - 以云端为准：用统一快照覆盖本机，自动保留本机安全副本。
+- 检查点频率（v16 已实现）：每 5000 条 op 或 7 天（先到者）自动更新统一快照，受「保留份数」约束；本机有历史数据但云端无基线时强制生成第一份。
 - **head / state 水位（v15 已实现）**：
   - `head.json`：所属设备最近一个 chunk 的 `latest_chunk_key` / `latest_hlc` / `chunk_count`；
   - `state.json`：`applied: {来源设备 ID: 已完整应用的最大 chunk 起始 HLC}`；
@@ -169,7 +174,7 @@ for chunk in pull():
 |---|---|---|
 | 0 | PoC：Rain S3 读写/列举/删除 | ✅ 已完成（path-style + `cn-nb1`） |
 | 1 | 配置与凭据、S3 客户端封装、连接测试、设置页 UI | ✅ 已完成 |
-| 2 | 设备隔离快照上传/下载 + manifest（引导/灾备能力） | ✅ 已完成 |
+| 2 | 统一数据集快照上传/下载 + 单一 manifest（引导/灾备能力） | ✅ 已完成 |
 | 3 | schema v13 + 触发器生成器（`sentence_sets` 于 v14 入库） | ✅ 已完成（DB 内 14 张同步表） |
 | 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
 | 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 启动/回前台同步、学习结束事件同步、前台轮询、head/state 水位 GC、冲突页、设备管理、仅 Wi-Fi / 退避均已完成 |
@@ -186,7 +191,7 @@ for chunk in pull():
 | `lib/models/cloud_sync_manifest.dart` | 清单/快照模型、版本校验、SHA-256、对象键时间戳 |
 | `lib/services/cloud_sync_settings.dart` | 配置校验、Prefs 持久化、Secure Storage 凭据、设备标识 |
 | `lib/services/s3_storage_service.dart` | MinIO 客户端封装、超时、错误中文化、连接自检 |
-| `lib/services/cloud_sync_service.dart` | 设备隔离快照上传/恢复、清单维护、历史清理、恢复前本机快照 |
+| `lib/services/cloud_sync_service.dart` | 统一数据集快照上传/恢复、单一清单维护、历史清理、恢复前本机快照 |
 | `lib/pages/settings/cloud_sync_config_page.dart` | 配置表单、连接测试、设备标识管理 |
 | `lib/pages/settings/sections/cloud_sync_section.dart` | 云同步入口、上传、设备选择与恢复 |
 | `lib/services/backup_service.dart` | 新增 `localOnlyPrefPrefix`：云同步配置不进入备份、不被恢复覆盖；恢复后清理快照携带的 oplog 并写入同步基线 |

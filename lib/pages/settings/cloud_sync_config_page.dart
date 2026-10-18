@@ -4,6 +4,7 @@ import 'dart:async';
 
 import '../../../models/cloud_sync_manifest.dart';
 import '../../../services/cloud_sync_bootstrap_service.dart';
+import '../../../services/cloud_sync_introduction_service.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
 import '../../../services/cloud_sync_foreground_sync_service.dart';
@@ -174,11 +175,11 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('发现云端备份'),
+          title: const Text('发现云端数据'),
           content: Text(
-            '本机还没有学习数据，检测到设备「${summary.manifest.deviceName}」'
-            '在 ${summary.latest!.createdAt.toLocal()} 有完整备份。\n\n'
-            '是否立即恢复这份快照作为本机数据？恢复会覆盖当前空库。',
+            '本机还没有学习数据，云端已有一份统一数据'
+            '（${summary.latest!.createdAt.toLocal()}）。\n\n'
+            '是否立即用云端数据初始化本机？当前空库不会丢失任何学习记录。',
           ),
           actions: [
             TextButton(
@@ -197,9 +198,13 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         context,
         title: '从云端引导',
         task: (update) async {
-          update('正在下载并校验云端检查点…');
+          update('正在下载并校验云端数据…');
           return candidate.service.restoreSnapshot(summary);
         },
+      );
+      await CloudSyncSettings.saveIntroDecision(
+        summary.manifest.deviceId,
+        CloudSyncIntroAction.useCloud.storageValue,
       );
       if (mounted) _showSnack('已从云端引导，建议重启应用');
     } catch (e) {
@@ -296,8 +301,8 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         title: const Text('重置设备标识'),
         content: const Text(
           '重置后云端会把本机视为一台新设备。\n\n'
-          '旧设备的云端备份仍会保留，但需要在本机重新选择恢复；'
-          '本机历史清单也不会再更新。\n\n确定要重置吗？',
+          '本机现有数据仍会保留；重置后会被视为一台新设备，'
+          '需要重新确认如何接入云端统一数据。\n\n确定要重置吗？',
         ),
         actions: [
           TextButton(
@@ -332,7 +337,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
         title: const Text('清除云同步配置'),
         content: const Text(
           '将清除本机保存的端点、存储桶、Access Key / Secret Key 与同步状态。\n\n'
-          '云端已有的备份不会被删除。确定继续吗？',
+          '云端已有的统一数据不会被删除。确定继续吗？',
         ),
         actions: [
           TextButton(
@@ -418,9 +423,9 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  '首次启用时，增量同步只会上传「启用之后」的变更。'
-                  '如果本机已有历史学习数据，请先「立即上传备份」，'
-                  '再在其它设备「从云端恢复」，不要只依赖增量同步。',
+                  '云端只保存一份统一数据。首次把已有本地数据的设备接入时，'
+                  '会询问一次：合并两端、以本机为准或以云端为准。'
+                  '系统会自动发布基线和处理合并，不需要手动上传备份。',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),

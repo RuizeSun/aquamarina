@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/cloud_sync_manifest.dart';
 import 'backup_service.dart';
@@ -139,6 +140,96 @@ class CloudSyncService {
     ).testConnection();
   }
 
+  /// 拉取共享数据集清单；不存在返回 null。
+  ///
+  /// v2 起所有设备共用 `{prefix}/dataset/manifest.json`，不再按设备保存
+  /// 各自的快照清单。清单里的 `deviceId` 字段复用为稳定的 datasetId。
+  Future<CloudDeviceManifest?> fetchDatasetManifest() async {
+    final bytes = await storage.getBytes(
+      config.datasetManifestKey,
+      maxBytes: _maxManifestBytes,
+      nullIfMissing: true,
+    );
+    if (bytes == null) return null;
+    return CloudSyncUtils.parseManifest(bytes);
+  }
+
+  /// 是否存在共享数据集快照。
+  Future<bool> hasDatasetSnapshot() async {
+    final manifest = await fetchDatasetManifest();
+    return manifest?.latest != null;
+  }
+
+  /// 恢复共享数据集的最新快照（覆盖本机）。
+  ///
+  /// 这是 v2 的唯一恢复入口；不再允许选择某台设备的备份。
+  Future<CloudRestoreOutcome> restoreLatestDatasetSnapshot({
+    void Function(int received, int? total)? onProgress,
+  }) async {
+    final manifest = await fetchDatasetManifest();
+    final latest = manifest?.latest;
+    if (manifest == null || latest == null) {
+      throw const CloudSyncException('云端还没有可用数据');
+    }
+    return restoreSnapshot(
+      CloudDeviceSummary(manifest: manifest, isCurrentDevice: true),
+      onProgress: onProgress,
+    );
+  }
+
+  /// 下载共享数据集最新快照到临时文件，校验大小与 SHA-256 后返回。
+  ///
+  /// 调用方负责在完成后删除返回的文件。
+  Future<File> downloadLatestDatasetSnapshot({
+    void Function(int received, int? total)? onProgress,
+  }) async {
+    final manifest = await fetchDatasetManifest();
+    final snapshot = manifest?.latest;
+    if (manifest == null || snapshot == null) {
+      throw const CloudSyncException('云端还没有可用数据');
+    }
+    if (snapshot.size > BackupService.maxBackupSize) {
+      throw CloudSyncException(
+        '云端数据过大（${CloudSyncUtils.formatBytes(snapshot.size)}），拒绝下载',
+      );
+    }
+    final stat = await storage.stat(snapshot.key, nullIfMissing: true);
+    if (stat == null) {
+      throw const CloudSyncException('云端数据不存在，可能已被清理');
+    }
+    if (stat.size != null && stat.size != snapshot.size) {
+      throw const CloudSyncException('云端数据大小与清单不一致，已中止');
+    }
+    final tmpDir = await getTemporaryDirectory();
+    final file = File(
+      p.join(
+        tmpDir.path,
+        'aquamarina_dataset_${DateTime.now().microsecondsSinceEpoch}.zip',
+      ),
+    );
+    try {
+      final downloaded = await storage.downloadToFile(
+        snapshot.key,
+        file,
+        maxBytes: BackupService.maxBackupSize,
+        onProgress: onProgress,
+      );
+      if (downloaded == null) {
+        throw const CloudSyncException('云端数据下载失败，请重试');
+      }
+      if (downloaded.size != snapshot.size) {
+        throw const CloudSyncException('云端数据下载不完整，已中止');
+      }
+      if (downloaded.sha256 != snapshot.sha256) {
+        throw const CloudSyncException('云端数据校验失败（内容已损坏），已中止');
+      }
+      return file;
+    } catch (_) {
+      if (await file.exists()) await file.delete();
+      rethrow;
+    }
+  }
+
   /// 拉取单台设备的清单；不存在返回 null。
   Future<CloudDeviceManifest?> fetchManifest(String targetDeviceId) async {
     final key = config.manifestKey(targetDeviceId);
@@ -180,11 +271,15 @@ class CloudSyncService {
     return summaries;
   }
 
-  /// 上传一份完整备份快照，并更新本设备清单。
+  /// 上传一份完整备份快照，并更新统一数据集清单。
+  ///
+  /// [startNewDataset] 为 true 时会生成新的 datasetId，用于“以本机为准”
+  /// 替换云端数据：其它设备看到新的 datasetId 后会重新确认接入方式。
   Future<CloudSnapshotInfo> uploadSnapshot({
     required bool includeApiKeys,
     void Function(int sent, int total)? onProgress,
     bool Function()? isCancelled,
+    bool startNewDataset = false,
   }) {
     // 与增量同步、恢复、设备删除共用同一把全局锁，避免 manifest / 数据库
     // 文件被并发读写。
@@ -193,6 +288,7 @@ class CloudSyncService {
         includeApiKeys: includeApiKeys,
         onProgress: onProgress,
         isCancelled: isCancelled,
+        startNewDataset: startNewDataset,
       ),
     );
   }
@@ -235,6 +331,7 @@ class CloudSyncService {
     required bool includeApiKeys,
     void Function(int sent, int total)? onProgress,
     bool Function()? isCancelled,
+    bool startNewDataset = false,
   }) async {
     if (_requireSyncedSnapshot) {
       await _settleBeforeSnapshot(isCancelled);
@@ -243,7 +340,7 @@ class CloudSyncService {
     logInfo('CloudSync', '开始上传快照 includeApiKeys=$includeApiKeys');
     final now = DateTime.now().toUtc();
     final stamp = CloudSyncUtils.utcTimestamp(now);
-    final key = config.snapshotKey(deviceId, stamp);
+    final key = config.datasetSnapshotKey(stamp, deviceId);
     final tmpDir = await getTemporaryDirectory();
     final file = File(p.join(tmpDir.path, 'aquamarina_snapshot_$stamp.zip'));
     final CloudSnapshotInfo snapshot;
@@ -272,28 +369,42 @@ class CloudSyncService {
     }
 
     final appVersion = await _appVersion();
-    final existing = await fetchManifest(deviceId);
-    final base =
-        existing ??
-        CloudDeviceManifest(
-          deviceId: deviceId,
-          deviceName: deviceName,
-          schemaVersion: DatabaseService.schemaVersion,
-          appVersion: appVersion,
-          updatedAt: now,
-          snapshots: const [],
-        );
+    final existing = await fetchDatasetManifest();
+    final base = startNewDataset
+        ? CloudDeviceManifest(
+            // 生成新的 datasetId，让其它设备重新确认；旧快照仍保留在清单里，
+            // 便于回滚，但不会成为新的“当前数据”。
+            deviceId: const Uuid().v4(),
+            deviceName: '云端数据',
+            schemaVersion: DatabaseService.schemaVersion,
+            appVersion: appVersion,
+            updatedAt: now,
+            snapshots: existing?.latest == null
+                ? const []
+                : [existing!.latest!],
+          )
+        : existing ??
+              CloudDeviceManifest(
+                // 复用 deviceId 字段作为稳定 datasetId；第一台设备创建后，
+                // 后续所有设备都沿用该 ID。
+                deviceId: deviceId,
+                deviceName: '云端数据',
+                schemaVersion: DatabaseService.schemaVersion,
+                appVersion: appVersion,
+                updatedAt: now,
+                snapshots: const [],
+              );
     final updated = base
         .copyWith(
-          deviceName: deviceName,
+          deviceName: '云端数据',
           schemaVersion: DatabaseService.schemaVersion,
           appVersion: appVersion,
         )
         .addSnapshot(snapshot, retainCount: config.retainCount);
 
-    // 清单最后写入：即使中途失败，也只是留下一个孤儿快照，不会产生坏清单。
+    // 统一清单最后写入：即使中途失败，也只是留下一个孤儿快照，不会产生坏清单。
     await storage.putBytes(
-      config.manifestKey(deviceId),
+      config.datasetManifestKey,
       CloudSyncUtils.encodeManifest(updated),
     );
 
@@ -451,12 +562,12 @@ class CloudSyncService {
     }
   }
 
-  /// 按保留份数清理本设备历史快照（失败不阻塞上传结果）。
+  /// 按保留份数清理共享数据集历史快照（失败不阻塞上传结果）。
   Future<void> _pruneSnapshots(CloudDeviceManifest manifest) async {
     final retained = manifest.snapshots.map((e) => e.key).toSet();
     try {
       final objects = await storage.list(
-        '${config.devicePrefix(deviceId)}/snapshots/',
+        config.datasetSnapshotsPrefix,
         recursive: true,
       );
       final obsolete = objects

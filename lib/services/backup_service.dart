@@ -637,6 +637,96 @@ class BackupService {
     }
   }
 
+  /// 从备份 ZIP 中解压数据库并迁移到当前 schema，供“合并”使用。
+  ///
+  /// 与 [importBackupFromFile] 不同：这里不会替换本机数据库，也不会恢复
+  /// SharedPreferences / Secure Storage；调用方负责在合并完成后删除临时库。
+  static Future<BackupMergeSource> extractDatabaseForMerge(File file) async {
+    final size = await file.length();
+    if (size > maxBackupSize) {
+      throw const BackupException('备份文件过大，拒绝合并');
+    }
+    final tmpDir = await getTemporaryDirectory();
+    final extractPath = p.join(
+      tmpDir.path,
+      'aquamarina_merge_${DateTime.now().microsecondsSinceEpoch}.db',
+    );
+    final extractFile = File(extractPath);
+    InputFileStream? input;
+    try {
+      Archive archive;
+      try {
+        input = InputFileStream(file.path);
+        archive = ZipDecoder().decodeStream(input, verify: true);
+      } on ArchiveException {
+        throw const BackupException('备份文件已损坏，无法合并');
+      }
+      final dbEntry = archive.findFile(dbFileName);
+      if (dbEntry == null) {
+        throw const BackupException('备份中缺少数据库文件，无法合并');
+      }
+
+      DateTime? createdAt;
+      var watermarks = const <SyncWatermark>[];
+      var backendId = '';
+      final metaBytes = _readSmallEntry(archive, _metaFileName, 1024 * 1024);
+      if (metaBytes != null) {
+        try {
+          final meta =
+              jsonDecode(utf8.decode(metaBytes)) as Map<String, dynamic>;
+          if (meta['app'] != 'aquamarina') {
+            throw const BackupException('不是 Aquamarina 的备份文件');
+          }
+          final rawCreatedAt = meta['created_at'];
+          if (rawCreatedAt is String) {
+            createdAt = DateTime.tryParse(rawCreatedAt);
+          }
+          final rawWatermarks = meta['sync_watermarks'];
+          if (rawWatermarks is List) {
+            watermarks = rawWatermarks
+                .map(SyncWatermark.fromJson)
+                .whereType<SyncWatermark>()
+                .toList(growable: false);
+          }
+          final rawBackend = meta['sync_backend_id'];
+          if (rawBackend is String) backendId = rawBackend;
+        } catch (e) {
+          if (e is BackupException) rethrow;
+          throw const BackupException('备份文件的元信息损坏');
+        }
+      }
+
+      final output = OutputFileStream(extractPath);
+      try {
+        dbEntry.writeContent(output);
+      } finally {
+        await output.close();
+      }
+      if (await extractFile.length() > maxBackupSize) {
+        throw const BackupException('备份中的数据库文件过大，拒绝合并');
+      }
+      await _validateImportedDatabase(extractPath);
+      try {
+        await DatabaseService.migrateImportedDatabase(extractPath);
+      } catch (e) {
+        throw BackupException('备份数据库结构无法升级，拒绝合并：$e');
+      }
+      return BackupMergeSource(
+        databaseFile: extractFile,
+        createdAt: createdAt,
+        watermarks: watermarks,
+        backendId: backendId,
+      );
+    } catch (_) {
+      if (await extractFile.exists()) {
+        await extractFile.delete();
+      }
+      rethrow;
+    } finally {
+      await input?.close();
+    }
+  }
+
   /// 读取小型 JSON 条目并限制大小，避免恶意 ZIP 让内存爆掉。
   static List<int>? _readSmallEntry(
     Archive archive,
@@ -902,9 +992,31 @@ class BackupService {
 
 /// 导入结果摘要
 class BackupImportResult {
+  /// 是否恢复了 Secure Storage 中的 API Key。
   final bool restoredApiKeys;
 
   const BackupImportResult({required this.restoredApiKeys});
+}
+
+/// 合并用的快照数据库与元信息。
+class BackupMergeSource {
+  final File databaseFile;
+  final DateTime? createdAt;
+  final List<SyncWatermark> watermarks;
+  final String backendId;
+
+  const BackupMergeSource({
+    required this.databaseFile,
+    required this.createdAt,
+    required this.watermarks,
+    required this.backendId,
+  });
+
+  Future<void> delete() async {
+    if (await databaseFile.exists()) {
+      await databaseFile.delete();
+    }
+  }
 }
 
 /// 备份相关异常

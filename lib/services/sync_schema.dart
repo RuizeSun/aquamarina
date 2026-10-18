@@ -326,6 +326,92 @@ class SyncSchema {
     });
   }
 
+  /// 合并快照后采纳来源水位。
+  ///
+  /// 与 [resetRuntimeState] 不同：不清空本机 oplog、`sync_applied`、`sync_chunks`
+  /// 或其它设备的水位，只把快照已经包含的来源进度合并进来。
+  static Future<void> adoptSnapshotWatermarks(
+    Database db, {
+    required List<SyncWatermark> watermarks,
+    DateTime? baseline,
+    String? backendId,
+  }) async {
+    var baselineTime = baseline;
+    for (final watermark in watermarks) {
+      try {
+        final hlc = SyncHlc.parse(watermark.lastHlc);
+        final at = DateTime.fromMillisecondsSinceEpoch(hlc.ms, isUtc: true);
+        if (baselineTime == null || at.isAfter(baselineTime)) {
+          baselineTime = at;
+        }
+      } catch (_) {
+        // 忽略损坏水位
+      }
+    }
+    final baselineHlc = baselineTime == null
+        ? ''
+        : SyncHlc(baselineTime.toUtc().millisecondsSinceEpoch, 0).value;
+    await db.transaction((txn) async {
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (final watermark in watermarks) {
+        final rows = await txn.query(
+          'sync_state',
+          columns: ['last_hlc'],
+          where: 'device_id = ?',
+          whereArgs: [watermark.deviceId],
+          limit: 1,
+        );
+        final existing = rows.isEmpty
+            ? ''
+            : (rows.first['last_hlc'] as String? ?? '');
+        if (existing.isNotEmpty &&
+            _compareHlc(existing, watermark.lastHlc) >= 0) {
+          continue;
+        }
+        await txn.insert('sync_state', {
+          'device_id': watermark.deviceId,
+          'last_seq': 0,
+          'last_hlc': watermark.lastHlc,
+          'last_chunk_key': watermark.lastChunkKey.isEmpty
+              ? null
+              : watermark.lastChunkKey,
+          'updated_at': now,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await txn.update('sync_meta', {
+        'baseline_hlc': baselineHlc,
+        'restored_watermarks': 1,
+        if (backendId != null && backendId.isNotEmpty) 'backend_id': backendId,
+      }, where: 'id = 1');
+    });
+  }
+
+  /// “以本机为准”时建立新的同步起点：忽略当前所有云端历史，只接收之后
+  /// 新产生的 chunk。保留本机 oplog / head，确保本机历史仍能上传。
+  static Future<void> resetForNewBaseline(
+    Database db, {
+    required DateTime cutoff,
+    String? backendId,
+  }) async {
+    final baselineHlc = SyncHlc(cutoff.toUtc().millisecondsSinceEpoch, 0).value;
+    await db.transaction((txn) async {
+      await txn.delete('sync_state');
+      await txn.update('sync_meta', {
+        'baseline_hlc': baselineHlc,
+        'restored_watermarks': 1,
+        if (backendId != null && backendId.isNotEmpty) 'backend_id': backendId,
+      }, where: 'id = 1');
+    });
+  }
+
+  static int _compareHlc(String a, String b) {
+    try {
+      return SyncHlc.parse(a).compareTo(SyncHlc.parse(b));
+    } catch (_) {
+      return 1;
+    }
+  }
+
   /// 备份恢复后重置同步运行时状态。
   ///
   /// 快照来自另一台设备：

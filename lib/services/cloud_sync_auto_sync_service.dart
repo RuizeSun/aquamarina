@@ -1,6 +1,7 @@
 import '../models/cloud_sync_manifest.dart';
 import 'cloud_sync_checkpoint_service.dart';
 import 'cloud_sync_engine.dart';
+import 'cloud_sync_introduction_service.dart';
 import 'cloud_sync_network_service.dart';
 import 'cloud_sync_settings.dart';
 import 'log_service.dart';
@@ -52,6 +53,14 @@ class CloudSyncAutoSyncService {
       }
       if (!await CloudSyncNetworkService.isAllowed(config)) {
         logInfo('CloudSyncAutoSync', '当前网络不满足「仅 Wi-Fi」设置，跳过本次同步');
+        return;
+      }
+
+      // 首次接入需要用户决定“合并 / 以本机为准 / 以云端为准”时，
+      // 不静默拉取任何云端历史；等待设置页完成选择。
+      final intro = await CloudSyncIntroductionService.inspect();
+      if (intro.needsDecision) {
+        logInfo('CloudSyncAutoSync', '首次接入待确认，已跳过自动同步');
         return;
       }
 

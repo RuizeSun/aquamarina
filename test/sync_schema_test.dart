@@ -329,4 +329,66 @@ void main() {
     expect(rows.single['min_hlc'], hlc);
     expect(rows.single['max_hlc'], hlc);
   });
+
+  test('合并后采纳快照水位，以本机为准时重置同步起点', () async {
+    await DatabaseService.migrateToV13(db);
+    await DatabaseService.migrateToV15(db);
+    await DatabaseService.migrateToV16(db);
+    await DatabaseService.migrateToV17(db);
+    await DatabaseService.migrateToV18(db);
+    await DatabaseService.migrateToV19(db);
+
+    const deviceA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const deviceB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    final hlcA = SyncHlc(DateTime.utc(2026, 10, 17).millisecondsSinceEpoch, 0);
+    final hlcB = SyncHlc(DateTime.utc(2026, 10, 18).millisecondsSinceEpoch, 0);
+    final now = DateTime.now().toUtc().toIso8601String();
+    await db.insert('sync_state', {
+      'device_id': deviceA,
+      'last_seq': 0,
+      'last_hlc': SyncHlc(
+        DateTime.utc(2026, 10, 15).millisecondsSinceEpoch,
+        0,
+      ).value,
+      'last_chunk_key': null,
+      'updated_at': now,
+    });
+
+    await SyncSchema.adoptSnapshotWatermarks(
+      db,
+      watermarks: [
+        SyncWatermark(deviceId: deviceA, lastHlc: hlcA.value, lastChunkKey: ''),
+        SyncWatermark(deviceId: deviceB, lastHlc: hlcB.value, lastChunkKey: ''),
+      ],
+      baseline: DateTime.utc(2026, 10, 16),
+      backendId: 'backend-test',
+    );
+
+    final states = await db.query('sync_state', orderBy: 'device_id ASC');
+    expect(states, hasLength(2));
+    expect(
+      states.firstWhere((row) => row['device_id'] == deviceA)['last_hlc'],
+      hlcA.value,
+    );
+    expect(
+      states.firstWhere((row) => row['device_id'] == deviceB)['last_hlc'],
+      hlcB.value,
+    );
+    final meta = await db.query('sync_meta', where: 'id = 1');
+    expect(meta.single['restored_watermarks'], 1);
+    expect(meta.single['backend_id'], 'backend-test');
+    expect(meta.single['baseline_hlc'], hlcB.value);
+
+    await SyncSchema.resetForNewBaseline(
+      db,
+      cutoff: DateTime.utc(2030, 1, 1),
+      backendId: 'backend-test',
+    );
+    expect(await db.query('sync_state'), isEmpty);
+    final newMeta = await db.query('sync_meta', where: 'id = 1');
+    expect(
+      newMeta.single['baseline_hlc'],
+      SyncHlc(DateTime.utc(2030, 1, 1).millisecondsSinceEpoch, 0).value,
+    );
+  });
 }

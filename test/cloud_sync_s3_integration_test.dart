@@ -78,7 +78,7 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
-  test('设备清单上传/列举/清理（真实存储）', () async {
+  test('统一数据集清单上传/读取/清理（真实存储）', () async {
     const deviceId = '99999999-9999-4999-8999-999999999999';
     final storage = S3StorageService(
       config: config!,
@@ -93,9 +93,9 @@ void main() {
     );
 
     final now = DateTime.now().toUtc();
-    final snapshotKey = config.snapshotKey(
-      deviceId,
+    final snapshotKey = config.datasetSnapshotKey(
       CloudSyncUtils.utcTimestamp(now),
+      deviceId,
     );
     final payload = Uint8List.fromList([1, 2, 3, 4, 5]);
     final snapshot = CloudSnapshotInfo(
@@ -106,9 +106,9 @@ void main() {
       containsApiKeys: false,
     );
     final manifest = CloudDeviceManifest(
-      deviceId: deviceId,
-      deviceName: 'CI 测试设备',
-      schemaVersion: 12,
+      deviceId: 'dataset-ci',
+      deviceName: '云端数据',
+      schemaVersion: 19,
       appVersion: 'test',
       updatedAt: now,
       snapshots: [snapshot],
@@ -117,26 +117,23 @@ void main() {
     try {
       await storage.putBytes(snapshotKey, payload);
       await storage.putBytes(
-        config.manifestKey(deviceId),
+        config.datasetManifestKey,
         CloudSyncUtils.encodeManifest(manifest),
       );
 
-      final devices = await service.listDevices();
-      final found = devices.where((d) => d.manifest.deviceId == deviceId);
-      expect(found, isNotEmpty);
-      expect(found.first.latest?.sha256, snapshot.sha256);
-
-      final fetched = await service.fetchManifest(deviceId);
-      expect(fetched?.snapshots.length, 1);
-      expect(fetched?.latest?.size, payload.length);
+      final dataset = await service.fetchDatasetManifest();
+      expect(dataset?.deviceId, 'dataset-ci');
+      expect(dataset?.latest?.sha256, snapshot.sha256);
+      expect(await service.hasDatasetSnapshot(), isTrue);
 
       final bytes = await storage.getBytes(snapshotKey);
       expect(bytes, payload);
     } finally {
-      await service.deleteOwnCloudData();
+      final objects = await storage.list(config.datasetPrefix);
+      await storage.deleteMany(objects.map((e) => e.key));
     }
 
-    expect(await service.fetchManifest(deviceId), isNull);
+    expect(await service.fetchDatasetManifest(), isNull);
   }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
   test('两台设备通过真实 S3 增量同步并收敛', () async {

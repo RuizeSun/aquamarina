@@ -221,6 +221,23 @@ class CloudSyncConfig {
     }
   }
 
+  /// 统一数据集前缀。
+  ///
+  /// v2 起云端只保存一份逻辑数据：一份共享快照 + 一份统一清单。
+  /// 设备目录仍用于增量 chunk 的并发安全写入与 GC，但不再代表独立数据集。
+  String get datasetPrefix => '$prefix/dataset';
+
+  String get datasetManifestKey => '$datasetPrefix/manifest.json';
+
+  String get datasetSnapshotsPrefix => '$datasetPrefix/snapshots/';
+
+  /// 共享快照键；文件名保留设备 ID 便于诊断，但所有设备读取同一份清单。
+  String datasetSnapshotKey(String timestamp, String deviceId) {
+    checkDeviceId(deviceId);
+    return '$datasetSnapshotsPrefix$timestamp-$deviceId.zip';
+  }
+
+  /// 旧版按设备隔离的快照键，仅用于兼容与迁移。
   String devicePrefix(String deviceId) {
     checkDeviceId(deviceId);
     return '$prefix/devices/$deviceId';
@@ -590,6 +607,31 @@ class CloudSyncSettings {
     }
   }
 
+  /// 首次接入决策：按 datasetId 记录一次，避免重复询问。
+  static const String _introDecisionPrefix = 'cloud_sync_intro_v1:';
+
+  static Future<String?> loadIntroDecision(String datasetId) async {
+    if (datasetId.isEmpty) return null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString('$_introDecisionPrefix$datasetId');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> saveIntroDecision(String datasetId, String action) async {
+    if (datasetId.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      '$_introDecisionPrefix$datasetId',
+      jsonEncode({
+        'action': action,
+        'decided_at': DateTime.now().toUtc().toIso8601String(),
+      }),
+    );
+  }
+
   static Future<String> getOrCreateDeviceName(String deviceId) async {
     final prefs = await SharedPreferences.getInstance();
     final existing = prefs.getString(_deviceNameKey);
@@ -711,6 +753,13 @@ class CloudSyncSettings {
     await prefs.remove(_configKey);
     await prefs.remove(_stateKey);
     await prefs.remove(_deviceNameKey);
+    final introKeys = prefs
+        .getKeys()
+        .where((key) => key.startsWith(_introDecisionPrefix))
+        .toList(growable: false);
+    for (final key in introKeys) {
+      await prefs.remove(key);
+    }
     await clearCredentials();
   }
 }

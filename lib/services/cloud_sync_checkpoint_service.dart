@@ -1,6 +1,7 @@
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/cloud_sync_manifest.dart';
+import 'cloud_sync_bootstrap_service.dart';
 import 'cloud_sync_service.dart';
 import 'cloud_sync_settings.dart';
 import 'database_service.dart';
@@ -51,15 +52,24 @@ class CloudSyncCheckpointService {
       final delta = total >= state.lastCheckpointOps
           ? total - state.lastCheckpointOps
           : total;
-      final due = lastAt == null
-          ? total > 0
-          : (current.difference(lastAt) >= interval || delta >= opThreshold);
+      final service = await CloudSyncService.create();
+      final dataset = await service.fetchDatasetManifest();
+      // 本机已有历史数据、但云端还没有统一基线时，即使 total_ops 为 0
+      // 也必须立即发布一份，否则新设备永远拿不到这些历史数据。
+      final needsInitialBaseline =
+          dataset?.latest == null &&
+          await CloudSyncBootstrapService.hasLocalData(db: database);
+      final due =
+          needsInitialBaseline ||
+          (lastAt == null
+              ? total > 0
+              : (current.difference(lastAt) >= interval ||
+                    delta >= opThreshold));
       if (!due) return null;
 
       await CloudSyncSettings.updateState(
         (state) => state.copyWith(lastCheckpointAttemptAt: current),
       );
-      final service = await CloudSyncService.create();
       final snapshot = await service.uploadSnapshot(includeApiKeys: false);
       await CloudSyncSettings.updateState(
         (state) => state.copyWith(

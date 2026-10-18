@@ -836,7 +836,12 @@ class CloudSyncEngine {
     required bool restoredWatermarks,
   }) {
     if (restoredWatermarks) {
-      if (lastHlc.isEmpty) return true;
+      if (lastHlc.isEmpty) {
+        // 合并/恢复后的来源没有精确水位时，退回快照基线过滤，
+        // 避免把快照之前的历史 chunk 再应用一次（计数会翻倍）。
+        if (baseline.isEmpty) return true;
+        return !_isAtOrBeforeBaseline(key, baseline);
+      }
       final start = _chunkStartHlc(key);
       if (start == null) return true;
       return _compareHlc(start.value, lastHlc) > 0;

@@ -904,6 +904,45 @@ class DatabaseService {
     _dbInitFuture = null;
   }
 
+  /// 将导入/合并用的数据库文件迁移到当前 schema。
+  ///
+  /// 快照合并不能直接替换本机数据库，因此需要在临时库上补齐 v13–v19 的
+  /// 结构（稳定 ID、同步表、oplog 触发器、head/state 等）。只接受 v13+
+  /// 的快照；更旧的备份请先通过普通备份导入升级。
+  static Future<void> migrateImportedDatabase(String path) async {
+    final probe = await databaseFactory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(readOnly: true, singleInstance: false),
+    );
+    int version;
+    try {
+      version = await probe.getVersion();
+    } finally {
+      await probe.close();
+    }
+    if (version < 13) {
+      throw StateError('备份数据库版本过旧（v$version），请先通过备份恢复升级');
+    }
+    if (version >= schemaVersion) return;
+
+    final db = await databaseFactory.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: schemaVersion,
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 13) await migrateToV13(db);
+          if (oldVersion < 14) await migrateToV14(db);
+          if (oldVersion < 15) await migrateToV15(db);
+          if (oldVersion < 16) await migrateToV16(db);
+          if (oldVersion < 17) await migrateToV17(db);
+          if (oldVersion < 18) await migrateToV18(db);
+          if (oldVersion < 19) await migrateToV19(db);
+        },
+      ),
+    );
+    await db.close();
+  }
+
   /// 导出一份数据库的一致快照到 [targetPath]。
   ///
   /// 使用 SQLite 的 `VACUUM INTO` 命令，由 SQLite 引擎在内部生成

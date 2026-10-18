@@ -206,6 +206,25 @@ void main() {
     expect(await service.fetchManifest(_deviceB), isNull);
   });
 
+  test('读取统一数据集清单与共享快照', () async {
+    final config = _config();
+    final manifest = _manifest(
+      deviceId: 'dataset-id',
+      deviceName: '云端数据',
+      updatedAt: DateTime.utc(2026, 10, 18),
+      snapshotKey: config.datasetSnapshotKey('20261018T120000000Z', _deviceA),
+    );
+    storage.objects[config.datasetManifestKey] = CloudSyncUtils.encodeManifest(
+      manifest,
+    );
+
+    final dataset = await service.fetchDatasetManifest();
+    expect(dataset?.deviceId, 'dataset-id');
+    expect(dataset?.deviceName, '云端数据');
+    expect(dataset?.latest?.key, contains('/dataset/snapshots/'));
+    expect(await service.hasDatasetSnapshot(), isTrue);
+  });
+
   test('deleteOwnCloudData 只删除本设备前缀', () async {
     seedManifest(
       _manifest(

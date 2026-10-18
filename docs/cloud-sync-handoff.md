@@ -58,8 +58,9 @@ flutter test test/cloud_sync_s3_integration_test.dart
    - S3 兼容端点、桶、区域、路径前缀、path-style、保留份数、AK/SK；
    - 保存前做真实读写自检（Bucket / PUT / GET / LIST / DELETE）；
    - 设备名称与设备 ID 展示、重置设备标识、清除配置。
-2. **增量同步**
-   - 手动「增量同步」；
+2. **统一数据集同步**
+   - 云端只保存一份逻辑数据：`dataset/manifest.json` + `dataset/snapshots/`；
+   - 手动「同步」；
    - 启动 5 秒后自动启动前台轮询；
    - 回到前台立即尝试一次，后台停止轮询；
    - 学习结束（学习/复习/拼写/词汇测试/句型练习）后 2 秒防抖触发即时同步；
@@ -67,15 +68,19 @@ flutter test test/cloud_sync_s3_integration_test.dart
    - 可选「仅 Wi-Fi / 以太网自动同步」，连续失败指数退避（最长 60 分钟）；
    - 同步结果展示拉取/上传数量、冲突数、待上传数量、时间预算与告警/冲突明细；
    - 「同步冲突」页可逐条选择保留本地 / 采用远端 / 保留双方；
-   - 「云端设备」页可查看设备列表并删除旧设备数据。
-3. **完整快照**
-   - 「立即上传备份」：把本机数据库 + 设置打包为 ZIP 上传到本设备目录；
-   - 上传前会先收敛增量同步（清空 oplog、补齐未完成 chunk），并保留墓碑与行版本；
-   - 「从云端恢复」：列出所有设备快照，校验 SHA-256 后覆盖导入；
-   - 恢复前自动保留本机数据库快照，失败可回滚；
-   - 自动检查点：每 7 天或累计 5000 条变更自动上传一份完整快照；
-   - 新设备首次配置时，如果本机为空且云端有快照，会提示立即引导。
-4. **安全与隐私**
+   - 「已连接设备」页只读展示哪些设备在使用这份云端数据。
+3. **首次接入（每台新设备询问一次）**
+   - 本机已有数据、云端已有另一份数据时，只询问一次：
+     - **合并**：自动上传本机基线，并按 LWW / 计数器取 max / 集合取并集的方式非覆盖合并云端数据；
+     - **以本机为准**：忽略云端历史，本机数据成为新的云端统一数据；
+     - **以云端为准**：用云端统一快照覆盖本机，并自动保留本机安全副本。
+   - 选择后自动执行，不需要用户手动上传备份或恢复。
+   - 选择结果按 `datasetId` 记录，同一设备不重复询问；合并/替换会产生新的 datasetId，让其它设备重新确认一次。
+4. **云端统一快照**
+   - 「立即上传备份」：把本机数据库 + 设置打包为 ZIP，更新云端统一快照；
+   - 自动检查点：每 7 天或累计 5000 条变更更新一份统一快照；
+   - 「从云端数据恢复」：用统一快照覆盖本机，恢复前自动保留本机数据库快照。
+5. **安全与隐私**
    - AK/SK 只存本机 Secure Storage，不进入备份、不上传云端；
    - 快照默认不包含 AI API Key，上传时可显式勾选；
    - 云同步配置（`cloud_sync_*`）是设备本地设置，备份导出/恢复都会跳过。
@@ -117,8 +122,10 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 |---|---|
 | `lib/services/cloud_sync_settings.dart` | 非敏感配置、Secure Storage 凭据、设备 ID/名称、运行状态、配置校验 |
 | `lib/services/s3_storage_service.dart` | MinIO 客户端封装：PUT/GET/HEAD/LIST/DELETE、超时、错误中文化、连接自检 |
-| `lib/services/cloud_sync_service.dart` | 完整快照：上传、设备清单、恢复、历史保留、恢复前本机快照 |
+| `lib/services/cloud_sync_service.dart` | 统一数据集：共享快照上传、清单读取、恢复、历史保留、恢复前本机快照 |
 | `lib/services/cloud_sync_engine.dart` | 增量同步编排：head/state 水位、按设备增量拉取、恢复后重放本机 chunk、推送本机 chunk、调用 GC |
+| `lib/services/cloud_sync_introduction_service.dart` | 首次接入：检测待确认、记录用户选择、编排合并 / 以本机为准 / 以云端为准 |
+| `lib/services/cloud_sync_merge_service.dart` | 统一快照非覆盖合并：插入缺失、LWW、计数器 max、集合并集、词书父子映射 |
 | `lib/services/cloud_sync_device_meta_service.dart` | 设备发现（CommonPrefixes）、`meta.json` / `head.json` / `state.json` 读写与容错 |
 | `lib/services/cloud_sync_run_lock.dart` | 进程内全局互斥，手动 / 自动 / 事件同步串行执行 |
 | `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步，按配置间隔冷却，手动可复用 |
@@ -146,24 +153,27 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 
 ```
 {prefix}/
-└── devices/{deviceId}/
-    ├── manifest.json
-    ├── snapshots/{utcTimestamp}.zip
+├── dataset/
+│   ├── manifest.json                         ← 唯一数据集清单
+│   └── snapshots/{utcTimestamp}-{deviceId}.zip ← 统一快照（当前 + 历史版本）
+└── devices/{deviceId}/                       ← 仅增量写入分区 / 元数据
     ├── head.json
     ├── state.json
     └── chunks/{hlcMsHex}-{hlcCounterHex}-{sha256完整64位}.jsonl.gz
 ```
 
 - `prefix` 默认 `aquamarina`；
+- **云端只有一份逻辑数据**：所有设备读取同一个 `dataset/manifest.json` 和同一份最新快照；
+- `devices/{deviceId}/` 只用于“每台设备只写自己的前缀”这一并发安全约束，以及 GC 水位；它不是第二份数据；
 - `deviceId` 为本机 UUID v4；
 - chunk 键包含首个 op 的 HLC 与完整 SHA-256，按字典序近似按时间排序；
 - chunk 内容为 gzip 压缩 JSONL；引擎同时兼容旧的未压缩 `.jsonl`；
-- `manifest.json` 在快照 ZIP 上传成功后最后写入；
+- `dataset/manifest.json` 在统一快照 ZIP 上传成功后最后写入；
 - `head.json` 在本轮 chunk 推送成功后最后写入，记录 `latest_chunk_key` / `latest_hlc` / `chunk_count`；
 - `state.json` 在拉取应用后写入，记录 `applied: {其它设备 ID: 已完整应用的最大 chunk 起始 HLC}`，是 GC 的唯一删除依据；
 - head/state 写入失败不会丢数据：`sync_meta.head_dirty` 会在下一次同步重试 head。
 
-`manifest.json` 字段：
+`dataset/manifest.json` 字段（复用 `CloudDeviceManifest` 结构，`device_id` 存稳定的 datasetId）：
 
 ```json
 {
@@ -595,9 +605,9 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 
 ### 5.1 必须保持的协议不变量
 
-1. **设备隔离**：每台设备只写 `devices/{deviceId}/`，不要引入多设备共享的可变对象。
+1. **单一数据集 + 写入分区**：云端只有一份逻辑数据（`dataset/manifest.json` + 最新统一快照）；每台设备只写自己的 `devices/{deviceId}/` chunk/head/state，不要引入多设备共享的可变对象。
 2. **chunk 不可变**：已上传 chunk 不要原地修改；需要修正就发新 op。
-3. **manifest 最后写**：先快照 ZIP，成功后写 manifest。
+3. **manifest 最后写**：先上传统一快照 ZIP，成功后写 `dataset/manifest.json`。
 4. **head / state 是派生水位**：head 记录本机最新 chunk，state 记录已应用到的来源水位；二者丢失可从对象列表重建，但不得用于伪造进度。
 5. **捕获与业务写入同事务**：不要改为应用层异步打点，否则会漏变更。
 6. **`applying=1` 时触发器静默**：否则应用远端操作会无限回环。
@@ -689,7 +699,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 ## 6. 一句话总结
 
-当前云同步是**设备隔离的不可变 oplog + head/state 水位 + 流式完整快照**：正确性、幂等、并发安全已经比较扎实，适合个人多设备。  
+当前云同步是**单一云端数据集 + 设备写入分区**：一份统一快照 + 一条逻辑 oplog 时间线，配合 head/state 水位保证正确性、幂等与并发安全；首次接入按用户选择合并或覆盖。
 阶段 A（head/state、水位 GC、应用记录清理、恢复重放、全局锁）与阶段 B/C（gzip、完整 SHA、批量 apply、时间预算、流式快照、自动 checkpoint）均已完成。  
 剩余两项产品 / 安全增强已明确为 **not planned**：**P2-3 端到端加密**、**P2-4 账号与多租户**。
 

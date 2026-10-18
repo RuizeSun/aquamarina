@@ -19,6 +19,7 @@ class CloudSyncBootstrapService {
       'learning_sessions',
       'sentence_sets',
       'vocab_test_history',
+      'daily_activity',
     ]) {
       try {
         final rows = await database.rawQuery(
@@ -38,9 +39,19 @@ class CloudSyncBootstrapService {
     return false;
   }
 
-  /// 找到适合引导的快照；没有可用快照时返回 null。
+  /// 找到适合引导的共享数据集快照；没有可用快照时返回 null。
+  ///
+  /// v2 起云端只有一份统一数据，不再从多台设备的快照里挑选。
+  /// 旧布局（按设备隔离）仍作为兼容回退。
   static Future<BootstrapCandidate?> findLatestSnapshot() async {
     final service = await CloudSyncService.create();
+    final dataset = await service.fetchDatasetManifest();
+    if (dataset?.latest != null) {
+      return BootstrapCandidate(
+        service: service,
+        summary: CloudDeviceSummary(manifest: dataset!, isCurrentDevice: true),
+      );
+    }
     final devices = await service.listDevices();
     final chosen = chooseCandidate(devices);
     if (chosen == null) return null;
