@@ -277,4 +277,24 @@ void main() {
       expect(await CloudSyncSettings.getOrCreateDeviceId(), newId);
     });
   });
+
+  group('CloudSyncSettings.updateState', () {
+    test('并发读改写被串行化，失败计数不丢失', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      await Future.wait(
+        List.generate(
+          20,
+          (_) => CloudSyncSettings.updateState(
+            (state) => state.copyWith(
+              consecutiveFailures: state.consecutiveFailures + 1,
+            ),
+          ),
+        ),
+      );
+
+      final state = await CloudSyncSettings.loadState();
+      expect(state.consecutiveFailures, 20);
+    });
+  });
 }

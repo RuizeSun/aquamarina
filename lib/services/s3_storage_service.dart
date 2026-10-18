@@ -349,23 +349,27 @@ class S3StorageService {
   ///
   /// [startAfter] 用于增量拉取：只返回键严格大于该值的对象，
   /// 配合 `sync_state.last_chunk_key` 可以避免重复列举历史 chunk。
+  ///
+  /// [stopWhen] 在对象键有序的前提下可按页提前结束列举（命中项会包含在
+  /// 返回值中）。GC 用它在越过所有活跃设备水位后停止，避免把后续大量
+  /// chunk 全部读入内存。
   Future<List<S3ObjectInfo>> list(
     String prefix, {
     bool recursive = true,
     String? startAfter,
+    bool Function(String key)? stopWhen,
   }) async {
     return _guard('列举对象', () async {
-      final pages = await _minio
+      final stream = _minio
           .listObjectsV2(
             config.bucket,
             prefix: prefix,
             recursive: recursive,
             startAfter: startAfter,
           )
-          .toList()
           .timeout(_listTimeout);
       final out = <S3ObjectInfo>[];
-      for (final page in pages) {
+      await for (final page in stream) {
         for (final item in page.objects) {
           final key = item.key;
           if (key == null || key.isEmpty) continue;
@@ -377,6 +381,9 @@ class S3StorageService {
               lastModified: item.lastModified,
             ),
           );
+          if (stopWhen != null && stopWhen(key)) {
+            return out;
+          }
         }
       }
       return out;

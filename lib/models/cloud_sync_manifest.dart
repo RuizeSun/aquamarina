@@ -18,6 +18,18 @@ class CloudSyncException implements Exception {
   String toString() => message;
 }
 
+/// 用户主动取消同步 / 快照操作。
+///
+/// 与普通失败区分开：调用方不应把它展示为错误，也不能因此进入失败退避。
+class CloudSyncCancelledException implements Exception {
+  final String message;
+
+  const CloudSyncCancelledException([this.message = '操作已取消']);
+
+  @override
+  String toString() => message;
+}
+
 /// 云端快照元信息。
 class CloudSnapshotInfo {
   final String key;

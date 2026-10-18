@@ -24,6 +24,9 @@ class FakeS3Storage extends S3StorageService {
   /// LIST 调用计数，用于验证 head 命中时完全不列举 chunk。
   int listCalls = 0;
 
+  /// 已调用的 LIST 前缀（用于验证 GC 不再做全设备递归列举）。
+  final List<String> listPrefixes = [];
+
   /// 仅对 `chunks/` 前缀的 LIST 计数。
   int chunkListCalls = 0;
 
@@ -84,6 +87,9 @@ class FakeS3Storage extends S3StorageService {
     );
   }
 
+  /// 键包含该子串时模拟 GET 返回 null（对象在 LIST 之后被清理）。
+  String? nullGetKeyContains;
+
   @override
   Future<Uint8List?> getBytes(
     String key, {
@@ -92,7 +98,10 @@ class FakeS3Storage extends S3StorageService {
     void Function(int received, int? total)? onProgress,
   }) async {
     final bytes = objects[key];
-    if (bytes == null) {
+    final missing =
+        bytes == null ||
+        (nullGetKeyContains != null && key.contains(nullGetKeyContains!));
+    if (missing) {
       if (nullIfMissing) return null;
       throw const CloudSyncException('云端对象不存在');
     }
@@ -115,25 +124,33 @@ class FakeS3Storage extends S3StorageService {
     String prefix, {
     bool recursive = true,
     String? startAfter,
+    bool Function(String key)? stopWhen,
   }) async {
     listCalls++;
+    listPrefixes.add(prefix);
     if (prefix.contains('/chunks/')) chunkListCalls++;
-    final entries = objects.entries
-        .where((entry) => entry.key.startsWith(prefix))
-        .where(
-          (entry) => startAfter == null || entry.key.compareTo(startAfter) > 0,
-        )
-        .toList();
-    return entries
-        .map(
-          (entry) => S3ObjectInfo(
-            key: entry.key,
-            size: entry.value.length,
-            etag: 'etag',
-            lastModified: lastModified[entry.key],
-          ),
-        )
-        .toList();
+    final entries =
+        objects.entries
+            .where((entry) => entry.key.startsWith(prefix))
+            .where(
+              (entry) =>
+                  startAfter == null || entry.key.compareTo(startAfter) > 0,
+            )
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+    final out = <S3ObjectInfo>[];
+    for (final entry in entries) {
+      out.add(
+        S3ObjectInfo(
+          key: entry.key,
+          size: entry.value.length,
+          etag: 'etag',
+          lastModified: lastModified[entry.key],
+        ),
+      );
+      if (stopWhen != null && stopWhen(entry.key)) break;
+    }
+    return out;
   }
 
   @override

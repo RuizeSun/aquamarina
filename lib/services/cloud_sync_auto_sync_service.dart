@@ -65,8 +65,8 @@ class CloudSyncAutoSyncService {
         '自动同步完成：pull=${result.pulledOps} ops，'
             'push=${result.pushedOps} ops，pending=${result.remainingLocalOps}',
       );
-      await CloudSyncSettings.saveState(
-        (await CloudSyncSettings.loadState()).copyWith(
+      await CloudSyncSettings.updateState(
+        (state) => state.copyWith(
           lastAutoSyncAt: DateTime.now(),
           consecutiveFailures: 0,
           clearBackoff: true,
@@ -77,23 +77,24 @@ class CloudSyncAutoSyncService {
       await CloudSyncCheckpointService.maybeCreate(config: config);
     } catch (e) {
       try {
-        final state = await CloudSyncSettings.loadState();
-        final failures = state.consecutiveFailures + 1;
         final cooldownMinutes =
             (config?.autoSyncIntervalMinutes ?? defaultCooldown.inMinutes)
                 .clamp(1, 60);
-        final exponent = failures > 5 ? 5 : failures;
-        final backoffMinutes = (cooldownMinutes * (1 << exponent)).clamp(1, 60);
-        logWarning(
-          'CloudSyncAutoSync',
-          '自动同步失败（连续 $failures 次，退避 $backoffMinutes 分钟）: $e',
-        );
-        await CloudSyncSettings.saveState(
-          state.copyWith(
+        var failures = 0;
+        var backoffMinutes = cooldownMinutes;
+        await CloudSyncSettings.updateState((state) {
+          failures = state.consecutiveFailures + 1;
+          final exponent = failures > 5 ? 5 : failures;
+          backoffMinutes = (cooldownMinutes * (1 << exponent)).clamp(1, 60);
+          return state.copyWith(
             lastError: '$e',
             consecutiveFailures: failures,
             backoffUntil: DateTime.now().add(Duration(minutes: backoffMinutes)),
-          ),
+          );
+        });
+        logWarning(
+          'CloudSyncAutoSync',
+          '自动同步失败（连续 $failures 次，退避 $backoffMinutes 分钟）: $e',
         );
       } catch (_) {
         // 状态写入失败时仍保留日志；下一次生命周期事件会重试。

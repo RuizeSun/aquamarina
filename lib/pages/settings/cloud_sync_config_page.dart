@@ -157,6 +157,7 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
           return CloudSyncService.testConfig(config, creds);
         },
       );
+      if (message == null) return;
       _showSnack(message);
     } catch (e) {
       _showSnack('连接失败：$e', isError: true);

@@ -180,6 +180,20 @@ class CloudSyncEngine {
         onProgress,
       );
     }
+    // 即使本机只做增量拉取、从未上传过快照，也要有 meta.json，
+    // 否则其它设备的「云端设备」页只能显示「未知设备」。
+    // 放在 push 之后写入，避免占用 chunk 上传的重试/失败语义。
+    if (!result.cancelled) {
+      try {
+        await _meta.ensureMeta(
+          deviceId: deviceId,
+          deviceName: deviceName,
+          schemaVersion: DatabaseService.schemaVersion,
+        );
+      } catch (e) {
+        logWarning('CloudSyncEngine', '写入设备 meta 失败（不影响同步）: $e');
+      }
+    }
     // 即使本次没有新推送，也要补写上次失败的 head
     await _flushHead(db, result);
     // 时间预算耗尽时跳过 GC，避免把一次前台同步拖得过长。
@@ -194,18 +208,17 @@ class CloudSyncEngine {
 
     result.remainingLocalOps = await SyncCaptureService.pendingCount(db: db);
     try {
-      final state = await CloudSyncSettings.loadState();
-      if (result.errors.isEmpty) {
-        await CloudSyncSettings.saveState(
-          state.copyWith(lastSuccessAt: DateTime.now(), clearError: true),
-        );
-      } else {
+      await CloudSyncSettings.updateState((state) {
+        if (result.errors.isEmpty) {
+          return state.copyWith(
+            lastSuccessAt: DateTime.now(),
+            clearError: true,
+          );
+        }
         // 有 chunk 失败/损坏/缺失父级时不要伪装成成功：保留 lastError，
         // 让设置页可见，并让自动同步按失败进入退避而不是等完整间隔。
-        await CloudSyncSettings.saveState(
-          state.copyWith(lastError: result.errors.first),
-        );
-      }
+        return state.copyWith(lastError: result.errors.first);
+      });
     } catch (_) {
       // 状态展示失败不影响同步结果
     }
@@ -506,7 +519,12 @@ class CloudSyncEngine {
         maxBytes: 8 * 1024 * 1024,
         nullIfMissing: true,
       );
-      if (bytes == null) return null;
+      if (bytes == null) {
+        // 对象在 LIST 之后被清理/删除时必须显式报错，否则水位会静默卡住，
+        // “接管并合并”也会误以为拉取完整。
+        result.errors.add('chunk 不存在（可能已被清理）：$key');
+        return null;
+      }
       final sha = CloudSyncUtils.sha256Hex(bytes);
       if (!_hashMatches(key, sha)) {
         result.errors.add('chunk 哈希校验失败：$key');
@@ -545,6 +563,10 @@ class CloudSyncEngine {
       }
       if (apply.skippedMissingParent > 0) {
         result.errors.add('chunk 存在缺失父级，将在下次同步重试：$key');
+        return null;
+      }
+      if (apply.unsupportedEntities > 0) {
+        result.errors.add('chunk 包含当前版本不支持的实体，将在应用升级后重试：$key');
         return null;
       }
       await db.insert('sync_chunks', {
@@ -726,7 +748,6 @@ class CloudSyncEngine {
         result.pushedChunks,
         maxPushBatches,
       );
-      await _markHeadDirty(db, key, batch.ops.first.hlc);
     }
   }
 
@@ -745,25 +766,6 @@ class CloudSyncEngine {
       return true;
     }
     return false;
-  }
-
-  /// 记录本机最新 chunk，供本次 run 末尾写 `head.json`。
-  Future<void> _markHeadDirty(Database db, String key, SyncHlc hlc) async {
-    final rows = await db.query(
-      'sync_meta',
-      columns: ['head_chunk_count'],
-      where: 'id = 1',
-      limit: 1,
-    );
-    final previous = rows.isEmpty
-        ? 0
-        : ((rows.first['head_chunk_count'] as int?) ?? 0);
-    await db.update('sync_meta', {
-      'head_hlc': hlc.value,
-      'head_key': key,
-      'head_chunk_count': previous + 1,
-      'head_dirty': 1,
-    }, where: 'id = 1');
   }
 
   /// chunk 键包含首个 op 的 HLC，便于按时间顺序拉取。

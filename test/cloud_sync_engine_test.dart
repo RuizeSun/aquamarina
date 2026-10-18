@@ -42,6 +42,11 @@ void main() {
     db = await openSyncTestDb();
     config = _config();
     storage = FakeS3Storage(config);
+    // 本文件聚焦增量同步；GC 由 cloud_sync_maintenance_test 覆盖。
+    // 写入最近的 GC 时间，避免每次 run 结束都扫描 chunk 干扰 LIST 断言。
+    await CloudSyncSettings.saveState(
+      CloudSyncRuntimeState(lastGcAt: DateTime.now()),
+    );
   });
 
   tearDown(() async {
@@ -255,6 +260,54 @@ void main() {
     expect(state.lastSuccessAt, isNotNull);
   });
 
+  test('chunk 在 LIST 后消失时显式报错，不能静默卡住水位', () async {
+    final ops = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'banana'},
+        data: {
+          'note': 'from B',
+          'is_favorited': 0,
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    final key = _chunkKey(config, _deviceB, ops);
+    storage.objects[key] = SyncChunkCodec.encode(ops);
+    storage.nullGetKeyContains = key;
+
+    final result = await engine().run(push: false);
+    expect(result.errors, isNotEmpty);
+    expect(result.hasIncompleteWork, isTrue);
+    expect(await db.query('sync_chunks'), isEmpty);
+    expect(await db.query('word_notes'), isEmpty);
+  });
+
+  test('未知实体不会标记为已应用，升级前保持 chunk 未完成', () async {
+    final ops = [
+      makeOp(
+        entity: 'future_entity',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'id': 'future-1'},
+        data: {'value': 'future'},
+        deviceId: _deviceB,
+      ),
+    ];
+    storage.objects[_chunkKey(config, _deviceB, ops)] = SyncChunkCodec.encode(
+      ops,
+    );
+
+    final result = await engine().run(push: false);
+    expect(result.errors, isNotEmpty);
+    expect(result.hasIncompleteWork, isTrue);
+    expect(await db.query('sync_chunks'), isEmpty);
+    expect(await db.query('sync_applied'), isEmpty);
+  });
+
   test('推送成功后写 head.json 并清理 dirty 标记', () async {
     await db.insert('word_notes', {
       'word': 'banana',
@@ -275,6 +328,19 @@ void main() {
 
     final meta = await db.query('sync_meta', where: 'id = 1');
     expect(meta.single['head_dirty'], 0);
+  });
+
+  test('仅增量同步（从未上传快照）也会写 meta.json', () async {
+    final result = await engine().run(pull: true, push: false);
+    expect(result.errors, isEmpty);
+
+    final metaKey = config.metaKey(_deviceA);
+    expect(storage.objects.containsKey(metaKey), isTrue);
+    final meta = CloudDeviceMetaCodec.parseMeta(storage.objects[metaKey]!);
+    expect(meta.deviceId, _deviceA);
+    expect(meta.deviceName, '设备 A');
+    expect(meta.schemaVersion, greaterThan(0));
+    expect(meta.platform, isNotEmpty);
   });
 
   test('head 水位未变化时不列举该设备的 chunk', () async {

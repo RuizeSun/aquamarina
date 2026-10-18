@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -234,6 +235,8 @@ class CloudSyncConfig {
   String stateKey(String deviceId) => '${devicePrefix(deviceId)}/state.json';
 
   String headKey(String deviceId) => '${devicePrefix(deviceId)}/head.json';
+
+  String metaKey(String deviceId) => '${devicePrefix(deviceId)}/meta.json';
 
   String get devicesPrefix => '$prefix/devices';
 
@@ -655,6 +658,30 @@ class CloudSyncSettings {
     await prefs.setString(_stateKey, jsonEncode(state.toJson()));
   }
 
+  /// 串行化运行时状态的「读取 → 修改 → 写回」。
+  ///
+  /// 自动同步、事件同步、检查点与手动同步都会更新同一个 JSON 状态。
+  /// 若各自 `loadState` 后再 `saveState`，后写入者会覆盖先写入者的字段
+  /// （例如失败计数 / 退避时间 / 上次检查点）。所有读改写都必须走这里。
+  static Future<CloudSyncRuntimeState> updateState(
+    CloudSyncRuntimeState Function(CloudSyncRuntimeState current) update,
+  ) {
+    final completer = Completer<CloudSyncRuntimeState>();
+    _stateMutationQueue = _stateMutationQueue.then((_) async {
+      try {
+        final current = await loadState();
+        final next = update(current);
+        await saveState(next);
+        if (!completer.isCompleted) completer.complete(next);
+      } catch (e, stackTrace) {
+        if (!completer.isCompleted) completer.completeError(e, stackTrace);
+      }
+    });
+    return completer.future;
+  }
+
+  static Future<void> _stateMutationQueue = Future<void>.value();
+
   /// 配置与凭据是否齐全（纯函数，便于 UI / 测试复用）。
   static bool isCompleteConfiguration(
     CloudSyncConfig? config,
@@ -678,6 +705,8 @@ class CloudSyncSettings {
 
   /// 清除云同步配置、凭据与状态（保留设备 ID）。
   static Future<void> clearAll() async {
+    // 等待排队中的状态写入完成，避免清除后又被旧状态写回。
+    await _stateMutationQueue;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_configKey);
     await prefs.remove(_stateKey);

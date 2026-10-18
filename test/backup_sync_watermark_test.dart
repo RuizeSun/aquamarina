@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/backup_service.dart';
+import 'package:aquamarina/services/sync_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -23,7 +24,7 @@ void main() {
     } catch (_) {}
   });
 
-  test('导出前从 DB 副本提取来源水位并移除同步表', () async {
+  test('导出前提取来源水位并保留墓碑与行版本', () async {
     final db = await databaseFactory.openDatabase(
       dbPath,
       options: OpenDatabaseOptions(singleInstance: false),
@@ -44,6 +45,17 @@ void main() {
         last_chunk_key TEXT
       )
     ''');
+    await db.execute(
+      'CREATE TABLE sync_tombstones ('
+      'entity TEXT NOT NULL, key TEXT NOT NULL, '
+      'deleted_hlc TEXT NOT NULL, deleted_at TEXT NOT NULL, '
+      'PRIMARY KEY (entity, key))',
+    );
+    await db.execute(
+      'CREATE TABLE sync_row_versions ('
+      'entity TEXT NOT NULL, key TEXT NOT NULL, hlc TEXT NOT NULL, '
+      'PRIMARY KEY (entity, key))',
+    );
     await db.execute('CREATE TABLE oplog_word_notes (seq INTEGER)');
     const ownId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const otherId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -64,6 +76,17 @@ void main() {
       'device_id': otherId,
       'last_hlc': SyncHlc(3000, 0).value,
       'last_chunk_key': 'p/devices/$otherId/chunks/other.jsonl.gz',
+    });
+    await db.insert('sync_tombstones', {
+      'entity': 'word_notes',
+      'key': '{"word":"apple"}',
+      'deleted_hlc': SyncHlc(4000, 0).value,
+      'deleted_at': '2026-10-01T00:00:00Z',
+    });
+    await db.insert('sync_row_versions', {
+      'entity': 'word_notes',
+      'key': '{"word":"apple"}',
+      'hlc': SyncHlc(4000, 0).value,
     });
     await db.close();
 
@@ -86,8 +109,50 @@ void main() {
       "SELECT name FROM sqlite_master WHERE type = 'table'",
     );
     final names = {for (final row in tables) row['name'] as String};
-    expect(names.any((name) => name.startsWith('sync_')), isFalse);
+    expect(names, contains('sync_tombstones'));
+    expect(names, contains('sync_row_versions'));
+    expect(
+      names.any(
+        (name) =>
+            name.startsWith('sync_') &&
+            name != 'sync_tombstones' &&
+            name != 'sync_row_versions',
+      ),
+      isFalse,
+    );
     expect(names.any((name) => name.startsWith('oplog_')), isFalse);
+    final tombstones = await probe.rawQuery(
+      'SELECT COUNT(*) AS c FROM sync_tombstones',
+    );
+    final versions = await probe.rawQuery(
+      'SELECT COUNT(*) AS c FROM sync_row_versions',
+    );
+    expect(tombstones.single['c'], 1);
+    expect(versions.single['c'], 1);
     await probe.close();
+  });
+
+  test('跨后端恢复丢弃来源水位，但保留当前后端身份以保护 baseline', () {
+    const watermark = SyncWatermark(
+      deviceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      lastHlc: '00000000000003e8:00000000',
+      lastChunkKey: 'p/devices/a/chunks/1.jsonl.gz',
+    );
+
+    final mismatch = BackupService.resolveRestoreWatermarks(
+      backupWatermarks: const [watermark],
+      backupBackendId: 'backend-A',
+      localBackendIdentity: 'backend-B',
+    );
+    expect(mismatch.watermarks, isNull);
+    expect(mismatch.backendId, 'backend-B');
+
+    final same = BackupService.resolveRestoreWatermarks(
+      backupWatermarks: const [watermark],
+      backupBackendId: 'backend-A',
+      localBackendIdentity: 'backend-A',
+    );
+    expect(same.watermarks, isNotNull);
+    expect(same.backendId, 'backend-A');
   });
 }

@@ -37,6 +37,25 @@ class _CloudSyncDevicesPageState extends State<CloudSyncDevicesPage> {
       for (final item in summaries)
         item.manifest.deviceId: item.manifest.deviceName,
     };
+    // 只做增量同步的设备没有 manifest.json；用 meta.json（旧数据回退到
+    // head/state 中的 device_name）避免显示成「未知设备」。
+    for (final id in ids) {
+      if (names[id] != null && names[id]!.trim().isNotEmpty) continue;
+      final deviceMeta = await meta.fetchMeta(id);
+      if (deviceMeta != null && deviceMeta.deviceName.trim().isNotEmpty) {
+        names[id] = deviceMeta.deviceName;
+        continue;
+      }
+      final head = await meta.fetchHead(id);
+      if (head != null && head.deviceName.trim().isNotEmpty) {
+        names[id] = head.deviceName;
+        continue;
+      }
+      final state = await meta.fetchState(id);
+      if (state != null && state.deviceName.trim().isNotEmpty) {
+        names[id] = state.deviceName;
+      }
+    }
     return _DeviceListData(
       service: service,
       currentId: currentId,

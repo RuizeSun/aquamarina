@@ -88,4 +88,22 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('meta 编解码保留设备名称与平台', () {
+    final meta = CloudDeviceMeta(
+      deviceId: _deviceA,
+      deviceName: '设备 A',
+      platform: 'Windows',
+      schemaVersion: 19,
+      lastSeen: DateTime.utc(2026, 10, 18, 2, 3, 4),
+    );
+    final parsed = CloudDeviceMetaCodec.parseMeta(
+      CloudDeviceMetaCodec.encodeMeta(meta),
+    );
+    expect(parsed.deviceId, _deviceA);
+    expect(parsed.deviceName, '设备 A');
+    expect(parsed.platform, 'Windows');
+    expect(parsed.schemaVersion, 19);
+    expect(parsed.lastSeen.toUtc(), DateTime.utc(2026, 10, 18, 2, 3, 4));
+  });
 }

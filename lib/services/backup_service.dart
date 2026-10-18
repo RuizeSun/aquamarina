@@ -91,7 +91,9 @@ class BackupService {
 
     final dbPath = await DatabaseService.databasePath;
     final dbFile = File(dbPath);
-    final tmpPath = '$dbPath.export_tmp';
+    // 唯一临时文件：避免与云同步检查点或手动导出并发时互相覆盖。
+    final tmpPath =
+        '$dbPath.export_tmp_${DateTime.now().microsecondsSinceEpoch}';
     final tmpFile = File(tmpPath);
     if (await tmpFile.exists()) {
       await tmpFile.delete();
@@ -165,6 +167,10 @@ class BackupService {
   ///
   /// 水位会写入 `backup_meta.json`；恢复时用它重建 `sync_state`，从而只拉取
   /// 快照真正未包含的 chunk。旧备份没有该字段时仍使用创建时间基线。
+  ///
+  /// `sync_tombstones` 与 `sync_row_versions` 必须保留：恢复后仍可能拉取到
+  /// 其它设备在快照水位之后才上传的旧 HLC 操作，没有墓碑会被“复活”，
+  /// 没有行版本则可能覆盖快照里更新的数据。
   @visibleForTesting
   static Future<(List<SyncWatermark>, String)>
   extractAndStripSyncRuntimeTablesForTesting(String dbPath) =>
@@ -221,13 +227,18 @@ class BackupService {
         // 旧库没有 sync_state 时忽略
       }
 
+      // 墓碑与行版本是恢复后防复活 / 防旧数据覆盖的依据，不能随其它
+      // 同步运行时表一起删除。
+      const preservedTables = {'sync_tombstones', 'sync_row_versions'};
       final rows = await db.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table' "
         "AND (name LIKE 'sync\\_%' ESCAPE '\\' OR name LIKE 'oplog\\_%' ESCAPE '\\')",
       );
       for (final row in rows) {
         final name = row['name'];
-        if (name is String && name.isNotEmpty) {
+        if (name is String &&
+            name.isNotEmpty &&
+            !preservedTables.contains(name)) {
           await db.execute('DROP TABLE IF EXISTS "$name"');
         }
       }
@@ -240,6 +251,27 @@ class BackupService {
     } finally {
       await db?.close();
     }
+  }
+
+  /// 决定恢复时使用备份中的来源水位，还是退回备份创建时间基线。
+  ///
+  /// 来源水位只对导出它的对象存储后端有效。如果本机已配置另一个后端，
+  /// 必须丢弃水位，但同时要把 `backend_id` 写成当前后端身份；否则下一次
+  /// 同步会把恢复结果误判为“后端切换”，从而清空 `baseline_hlc` 并全量重放。
+  @visibleForTesting
+  static ({List<SyncWatermark>? watermarks, String backendId})
+  resolveRestoreWatermarks({
+    required List<SyncWatermark>? backupWatermarks,
+    required String backupBackendId,
+    required String? localBackendIdentity,
+  }) {
+    final local = localBackendIdentity?.trim() ?? '';
+    if (backupBackendId.isNotEmpty &&
+        local.isNotEmpty &&
+        local != backupBackendId) {
+      return (watermarks: null, backendId: local);
+    }
+    return (watermarks: backupWatermarks, backendId: backupBackendId);
   }
 
   /// 序列化 SharedPreferences：为每个 key 附带类型标记，保证恢复时类型不丢失。
@@ -518,29 +550,32 @@ class BackupService {
         try {
           // 水位只对导出它的那个对象存储后端有效；如果本机当前配置指向
           // 另一个后端，退回“备份创建时间”基线，避免误跳过新后端的数据。
-          var watermarksToRestore = backupWatermarks;
-          if (watermarksToRestore != null && backupBackendId.isNotEmpty) {
-            try {
-              final localConfig = await CloudSyncSettings.loadConfig();
-              if (localConfig != null &&
-                  localConfig.isConfigured &&
-                  localConfig.backendIdentity != backupBackendId) {
-                logWarning('BackupService', '备份来自其它对象存储后端，忽略同步水位并退回 baseline');
-                watermarksToRestore = null;
-              }
-            } catch (_) {}
+          // 同时把 backend_id 写成当前后端，防止下一次同步把这次恢复误判成
+          // 后端切换并清空 baseline。
+          String? localBackendIdentity;
+          try {
+            final localConfig = await CloudSyncSettings.loadConfig();
+            if (localConfig != null && localConfig.isConfigured) {
+              localBackendIdentity = localConfig.backendIdentity;
+            }
+          } catch (_) {}
+          final decision = resolveRestoreWatermarks(
+            backupWatermarks: backupWatermarks,
+            backupBackendId: backupBackendId,
+            localBackendIdentity: localBackendIdentity,
+          );
+          if (decision.watermarks == null && backupWatermarks != null) {
+            logWarning('BackupService', '备份来自其它对象存储后端，忽略同步水位并退回 baseline');
           }
           await SyncSchema.resetRuntimeState(
             db,
             baseline: backupCreatedAt ?? DateTime.now(),
-            watermarks: watermarksToRestore,
-            backendId: backupBackendId.isEmpty ? null : backupBackendId,
+            watermarks: decision.watermarks,
+            backendId: decision.backendId.isEmpty ? null : decision.backendId,
           );
           // 恢复后数据基线已变：清空检查点水位，允许重新生成检查点。
-          await CloudSyncSettings.saveState(
-            (await CloudSyncSettings.loadState()).copyWith(
-              clearCheckpoint: true,
-            ),
+          await CloudSyncSettings.updateState(
+            (state) => state.copyWith(clearCheckpoint: true),
           );
         } catch (e) {
           logWarning('BackupService', '重置同步运行时状态失败（不影响恢复）: $e');

@@ -86,6 +86,32 @@ void main() {
       );
     });
 
+    test('markUploaded 在同一事务内推进 head 水位', () async {
+      await db.insert('word_notes', {
+        'word': 'banana',
+        'note': 'from A',
+        'is_favorited': 0,
+        'updated_at': '2026-10-02T00:00:00Z',
+      });
+      final batch = await SyncCaptureService.takePendingBatch(
+        db: db,
+        deviceId: 'device-a',
+      );
+      expect(batch, isNotNull);
+      const ownKey = 'p/devices/device-a/chunks/test.jsonl.gz';
+      await SyncCaptureService.markUploaded(
+        batch!,
+        db: db,
+        ownChunkDeviceId: 'device-a',
+        ownChunkKey: ownKey,
+      );
+
+      final meta = (await db.query('sync_meta')).single;
+      expect(meta['head_key'], ownKey);
+      expect(meta['head_hlc'], batch.ops.first.hlc.value);
+      expect(meta['head_dirty'], 1);
+    });
+
     test('HLC 以写入时的 captured_at_ms 为基准，晚导出不会变晚', () async {
       await db.insert('word_notes', {
         'word': 'apple',
@@ -679,6 +705,36 @@ void main() {
         batch!.ops.single.hlc.compareTo(SyncHlc(remoteHlcMs, 0)),
         greaterThan(0),
       );
+    });
+
+    test('created_at 合并时保留更早的时间（MIN）', () async {
+      await db.insert('user_word_records', {
+        'word': 'apple',
+        'stage': 1,
+        'review_count': 0,
+        'created_at': '2026-01-01T00:00:00Z',
+        'last_reviewed_at': '2026-01-01T00:00:00Z',
+      });
+
+      await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'user_word_records',
+          seq: 1,
+          hlcMs: 1000,
+          key: {'word': 'apple'},
+          data: {
+            'stage': 2,
+            'created_at': '2026-02-01T00:00:00Z',
+            'last_reviewed_at': '2026-02-01T00:00:00Z',
+          },
+          delta: {'review_count': 1},
+        ),
+      ], db: db);
+
+      final row = (await db.query('user_word_records')).single;
+      expect(row['created_at'], '2026-01-01T00:00:00Z');
+      expect(row['stage'], 2);
+      expect(row['review_count'], 1);
     });
 
     test('bulk op 同样受行版本门禁约束', () async {

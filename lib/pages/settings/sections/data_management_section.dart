@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../services/backup_service.dart';
+import '../../../services/cloud_sync_run_lock.dart';
 import '../../../services/log_service.dart';
 import '../settings_section_header.dart';
 
@@ -85,9 +86,11 @@ class _DataManagementSectionState extends State<DataManagementSection> {
       final tmpFile = File(tmpPath);
       try {
         logInfo('DataManagement', '开始导出数据备份 includeApiKeys=$includeKeys');
-        await BackupService.exportBackupToFile(
-          includeApiKeys: includeKeys,
-          output: tmpFile,
+        await CloudSyncRunLock.runExclusive(
+          () => BackupService.exportBackupToFile(
+            includeApiKeys: includeKeys,
+            output: tmpFile,
+          ),
         );
         if (!context.mounted) return;
         final result = await SharePlus.instance.share(
@@ -122,9 +125,11 @@ class _DataManagementSectionState extends State<DataManagementSection> {
         try {
           final docsDir = await getApplicationDocumentsDirectory();
           final fallbackPath = p.join(docsDir.path, fileName);
-          await BackupService.exportBackupToFile(
-            includeApiKeys: includeKeys,
-            output: File(fallbackPath),
+          await CloudSyncRunLock.runExclusive(
+            () => BackupService.exportBackupToFile(
+              includeApiKeys: includeKeys,
+              output: File(fallbackPath),
+            ),
           );
           if (context.mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -143,11 +148,14 @@ class _DataManagementSectionState extends State<DataManagementSection> {
         return;
       }
       if (saveLocation == null) return; // 用户取消
+      final targetFile = File(saveLocation.path);
 
       try {
-        await BackupService.exportBackupToFile(
-          includeApiKeys: includeKeys,
-          output: File(saveLocation.path),
+        await CloudSyncRunLock.runExclusive(
+          () => BackupService.exportBackupToFile(
+            includeApiKeys: includeKeys,
+            output: targetFile,
+          ),
         );
       } catch (e) {
         if (context.mounted) {
@@ -220,9 +228,12 @@ class _DataManagementSectionState extends State<DataManagementSection> {
       ),
     );
     if (confirmed != true || !context.mounted) return;
+    final sourceFile = File(file.path);
 
     try {
-      final result = await BackupService.importBackupFromFile(File(file.path));
+      final result = await CloudSyncRunLock.runExclusive(
+        () => BackupService.importBackupFromFile(sourceFile),
+      );
       logInfo('DataManagement', '数据导入成功');
       if (!context.mounted) return;
       await showDialog<void>(
@@ -307,7 +318,7 @@ class _DataManagementSectionState extends State<DataManagementSection> {
     // ── 执行清除 ──
     setState(() => _isClearing = true);
     try {
-      await BackupService.clearAllData();
+      await CloudSyncRunLock.runExclusive(BackupService.clearAllData);
       if (!context.mounted) return;
       await showDialog<void>(
         context: context,

@@ -56,15 +56,13 @@ class CloudSyncCheckpointService {
           : (current.difference(lastAt) >= interval || delta >= opThreshold);
       if (!due) return null;
 
-      await CloudSyncSettings.saveState(
-        (await CloudSyncSettings.loadState()).copyWith(
-          lastCheckpointAttemptAt: current,
-        ),
+      await CloudSyncSettings.updateState(
+        (state) => state.copyWith(lastCheckpointAttemptAt: current),
       );
       final service = await CloudSyncService.create();
       final snapshot = await service.uploadSnapshot(includeApiKeys: false);
-      await CloudSyncSettings.saveState(
-        (await CloudSyncSettings.loadState()).copyWith(
+      await CloudSyncSettings.updateState(
+        (state) => state.copyWith(
           lastCheckpointAt: current,
           lastCheckpointOps: total,
           checkpointConsecutiveFailures: 0,
@@ -80,20 +78,19 @@ class CloudSyncCheckpointService {
     } catch (e) {
       final current = now ?? DateTime.now();
       try {
-        final state = await CloudSyncSettings.loadState();
-        final failures = state.checkpointConsecutiveFailures + 1;
-        final exponent = failures > 6 ? 6 : failures - 1;
-        final backoff = failureBackoffBase * (1 << exponent);
-        final capped = backoff > failureBackoffMax
-            ? failureBackoffMax
-            : backoff;
-        await CloudSyncSettings.saveState(
-          state.copyWith(
+        var failures = 0;
+        var capped = failureBackoffMax;
+        await CloudSyncSettings.updateState((state) {
+          failures = state.checkpointConsecutiveFailures + 1;
+          final exponent = failures > 6 ? 6 : failures - 1;
+          final backoff = failureBackoffBase * (1 << exponent);
+          capped = backoff > failureBackoffMax ? failureBackoffMax : backoff;
+          return state.copyWith(
             lastCheckpointAttemptAt: current,
             checkpointConsecutiveFailures: failures,
             checkpointBackoffUntil: current.add(capped),
-          ),
-        );
+          );
+        });
         logWarning(
           'CloudSyncCheckpoint',
           '自动检查点失败（连续 $failures 次，退避 ${capped.inMinutes} 分钟）: $e',

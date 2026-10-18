@@ -51,10 +51,8 @@ class CloudSyncMaintenanceService {
       } catch (e) {
         logWarning('CloudSyncMaintenance', '清理冲突记录失败: $e');
       }
-      await CloudSyncSettings.saveState(
-        (await CloudSyncSettings.loadState()).copyWith(
-          lastGcAt: DateTime.now(),
-        ),
+      await CloudSyncSettings.updateState(
+        (state) => state.copyWith(lastGcAt: DateTime.now()),
       );
       return deleted;
     } catch (e) {
@@ -69,90 +67,92 @@ class CloudSyncMaintenanceService {
     required S3StorageService storage,
     Database? db,
   }) async {
-    final objects = await storage.list(
-      '${config.devicesPrefix}/',
-      recursive: true,
-    );
-    final chunks = objects
-        .where(
-          (o) =>
-              o.key.contains('/chunks/') &&
-              (o.key.endsWith('.jsonl') || o.key.endsWith('.jsonl.gz')),
-        )
-        .toList();
-    if (chunks.isEmpty) return 0;
-
-    final byDevice = <String, List<S3ObjectInfo>>{};
-    for (final object in chunks) {
-      final device = CloudSyncDeviceMetaService.deviceIdOfKey(object.key);
-      if (device == null || device.isEmpty) continue;
-      byDevice.putIfAbsent(device, () => []).add(object);
-    }
-    if (byDevice.isEmpty) return 0;
-    for (final group in byDevice.values) {
-      group.sort((a, b) => a.key.compareTo(b.key));
-    }
-
     final meta = CloudSyncDeviceMetaService(config: config, storage: storage);
+    // 设备目录用一次非递归 LIST 发现，避免把所有设备的 chunk 一次性
+    // 递归列举进内存。后续只按设备列举自己的 chunks/。
+    final deviceIds = await meta.listDeviceIds();
+    if (deviceIds.isEmpty) return 0;
+
     final heads = <String, CloudDeviceHead?>{};
     final states = <String, CloudDeviceState?>{};
-    for (final device in byDevice.keys) {
+    final now = DateTime.now().toUtc();
+    for (final device in deviceIds) {
       heads[device] = await meta.fetchHead(device);
       states[device] = await meta.fetchState(device);
     }
-    // 没有 chunk 但有 head/state 的设备也要参与水位判断：
-    // 它们可能只是从未上传过自己的变更，但仍然需要其它设备的历史 chunk。
-    final extraDevices = <String>{};
-    try {
-      for (final device in await meta.listDeviceIds()) {
-        if (byDevice.containsKey(device)) continue;
-        final head = await meta.fetchHead(device);
-        final state = await meta.fetchState(device);
-        if (head == null && state == null) continue;
-        heads[device] = head;
-        states[device] = state;
-        extraDevices.add(device);
-      }
-    } catch (e) {
-      logWarning('CloudSyncMaintenance', '读取其它设备水位失败: $e');
-      return 0;
-    }
-
-    final now = DateTime.now().toUtc();
-    final candidatesForActivity = {...byDevice.keys, ...extraDevices};
+    // 只有带 head/state 的设备能证明自己拿到了哪些历史变更。
+    // 完全没有元数据的目录（如仅含快照）不参与水位，避免误删。
     final activeDevices = <String>{
-      for (final device in candidatesForActivity)
-        if (_isActive(now, heads[device]?.updatedAt, states[device]?.updatedAt))
+      for (final device in deviceIds)
+        if ((heads[device] != null || states[device] != null) &&
+            _isActive(now, heads[device]?.updatedAt, states[device]?.updatedAt))
           device,
     };
     if (activeDevices.isEmpty) return 0;
 
-    // 任意一个「非 owner」活跃设备缺少 state，就无法证明它已经拿到历史变更，
-    // 对应 owner 的 chunk 本轮不删；owner 自身的 chunk 不需要自己的 state。
+    // 每个 owner 的可删除上界 = min(自身 head, 所有非 owner 活跃设备已应用水位)。
+    // 任一非 owner 缺少 state 或该来源水位时，本轮跳过这个 owner。
+    final limits = <String, SyncHlc?>{};
+    final byDevice = <String, List<S3ObjectInfo>>{};
+    for (final owner in deviceIds) {
+      var limit = _parseHlc(heads[owner]?.latestHlc);
+      var blocked = false;
+      for (final device in activeDevices) {
+        if (device == owner) continue;
+        final state = states[device];
+        if (state == null) {
+          blocked = true;
+          break;
+        }
+        final watermark = state.appliedFor(owner);
+        if (watermark == null) {
+          blocked = true;
+          break;
+        }
+        if (limit == null || watermark.compareTo(limit) < 0) {
+          limit = watermark;
+        }
+      }
+      if (blocked) continue;
+
+      final cap = limit;
+      final objects = await storage.list(
+        '${config.devicePrefix(owner)}/chunks/',
+        recursive: true,
+        stopWhen: cap == null
+            ? null
+            : (key) {
+                final start = _chunkStartHlc(key);
+                // 键按 HLC 排序：越过水位后包含一个边界对象即可停止，
+                // 后续对象不可能再被删除，也不必读入内存。
+                return start != null && start.compareTo(cap) > 0;
+              },
+      );
+      final chunks =
+          objects
+              .where(
+                (o) =>
+                    o.key.contains('/chunks/') &&
+                    (o.key.endsWith('.jsonl') || o.key.endsWith('.jsonl.gz')),
+              )
+              .toList()
+            ..sort((a, b) => a.key.compareTo(b.key));
+      if (chunks.isEmpty) continue;
+      limits[owner] = limit;
+      byDevice[owner] = chunks;
+    }
+    if (byDevice.isEmpty) return 0;
+
     final candidates = <String>[];
     for (final entry in byDevice.entries) {
-      final owner = entry.key;
-      final group = entry.value;
-      final head = heads[owner];
-      final ownerLatest = head != null
-          ? _parseHlc(head.latestHlc)
-          : _chunkStartHlc(group.last.key);
-      for (final object in group) {
+      final limit = limits[entry.key];
+      for (final object in entry.value) {
         final start = _chunkStartHlc(object.key);
         final modified = object.lastModified?.toUtc();
         if (start == null || modified == null) continue;
-        if (ownerLatest != null && start.compareTo(ownerLatest) > 0) {
-          continue;
-        }
+        if (limit != null && start.compareTo(limit) > 0) continue;
         if (now.difference(modified) < minChunkRetention) continue;
-        final appliedEverywhere = activeDevices.every((device) {
-          if (device == owner) return true;
-          final state = states[device];
-          if (state == null) return false;
-          final watermark = state.appliedFor(owner);
-          return watermark != null && watermark.compareTo(start) >= 0;
-        });
-        if (appliedEverywhere) candidates.add(object.key);
+        candidates.add(object.key);
       }
     }
     if (candidates.isEmpty) return 0;

@@ -298,6 +298,34 @@ class SyncSchema {
     return db.delete(spec.oplogTable, where: 'hlc_ms IS NOT NULL');
   }
 
+  /// 删除某台设备在本机的同步记录（云端设备删除 / 接管后调用）。
+  ///
+  /// 只清理与该设备相关的行，不影响本机 oplog、业务数据或其它设备水位。
+  static Future<void> deleteDeviceRecords(Database db, String deviceId) async {
+    await db.transaction((txn) async {
+      await txn.delete(
+        'sync_state',
+        where: 'device_id = ?',
+        whereArgs: [deviceId],
+      );
+      await txn.delete(
+        'sync_applied',
+        where: 'device_id = ?',
+        whereArgs: [deviceId],
+      );
+      await txn.delete(
+        'sync_chunks',
+        where: 'device_id = ?',
+        whereArgs: [deviceId],
+      );
+      await txn.delete(
+        'sync_backend_watermarks',
+        where: 'device_id = ?',
+        whereArgs: [deviceId],
+      );
+    });
+  }
+
   /// 备份恢复后重置同步运行时状态。
   ///
   /// 快照来自另一台设备：

@@ -70,6 +70,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
    - 「云端设备」页可查看设备列表并删除旧设备数据。
 3. **完整快照**
    - 「立即上传备份」：把本机数据库 + 设置打包为 ZIP 上传到本设备目录；
+   - 上传前会先收敛增量同步（清空 oplog、补齐未完成 chunk），并保留墓碑与行版本；
    - 「从云端恢复」：列出所有设备快照，校验 SHA-256 后覆盖导入；
    - 恢复前自动保留本机数据库快照，失败可回滚；
    - 自动检查点：每 7 天或累计 5000 条变更自动上传一份完整快照；
@@ -118,7 +119,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 | `lib/services/s3_storage_service.dart` | MinIO 客户端封装：PUT/GET/HEAD/LIST/DELETE、超时、错误中文化、连接自检 |
 | `lib/services/cloud_sync_service.dart` | 完整快照：上传、设备清单、恢复、历史保留、恢复前本机快照 |
 | `lib/services/cloud_sync_engine.dart` | 增量同步编排：head/state 水位、按设备增量拉取、恢复后重放本机 chunk、推送本机 chunk、调用 GC |
-| `lib/services/cloud_sync_device_meta_service.dart` | 设备发现（CommonPrefixes）、`head.json` / `state.json` 读写与容错 |
+| `lib/services/cloud_sync_device_meta_service.dart` | 设备发现（CommonPrefixes）、`meta.json` / `head.json` / `state.json` 读写与容错 |
 | `lib/services/cloud_sync_run_lock.dart` | 进程内全局互斥，手动 / 自动 / 事件同步串行执行 |
 | `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步，按配置间隔冷却，手动可复用 |
 | `lib/services/cloud_sync_foreground_sync_service.dart` | 前台 `Timer.periodic` 轮询、生命周期启停、事件同步后重置计时 |
@@ -265,7 +266,9 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
    - 更新 sync_meta head 水位并置 head_dirty=1
    - 最多 20 批 / 次
 11. 补写 head.json（失败保留 dirty，下次同步重试）
-12. 每 7 天执行一次水位 GC（所有活跃设备越过 + 30 天）
+12. 确保设备目录存在 meta.json（名称 / 平台 / schema 版本 / last_seen；24 小时内不重复检查）
+13. 每 7 天执行一次水位 GC：非递归发现设备目录 → 按设备 LIST chunks/，越过后提前停止（不一次性递归列举全部设备）
+    - 删除条件：所有活跃设备越过 + 对象超过 30 天
 ```
 
 ### 2.9 表级合并语义
@@ -362,7 +365,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 
 ### 2.14 测试现状
 
-- `flutter test`：无 S3 环境变量时 **242 passed / 4 skipped**；设置真实 S3 后 **246 passed**；
+- `flutter test`：无 S3 环境变量时 **247 passed / 4 skipped**；设置真实 S3 后 **251 passed**；
 - 新增覆盖：gzip chunk、完整 SHA-256、时间预算续跑、`captured_at_ms` HLC、批量 oplog 回填、冲突持久化/解决/清理、检查点空库与退避、流式文件上传下载、网络策略；
 - 覆盖：
   - v13/v14/v15 迁移、UUID/顺序回填、触发器数量与抑制；
@@ -486,7 +489,7 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 **状态**：**not planned**，不纳入后续开发计划。当前安全边界为 TLS + 私有桶 + 设备前缀隔离。
 **现象**：笔记、学习记录以明文 JSON/DB 存在对象存储。  
 **后果**：第三方或共享桶场景隐私不足。  
-**曾评估方向**：可选口令 → Argon2id → AES-GCM 加密 chunk/checkpoint；口令不落盘。
+**曾评估方案**：可选口令 + Argon2id + AES-GCM 加密 chunk/checkpoint；口令不落盘。
 
 ### P2-4：无账号 / 设备管理 / 多用户隔离（not planned）
 
@@ -521,6 +524,7 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 **修复（v16）**：
 - 新增「云端设备」页：列出所有设备、标记本机、显示设备名；
 - 支持「接管并合并」：先拉取旧设备全部变更，再删除其云端目录；也支持仅删除；
+  - 删除云端设备后会同时清理本机 `sync_state` / `sync_applied` / `sync_chunks` / `sync_backend_watermarks` 中该设备记录；
 - 重置设备标识沿用原入口，并明确提示旧目录需要手动恢复或删除；
 - 新设备首次配置时自动提示从最新快照引导。
 
@@ -708,5 +712,10 @@ flutter test test/cloud_sync_s3_integration_test.dart
 9. **旧备份仍使用 baseline 近似**：新格式快照会在 `backup_meta.json` 写入 `sync_watermarks`，恢复后按来源水位精确过滤；旧版本导出的备份没有该字段，仍按“快照创建时间”跳过，快照源未拉全时可能漏数据。
 10. **切换后端期间的本地变更不会自动补传到旧后端**：切换时会保存旧后端水位，切回来不会重拉历史；但在另一个后端期间产生的本地变更已经上传到另一个后端，切回旧后端后需要一次快照或重新编辑才能传播。
 11. **行版本 / 墓碑按 180 天 + 活跃设备水位清理**：离线超过 180 天的设备重新加入时，理论上仍可能带回已被清理的旧事件。
-12. **没有 head/state 的设备目录会被 GC 跳过**：这类目录（例如只上传过快照）不会参与活跃设备判断，也不会阻塞 GC；这是保守策略的一部分。
+12. **没有 head/state 的设备目录不参与 GC 水位**：这类目录（例如只上传过快照、尚未同步过的设备）不会阻止其它设备的 chunk 回收；只有带 head/state 的设备才被视为活跃。若所有设备都没有元数据，本轮直接跳过 GC。
 13. **父级重建后的子表并发语义仍是 LWW 边界**：父级删除且尚未重建时，晚到的子表 op 会被丢弃；如果父级已经重建，则晚于删除的子表 op 会被视为新父级下的数据。
+14. **快照保留墓碑与行版本**：为避免恢复后迟到 chunk 复活已删除数据或覆盖更新数据，快照会携带 `sync_tombstones` / `sync_row_versions`，体积会比只导业务表更大。
+15. **未知实体按 chunk 暂缓**：旧版本遇到新实体不再静默标记为已应用，而是保持 chunk 未完成并在应用升级后重试；旧版本会暂时无法推进该来源设备的水位。
+16. **取消快照上传无法中断已开始的单次 PUT**：取消会在同步小批、导出前、PUT 完成后检查；若在 PUT 过程中取消，云端会留下一个未被 manifest 引用的孤儿快照，不会影响后续恢复。
+17. **恢复前的未同步变更提示只覆盖本地 oplog**：冲突记录、尚未生成的 chunk 等不在 pending 计数内；用户选择「仍然恢复」时仍会覆盖本机数据库。
+18. **设备 meta 每 24 小时最多检查一次**：修改设备名后其它设备最多延迟 24 小时看到新名称；`head.json` / `state.json` 中的 `device_name` 仍作为旧数据回退。

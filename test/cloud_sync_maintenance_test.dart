@@ -190,4 +190,30 @@ void main() {
       isTrue,
     );
   });
+
+  test('GC 按设备列举 chunks，不做全设备递归 LIST', () async {
+    final now = DateTime.now().toUtc();
+    final old = now.subtract(const Duration(days: 31));
+    await addChunk(_deviceA, 1000, modified: old);
+    await addChunk(_deviceB, 1000, modified: old);
+    await addHead(_deviceA, 1000);
+    await addHead(_deviceB, 1000);
+    await addState(_deviceA, {_deviceB: _hlc(1000)});
+    await addState(_deviceB, {_deviceA: _hlc(1000)});
+
+    storage.listPrefixes.clear();
+    final deleted = await CloudSyncMaintenanceService.pruneOldChunks(
+      config: config,
+      storage: storage,
+      db: db,
+    );
+
+    expect(deleted, 2);
+    expect(storage.listPrefixes, isNotEmpty);
+    // 每个 LIST 都带具体设备前缀；不应出现 `{prefix}/devices/` 根前缀。
+    for (final prefix in storage.listPrefixes) {
+      expect(prefix, endsWith('/chunks/'));
+      expect(prefix, isNot('${config.devicesPrefix}/'));
+    }
+  });
 }

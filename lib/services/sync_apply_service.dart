@@ -12,6 +12,12 @@ class SyncApplyResult {
   int duplicates = 0;
   int skippedByVersion = 0;
   int skippedUnsupported = 0;
+
+  /// 当前版本不认识的实体数量。
+  ///
+  /// 这些 op 不能被记为已应用，也不能推进 chunk 水位；否则应用升级后
+  /// 不会再次拉取该 chunk，数据会永久丢失。
+  int unsupportedEntities = 0;
   int skippedMissingParent = 0;
   int conflicts = 0;
   final List<String> conflictDetails = [];
@@ -25,6 +31,18 @@ class SyncApplyResult {
 /// 应用远端操作：幂等、事务化、按表语义合并。
 class SyncApplyService {
   SyncApplyService._();
+
+  /// 这些列在合并时必须保留更早的值（MIN），不能简单按 HLC 覆盖。
+  /// 典型是「首次学习时间」，否则远端较新的记录会把本地更早的创建时间改晚。
+  static const Map<String, Set<String>> _minTimestampColumns = {
+    'user_word_records': {'created_at'},
+    'wrong_words': {'created_at'},
+    'word_notes': {'created_at'},
+    'sentence_notes': {'created_at'},
+    'word_books': {'created_at'},
+    'sentences': {'created_at'},
+    'wrong_sentences': {'created_at'},
+  };
 
   static Future<Database> _db(Database? db) async =>
       db ?? await DatabaseService.database;
@@ -95,9 +113,14 @@ class SyncApplyService {
             continue;
           }
           if (op.isBulk) {
+            final unsupportedBefore = result.unsupportedEntities;
             final outcome = await _applyBulk(txn, ctx, op, result);
             if (outcome == _UpsertOutcome.pendingParent) {
               pending.add(op);
+              continue;
+            }
+            if (result.unsupportedEntities > unsupportedBefore) {
+              // 保留整块 chunk 的重试机会，升级后再应用未知实体。
               continue;
             }
             _recordApplied(ctx, op);
@@ -108,7 +131,7 @@ class SyncApplyService {
           final spec = SyncSpecs.byEntity[op.entity];
           if (spec == null) {
             result.skippedUnsupported++;
-            _recordApplied(ctx, op);
+            result.unsupportedEntities++;
             continue;
           }
           final currentVersion = _versionOf(ctx, op);
@@ -149,9 +172,13 @@ class SyncApplyService {
         final stillPending = <SyncOp>[];
         for (final op in pending) {
           if (op.isBulk) {
+            final unsupportedBefore = result.unsupportedEntities;
             final outcome = await _applyBulk(txn, ctx, op, result);
             if (outcome == _UpsertOutcome.pendingParent) {
               stillPending.add(op);
+              continue;
+            }
+            if (result.unsupportedEntities > unsupportedBefore) {
               continue;
             }
             _recordApplied(ctx, op);
@@ -284,6 +311,7 @@ class SyncApplyService {
       final spec = SyncSpecs.byEntity[item.entity];
       if (spec == null) {
         result.skippedUnsupported++;
+        result.unsupportedEntities++;
         continue;
       }
       final sub = SyncOp(
@@ -433,6 +461,20 @@ class SyncApplyService {
         return;
       case 'word_books':
         final bookUuid = op.key['uuid'];
+        // 先给级联删除的条目写墓碑，避免迟到的旧条目 op 在词书重建后
+        // 重新挂到新词书上（与 sentences 的级联语义保持一致）。
+        final entryRows = await txn.query(
+          'word_book_entries',
+          columns: ['book_uuid', 'word'],
+          where: 'book_uuid = ?',
+          whereArgs: [bookUuid],
+        );
+        for (final row in entryRows) {
+          _recordChildTombstone(ctx, 'word_book_entries', {
+            'book_uuid': row['book_uuid'],
+            'word': row['word'],
+          }, op);
+        }
         ctx.removeWritesWhere(
           (write) =>
               write.spec.entity == 'word_book_entries' &&
@@ -680,6 +722,23 @@ class SyncApplyService {
       for (final column in spec.dataColumns.keys)
         if (op.data.containsKey(column)) column: op.data[column],
     };
+
+    // created_at 等列需要 MIN 语义：本地已有更早时间时，远端较新的
+    // HLC 事件也不应把它改晚。
+    if (row != null) {
+      final minColumns = _minTimestampColumns[spec.entity];
+      if (minColumns != null) {
+        for (final column in minColumns) {
+          if (!data.containsKey(column)) continue;
+          final localTs = _parseTs(row[column]);
+          final remoteTs = _parseTs(data[column]);
+          if (localTs != null &&
+              (remoteTs == null || localTs.isBefore(remoteTs))) {
+            data[column] = row[column];
+          }
+        }
+      }
+    }
 
     // 自然时间戳冲突检查：远端较早时保留本地字段；计数增量仍然应用。
     var allowData = true;

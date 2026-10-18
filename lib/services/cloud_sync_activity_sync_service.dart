@@ -88,8 +88,8 @@ class CloudSyncActivitySyncService {
         if (result.hasErrors) {
           throw CloudSyncException(result.errors.first);
         }
-        await CloudSyncSettings.saveState(
-          (await CloudSyncSettings.loadState()).copyWith(
+        await CloudSyncSettings.updateState(
+          (state) => state.copyWith(
             lastAutoSyncAt: DateTime.now(),
             consecutiveFailures: 0,
             clearBackoff: true,
@@ -102,10 +102,9 @@ class CloudSyncActivitySyncService {
     } catch (e) {
       logWarning('CloudSyncActivity', '学习结束同步失败: $e');
       try {
-        final state = await CloudSyncSettings.loadState();
-        final failures = state.consecutiveFailures + 1;
-        await CloudSyncSettings.saveState(
-          state.copyWith(
+        await CloudSyncSettings.updateState((state) {
+          final failures = state.consecutiveFailures + 1;
+          return state.copyWith(
             lastError: '$e',
             consecutiveFailures: failures,
             backoffUntil: DateTime.now().add(
@@ -113,8 +112,8 @@ class CloudSyncActivitySyncService {
                 minutes: (1 << (failures > 5 ? 5 : failures)).clamp(1, 60),
               ),
             ),
-          ),
-        );
+          );
+        });
       } catch (_) {}
     } finally {
       _running = false;

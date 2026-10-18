@@ -177,7 +177,9 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         ),
       );
       if (confirmed != true || !mounted) return;
-      await runWithProgressDialog<CloudRestoreOutcome>(
+      if (!await _prepareForRestore()) return;
+      if (!mounted) return;
+      final outcome = await runWithProgressDialog<CloudRestoreOutcome>(
         context,
         title: '从云端引导',
         task: (update) async {
@@ -185,6 +187,11 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           return candidate.service.restoreSnapshot(summary);
         },
       );
+      if (outcome == null) {
+        if (!mounted) return;
+        _showSnack('已取消恢复');
+        return;
+      }
       final captureEnabled = await _finalizeRestore();
       await _load();
       _showSnack(
@@ -208,12 +215,15 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
 
     setState(() => _busy = true);
     try {
+      final cancelToken = ProgressCancelToken();
       final result = await runWithProgressDialog<CloudSyncRunResult>(
         context,
         title: '增量同步',
+        cancelToken: cancelToken,
         task: (update) async {
           update('正在同步词书、学习记录、笔记与错题…');
           return engine.run(
+            isCancelled: () => cancelToken.isCancelled,
             onProgress: (phase, done, total) {
               if (phase == CloudSyncRunPhase.pull) {
                 update('已拉取 $done/$total 个变更包…');
@@ -226,6 +236,10 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
       );
       await _load();
       if (!mounted) return;
+      if (result == null) {
+        _showSnack('同步已取消；未完成的变更包会在下次同步继续');
+        return;
+      }
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -365,13 +379,16 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     try {
       final service = await CloudSyncService.create();
       if (!mounted) return;
+      final cancelToken = ProgressCancelToken();
       final snapshot = await runWithProgressDialog<CloudSnapshotInfo>(
         context,
         title: '上传备份',
+        cancelToken: cancelToken,
         task: (update) async {
           update('正在生成数据库一致性快照…');
           final info = await service.uploadSnapshot(
             includeApiKeys: includeApiKeys,
+            isCancelled: () => cancelToken.isCancelled,
             onProgress: (sent, total) {
               final percent = total <= 0 ? 0 : (sent * 100 / total).round();
               update(
@@ -386,6 +403,10 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
       );
       await _load();
       if (!mounted) return;
+      if (snapshot == null) {
+        _showSnack('上传已取消');
+        return;
+      }
       await showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -412,6 +433,93 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     }
   }
 
+  /// 恢复前检查本机未上传变更。
+  ///
+  /// 返回 false 表示用户取消、或“先上传”没有完成，调用方必须放弃恢复。
+  Future<bool> _prepareForRestore() async {
+    var pending = 0;
+    try {
+      pending = await SyncCaptureService.pendingCount();
+    } catch (_) {
+      return true;
+    }
+    if (pending <= 0) return true;
+    if (!mounted) return false;
+
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.sync_problem_outlined, color: Colors.orange),
+        title: const Text('本机有未同步变更'),
+        content: Text(
+          '检测到 $pending 条本机变更尚未上传。\n\n'
+          '恢复会用云端快照覆盖本机数据库，这些变更将无法从本机恢复。'
+          '建议先上传，再执行恢复。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'cancel'),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'overwrite'),
+            child: const Text('仍然恢复'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, 'push'),
+            child: const Text('先上传再恢复'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || choice == 'cancel') return false;
+    if (choice == 'overwrite') return true;
+    if (!mounted) return false;
+
+    final engine = await _createEngineSafely();
+    if (engine == null) return false;
+    if (!mounted) return false;
+    final cancelToken = ProgressCancelToken();
+    try {
+      final result = await runWithProgressDialog<CloudSyncRunResult>(
+        context,
+        title: '上传本机变更',
+        cancelToken: cancelToken,
+        task: (update) async {
+          update('正在上传本机未同步变更…');
+          return engine.run(
+            pull: false,
+            push: true,
+            maxPushBatches: 100,
+            maxDuration: const Duration(minutes: 2),
+            isCancelled: () => cancelToken.isCancelled,
+            onProgress: (phase, done, total) {
+              update('已上传 $done 个变更包…');
+            },
+          );
+        },
+      );
+      if (result == null) {
+        if (mounted) _showSnack('已取消上传，未执行恢复');
+        return false;
+      }
+      if (result.hasErrors || result.remainingLocalOps > 0) {
+        if (mounted) {
+          _showSnack(
+            '本机变更尚未全部上传（剩余 ${result.remainingLocalOps} 条），已取消恢复',
+            isError: true,
+          );
+        }
+        return false;
+      }
+      if (mounted) _showSnack('本机变更已上传');
+      return true;
+    } catch (e) {
+      if (mounted) _showSnack('上传本机变更失败，已取消恢复：$e', isError: true);
+      return false;
+    }
+  }
+
   Future<void> _restore() async {
     if (_busy) return;
     final service = await _createServiceSafely();
@@ -429,6 +537,7 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         },
       );
       if (!mounted) return;
+      if (devices == null) return;
       final available = devices.where((d) => d.latest != null).toList();
       if (available.isEmpty) {
         await showDialog<void>(
@@ -458,6 +567,8 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
       final snapshot = selected.latest!;
       final confirmed = await _confirmRestore(selected);
       if (confirmed != true || !mounted) return;
+      if (!await _prepareForRestore()) return;
+      if (!mounted) return;
 
       final outcome = await runWithProgressDialog<CloudRestoreOutcome>(
         context,
@@ -482,6 +593,11 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           return result;
         },
       );
+      if (outcome == null) {
+        if (!mounted) return;
+        _showSnack('已取消恢复');
+        return;
+      }
       final captureEnabled = await _finalizeRestore();
       await _load();
       if (!mounted) return;

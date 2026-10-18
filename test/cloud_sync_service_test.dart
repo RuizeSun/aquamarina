@@ -5,6 +5,9 @@ import 'package:aquamarina/services/cloud_sync_service.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
 import 'package:aquamarina/services/s3_storage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'sync_test_support.dart';
 
 const String _deviceA = '11111111-1111-4111-8111-111111111111';
 const String _deviceB = '22222222-2222-4222-8222-222222222222';
@@ -93,20 +96,25 @@ class _FakeStorage extends S3StorageService {
     String prefix, {
     bool recursive = true,
     String? startAfter,
+    bool Function(String key)? stopWhen,
   }) async {
-    return objects.entries
-        .where((entry) => entry.key.startsWith(prefix))
-        .where(
-          (entry) => startAfter == null || entry.key.compareTo(startAfter) > 0,
-        )
-        .map(
-          (entry) => S3ObjectInfo(
-            key: entry.key,
-            size: entry.value.length,
-            etag: 'etag',
-          ),
-        )
-        .toList();
+    final entries =
+        objects.entries
+            .where((entry) => entry.key.startsWith(prefix))
+            .where(
+              (entry) =>
+                  startAfter == null || entry.key.compareTo(startAfter) > 0,
+            )
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+    final out = <S3ObjectInfo>[];
+    for (final entry in entries) {
+      out.add(
+        S3ObjectInfo(key: entry.key, size: entry.value.length, etag: 'etag'),
+      );
+      if (stopWhen != null && stopWhen(entry.key)) break;
+    }
+    return out;
   }
 
   @override
@@ -142,15 +150,22 @@ class _FakeStorage extends S3StorageService {
 void main() {
   late _FakeStorage storage;
   late CloudSyncService service;
+  late Database db;
 
-  setUp(() {
+  setUp(() async {
+    db = await openSyncTestDb();
     storage = _FakeStorage(_config());
     service = CloudSyncService.forTesting(
       config: _config(),
       deviceId: _deviceA,
       deviceName: '当前设备',
       storage: storage,
+      database: db,
     );
+  });
+
+  tearDown(() async {
+    await db.close();
   });
 
   void seedManifest(CloudDeviceManifest manifest) {
@@ -211,5 +226,64 @@ void main() {
     expect(deleted, 1);
     expect(storage.objects.keys, everyElement(contains(_deviceB)));
     expect(await service.fetchManifest(_deviceB), isNotNull);
+  });
+
+  test('删除云端设备后清理本机同步记录', () async {
+    seedManifest(
+      _manifest(
+        deviceId: _deviceB,
+        deviceName: '旧设备',
+        updatedAt: DateTime.utc(2026, 10, 16),
+      ),
+    );
+    final now = DateTime.now().toUtc().toIso8601String();
+    for (final device in [_deviceA, _deviceB]) {
+      await db.insert('sync_state', {
+        'device_id': device,
+        'last_seq': 0,
+        'last_hlc': null,
+        'last_chunk_key': null,
+        'updated_at': now,
+      });
+      await db.insert('sync_applied', {
+        'device_id': device,
+        'entity': 'word_notes',
+        'seq': 1,
+        'hlc': null,
+        'applied_at': now,
+      });
+      await db.insert('sync_chunks', {
+        'device_id': device,
+        'chunk_key': '${_config().devicePrefix(device)}/chunks/x.jsonl',
+        'sha256': List.filled(64, 'a').join(),
+        'min_hlc': null,
+        'max_hlc': null,
+        'applied_at': now,
+      });
+      await db.insert('sync_backend_watermarks', {
+        'backend_id': _config().backendIdentity,
+        'device_id': device,
+        'last_hlc': '0000000000000000:00000000',
+        'last_chunk_key': null,
+        'saved_at': now,
+      });
+    }
+
+    await service.deleteDeviceData(_deviceB);
+
+    for (final table in [
+      'sync_state',
+      'sync_applied',
+      'sync_chunks',
+      'sync_backend_watermarks',
+    ]) {
+      final rows = await db.query(table);
+      expect(
+        rows.map((row) => row['device_id']),
+        everyElement(_deviceA),
+        reason: table,
+      );
+    }
+    expect(await service.fetchManifest(_deviceB), isNull);
   });
 }

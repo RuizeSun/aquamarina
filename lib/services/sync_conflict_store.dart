@@ -173,19 +173,21 @@ class SyncConflictStore {
           column: conflict.remoteData[column],
     };
     if (data.isEmpty) return false;
-    final updated = await database.update(
-      spec.table,
-      data,
-      where: where,
-      whereArgs: args,
-    );
-    if (updated == 0) {
-      await database.insert(spec.table, {
-        ...keyValues,
-        ...data,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
-    }
-    await _bumpVersion(database, conflict);
+    await database.transaction((txn) async {
+      final updated = await txn.update(
+        spec.table,
+        data,
+        where: where,
+        whereArgs: args,
+      );
+      if (updated == 0) {
+        await txn.insert(spec.table, {
+          ...keyValues,
+          ...data,
+        }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await _bumpVersion(txn, conflict);
+    });
     return true;
   }
 
@@ -209,23 +211,29 @@ class SyncConflictStore {
     final where = spec.keyColumns.keys
         .map((column) => '"$column" = ?')
         .join(' AND ');
-    final updated = await database.update(
-      spec.table,
-      {'note': merged, 'updated_at': DateTime.now().toUtc().toIso8601String()},
-      where: where,
-      whereArgs: [
-        for (final column in spec.keyColumns.keys) conflict.key[column],
-      ],
-    );
-    if (updated > 0) {
-      await _bumpVersion(database, conflict);
-    }
+    var updated = 0;
+    await database.transaction((txn) async {
+      updated = await txn.update(
+        spec.table,
+        {
+          'note': merged,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        where: where,
+        whereArgs: [
+          for (final column in spec.keyColumns.keys) conflict.key[column],
+        ],
+      );
+      if (updated > 0) {
+        await _bumpVersion(txn, conflict);
+      }
+    });
     return updated > 0;
   }
 
   /// 冲突解决也是一次本地写入：推进行版本，防止更旧的远端 op 覆盖。
   static Future<void> _bumpVersion(
-    Database db,
+    DatabaseExecutor db,
     PendingSyncConflict conflict,
   ) async {
     final key = SyncOp(

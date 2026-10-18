@@ -222,7 +222,70 @@ class CloudDeviceState {
   }
 }
 
-/// head / state 的 JSON 编解码工具。
+/// 设备静态信息（`devices/{deviceId}/meta.json`）。
+///
+/// 只做增量同步、从未上传过快照的设备没有 `manifest.json`；设备页需要
+/// 该对象来展示名称与平台，避免显示成「未知设备」。
+class CloudDeviceMeta {
+  static const int currentFormatVersion = 1;
+
+  final int formatVersion;
+  final String deviceId;
+  final String deviceName;
+  final String platform;
+  final int schemaVersion;
+  final DateTime lastSeen;
+
+  const CloudDeviceMeta({
+    this.formatVersion = currentFormatVersion,
+    required this.deviceId,
+    required this.deviceName,
+    required this.platform,
+    required this.schemaVersion,
+    required this.lastSeen,
+  });
+
+  factory CloudDeviceMeta.fromJson(Map<String, dynamic> json) {
+    final formatVersion = json['format_version'];
+    final deviceId = json['device_id'];
+    final deviceName = json['device_name'];
+    final platform = json['platform'];
+    final schemaVersion = json['schema_version'];
+    final lastSeen = json['last_seen'];
+    if (formatVersion is! int ||
+        formatVersion < 1 ||
+        formatVersion > currentFormatVersion ||
+        deviceId is! String ||
+        deviceId.isEmpty ||
+        deviceName is! String ||
+        deviceName.isEmpty ||
+        platform is! String ||
+        schemaVersion is! int ||
+        schemaVersion < 0 ||
+        lastSeen is! String) {
+      throw const FormatException('设备 meta 字段缺失或格式错误');
+    }
+    return CloudDeviceMeta(
+      formatVersion: formatVersion,
+      deviceId: deviceId,
+      deviceName: deviceName,
+      platform: platform,
+      schemaVersion: schemaVersion,
+      lastSeen: DateTime.parse(lastSeen),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'format_version': formatVersion,
+    'device_id': deviceId,
+    'device_name': deviceName,
+    'platform': platform,
+    'schema_version': schemaVersion,
+    'last_seen': lastSeen.toUtc().toIso8601String(),
+  };
+}
+
+/// head / state / meta 的 JSON 编解码工具。
 class CloudDeviceMetaCodec {
   CloudDeviceMetaCodec._();
 
@@ -247,4 +310,15 @@ class CloudDeviceMetaCodec {
 
   static Uint8List encodeState(CloudDeviceState state) =>
       Uint8List.fromList(utf8.encode(jsonEncode(state.toJson())));
+
+  static CloudDeviceMeta parseMeta(List<int> bytes) {
+    final decoded = jsonDecode(utf8.decode(bytes));
+    if (decoded is! Map) {
+      throw const FormatException('设备 meta JSON 顶层不是对象');
+    }
+    return CloudDeviceMeta.fromJson(decoded.cast<String, dynamic>());
+  }
+
+  static Uint8List encodeMeta(CloudDeviceMeta meta) =>
+      Uint8List.fromList(utf8.encode(jsonEncode(meta.toJson())));
 }

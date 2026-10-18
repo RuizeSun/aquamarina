@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/cloud_sync_run_lock.dart';
 import '../../services/sync_conflict_store.dart';
 
 /// 逐条查看并处理同步冲突（P2-6）。
@@ -26,12 +27,18 @@ class _CloudSyncConflictPageState extends State<CloudSyncConflictPage> {
   }
 
   Future<void> _resolve(PendingSyncConflict conflict, String action) async {
-    var ok = true;
-    if (action == 'remote') {
-      ok = await SyncConflictStore.applyRemote(conflict);
-    } else if (action == 'both') {
-      ok = await SyncConflictStore.keepBoth(conflict);
-    }
+    // 与增量同步共用全局锁：避免用户处理冲突时另一端正好在同一行上 apply。
+    final ok = await CloudSyncRunLock.runExclusive(() async {
+      var success = true;
+      if (action == 'remote') {
+        success = await SyncConflictStore.applyRemote(conflict);
+      } else if (action == 'both') {
+        success = await SyncConflictStore.keepBoth(conflict);
+      }
+      if (!success) return false;
+      await SyncConflictStore.markResolved(conflict.id, action);
+      return true;
+    });
     if (!ok) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -39,7 +46,6 @@ class _CloudSyncConflictPageState extends State<CloudSyncConflictPage> {
       ).showSnackBar(const SnackBar(content: Text('该冲突暂不支持此操作')));
       return;
     }
-    await SyncConflictStore.markResolved(conflict.id, action);
     if (!mounted) return;
     _reload();
   }

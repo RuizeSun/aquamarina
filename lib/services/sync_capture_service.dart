@@ -362,6 +362,17 @@ class SyncCaptureService {
           'max_hlc': bounds.$2,
           'applied_at': DateTime.now().toUtc().toIso8601String(),
         }, conflictAlgorithm: ConflictAlgorithm.replace);
+        // head 必须与「删除 oplog / 记录本机 chunk」在同一事务里推进。
+        // 否则进程在上传成功后、写 head 前退出，chunk 已上传但其它设备
+        // 会因为 head 未变化而永远不会 LIST 到它。
+        if (batch.ops.isNotEmpty) {
+          await txn.rawUpdate(
+            'UPDATE sync_meta SET head_hlc = ?, head_key = ?, '
+            'head_chunk_count = head_chunk_count + 1, head_dirty = 1 '
+            'WHERE id = 1',
+            [batch.ops.first.hlc.value, ownChunkKey],
+          );
+        }
       }
     });
   }
