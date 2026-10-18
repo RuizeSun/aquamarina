@@ -7,11 +7,14 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/cloud_sync_manifest.dart';
+import '../models/sync_op.dart';
 import 'backup_service.dart';
+import 'cloud_sync_compatibility_service.dart';
 import 'cloud_sync_device_meta_service.dart';
 import 'cloud_sync_engine.dart';
 import 'cloud_sync_run_lock.dart';
 import 'cloud_sync_settings.dart';
+import 'cloud_sync_version_gate_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 's3_storage_service.dart';
@@ -314,6 +317,11 @@ class CloudSyncService {
         maxDuration: const Duration(seconds: 60),
         isCancelled: isCancelled,
       );
+      if (result.blockedByVersion) {
+        throw CloudSyncIncompatibleException(
+          result.blockReason ?? '云同步因版本不兼容已暂停',
+        );
+      }
       if (result.hasErrors) {
         throw CloudSyncException('生成快照前同步失败：${result.errors.first}');
       }
@@ -333,6 +341,7 @@ class CloudSyncService {
     bool Function()? isCancelled,
     bool startNewDataset = false,
   }) async {
+    await _assertCompatibleForWrite();
     if (_requireSyncedSnapshot) {
       await _settleBeforeSnapshot(isCancelled);
     }
@@ -399,6 +408,14 @@ class CloudSyncService {
           deviceName: '云端数据',
           schemaVersion: DatabaseService.schemaVersion,
           appVersion: appVersion,
+          minSchemaVersion: _maxInt(
+            base.minSchemaVersion ?? 0,
+            DatabaseService.schemaVersion,
+          ),
+          minProtocolVersion: _maxInt(
+            base.minProtocolVersion ?? 0,
+            SyncOp.currentVersion,
+          ),
         )
         .addSnapshot(snapshot, retainCount: config.retainCount);
 
@@ -440,6 +457,7 @@ class CloudSyncService {
     CloudDeviceSummary summary, {
     void Function(int received, int? total)? onProgress,
   }) async {
+    await _assertCompatibleForWrite();
     final snapshot = summary.latest;
     if (snapshot == null) {
       throw const CloudSyncException('该设备还没有可恢复的备份');
@@ -625,6 +643,34 @@ class CloudSyncService {
       }
     } catch (_) {}
   }
+
+  /// 上传快照 / 覆盖恢复前必须确认数据格式兼容。
+  ///
+  /// 旧版本设备绝不能把统一数据集清单的 schema / 最低版本要求降回去。
+  Future<void> _assertCompatibleForWrite() async {
+    final appVersion = await CloudSyncCompatibilityService.localAppVersion();
+    final result = await CloudSyncCompatibilityService.evaluate(
+      config: config,
+      storage: storage,
+      localDeviceId: deviceId,
+      localAppVersion: appVersion,
+    );
+    if (result.isBlocked) {
+      await CloudSyncVersionGateService.instance.report(result);
+      throw CloudSyncIncompatibleException(
+        result.reason,
+        requiredSchemaVersion: result.peerSchemaVersion,
+        requiredProtocolVersion: result.peerProtocolVersion,
+      );
+    }
+    if (result.isSoftWarning) {
+      await CloudSyncVersionGateService.instance.report(result);
+    } else {
+      await CloudSyncVersionGateService.instance.clear();
+    }
+  }
+
+  static int _maxInt(int a, int b) => a > b ? a : b;
 
   Future<String> _appVersion() async {
     try {

@@ -9,7 +9,9 @@ import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/cloud_sync_foreground_sync_service.dart';
+import 'services/cloud_sync_compatibility_service.dart';
 import 'services/cloud_sync_settings.dart';
+import 'services/cloud_sync_version_gate_service.dart';
 import 'services/database_service.dart';
 import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
@@ -286,20 +288,102 @@ class _MainShellState extends State<MainShell> {
   /// 启动后延迟检查更新的定时器（dispose 时必须取消，避免泄漏与测试报错）
   Timer? _updateTimer;
 
+  /// 版本阻断 / 版本差异弹窗是否正在展示，避免并发重复弹窗。
+  bool _versionDialogShowing = false;
+
   @override
   void initState() {
     super.initState();
     // 初始化 TTS 服务
     TtsService.instance.init();
+    // 云同步版本提示：后台同步只发布状态，由主界面负责弹窗。
+    CloudSyncVersionGateService.instance.notice.addListener(_onVersionNotice);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(CloudSyncVersionGateService.instance.restore());
+    });
     // 延迟检测应用更新（等待首屏渲染完成）
     _updateTimer = Timer(const Duration(seconds: 3), _checkForUpdate);
   }
 
   @override
   void dispose() {
+    CloudSyncVersionGateService.instance.notice.removeListener(
+      _onVersionNotice,
+    );
     _updateTimer?.cancel();
     _updateTimer = null;
     super.dispose();
+  }
+
+  void _onVersionNotice() {
+    final result = CloudSyncVersionGateService.instance.notice.value;
+    if (!mounted || result == null || _versionDialogShowing) return;
+    unawaited(_showVersionDialog(result));
+  }
+
+  Future<void> _showVersionDialog(CloudSyncCompatibilityResult result) async {
+    _versionDialogShowing = true;
+    final blocked = result.isBlocked;
+    final action = await showDialog<String>(
+      context: context,
+      barrierDismissible: !blocked,
+      builder: (context) {
+        final colorScheme = Theme.of(context).colorScheme;
+        return AlertDialog(
+          icon: Icon(
+            blocked ? Icons.sync_problem_rounded : Icons.devices_rounded,
+            color: blocked ? colorScheme.error : colorScheme.primary,
+            size: 36,
+          ),
+          title: Text(blocked ? '云同步已暂停' : '设备版本不一致'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(result.reason),
+                if (blocked) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    '本机的新记录仍会保存在本地 oplog 中，升级后会自动继续上传，不会丢失。',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            if (blocked)
+              TextButton(
+                onPressed: () => Navigator.of(context).pop('update'),
+                child: const Text('检查更新'),
+              ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        );
+      },
+    );
+    _versionDialogShowing = false;
+    await CloudSyncVersionGateService.instance.dismiss(result.signature);
+    if (action == 'update' && mounted) {
+      final updateInfo = await UpdateService.checkForUpdate();
+      if (!mounted) return;
+      if (updateInfo == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('当前没有可用更新，请稍后重试或手动检查更新。'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      _showUpdateDialog(updateInfo);
+    }
   }
 
   /// 检查应用更新，发现新版本时弹窗提示。

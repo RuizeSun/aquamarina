@@ -369,7 +369,7 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
               }
             },
           );
-          if (!run.hasErrors && !run.cancelled) {
+          if (!run.hasErrors && !run.cancelled && !run.blockedByVersion) {
             update('正在检查云端基线…');
             await CloudSyncCheckpointService.maybeCreate();
           }
@@ -380,6 +380,10 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
       if (!mounted) return;
       if (result == null) {
         _showSnack('同步已取消；未完成的变更包会在下次同步继续');
+        return;
+      }
+      if (result.blockedByVersion) {
+        _showSnack('云同步已暂停：${result.blockReason ?? '版本不兼容'}', isError: true);
         return;
       }
       await showDialog<void>(
@@ -918,6 +922,41 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
             subtitle: const Text('选择合并、以本机为准或以云端为准；确认前不会拉取云端历史'),
             trailing: const Icon(Icons.chevron_right),
             onTap: _busy ? null : _ensureIntroduction,
+          ),
+        if (_state.versionBlockSignature != null)
+          ListTile(
+            leading: Icon(Icons.sync_problem_rounded, color: colorScheme.error),
+            title: Text('云同步已暂停', style: TextStyle(color: colorScheme.error)),
+            subtitle: Text(
+              '${_state.versionBlockReason ?? '版本不兼容'}\n'
+              '本机新记录仍会保存在本地，升级后自动继续同步。',
+            ),
+            isThreeLine: true,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _busy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const CloudSyncDevicesPage(),
+                    ),
+                  ),
+          )
+        else if (_state.versionWarningSignature != null)
+          ListTile(
+            leading: Icon(Icons.devices_rounded, color: colorScheme.tertiary),
+            title: const Text('设备版本不一致'),
+            subtitle: Text(
+              _state.versionWarningMessage ?? 'App 版本不同，但数据格式兼容，同步将继续。',
+            ),
+            isThreeLine: true,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _busy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => const CloudSyncDevicesPage(),
+                    ),
+                  ),
           ),
         ListTile(
           leading: Icon(

@@ -3,11 +3,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import '../models/cloud_sync_device_state.dart';
 import '../models/cloud_sync_manifest.dart';
 import '../models/sync_op.dart';
+import 'cloud_sync_compatibility_service.dart';
 import 'cloud_sync_device_meta_service.dart';
 import 'cloud_sync_maintenance_service.dart';
 import 'cloud_sync_run_lock.dart';
 import 'cloud_sync_service.dart';
 import 'cloud_sync_settings.dart';
+import 'cloud_sync_version_gate_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 's3_storage_service.dart';
@@ -43,10 +45,17 @@ class CloudSyncRunResult {
   /// 用于“接管并合并旧设备”等会删除云端数据的操作：只要拉取因预算、
   /// 取消、父级缺失或任何 chunk 错误而中断，就不能删除旧设备数据。
   bool get hasIncompleteWork =>
+      blockedByVersion ||
       budgetExhausted ||
       cancelled ||
       errors.isNotEmpty ||
       skippedMissingParent > 0;
+
+  /// 版本/协议不兼容：本次没有执行 pull / push。
+  bool blockedByVersion = false;
+  String? blockReason;
+  String? blockSignature;
+  CloudSyncCompatibilityResult? compatibility;
 
   final List<String> errors = [];
   final List<String> conflictDetails = [];
@@ -143,6 +152,54 @@ class CloudSyncEngine {
       'capture_enabled': 1,
     }, where: 'id = 1');
 
+    // 版本门禁：先把本机版本发布到 meta，再检查数据集/其它设备。
+    // 低版本设备在 pull / push 之前就会返回，避免应用无法理解的实体或覆盖新数据。
+    final appVersion = await CloudSyncCompatibilityService.localAppVersion();
+    final localSchemaVersion = DatabaseService.schemaVersion;
+    final localProtocolVersion = SyncOp.currentVersion;
+    final publish = await _meta.ensureMeta(
+      deviceId: deviceId,
+      deviceName: deviceName,
+      schemaVersion: localSchemaVersion,
+      appVersion: appVersion,
+      syncProtocolVersion: localProtocolVersion,
+    );
+    if (publish.skippedByRemote) {
+      final blocked = CloudSyncCompatibilityService.fromLocalMetaPublish(
+        publish: publish,
+        deviceId: deviceId,
+        localSchemaVersion: localSchemaVersion,
+        localProtocolVersion: localProtocolVersion,
+        localAppVersion: appVersion,
+      );
+      _markBlocked(result, blocked);
+      await CloudSyncVersionGateService.instance.report(blocked);
+      result.remainingLocalOps = await SyncCaptureService.pendingCount(db: db);
+      logWarning('CloudSyncEngine', '版本门禁阻止同步：${blocked.reason}');
+      return result;
+    }
+
+    final compatibility = await CloudSyncCompatibilityService.evaluate(
+      config: config,
+      storage: storage,
+      localDeviceId: deviceId,
+      localSchemaVersion: localSchemaVersion,
+      localProtocolVersion: localProtocolVersion,
+      localAppVersion: appVersion,
+    );
+    if (compatibility.isBlocked) {
+      _markBlocked(result, compatibility);
+      await CloudSyncVersionGateService.instance.report(compatibility);
+      result.remainingLocalOps = await SyncCaptureService.pendingCount(db: db);
+      logWarning('CloudSyncEngine', '版本门禁阻止同步：${compatibility.reason}');
+      return result;
+    }
+    if (compatibility.isSoftWarning) {
+      await CloudSyncVersionGateService.instance.report(compatibility);
+    } else {
+      await CloudSyncVersionGateService.instance.clear();
+    }
+
     final metaRows = await db.query(
       'sync_meta',
       columns: ['baseline_hlc', 'restored_watermarks'],
@@ -188,7 +245,9 @@ class CloudSyncEngine {
         await _meta.ensureMeta(
           deviceId: deviceId,
           deviceName: deviceName,
-          schemaVersion: DatabaseService.schemaVersion,
+          schemaVersion: localSchemaVersion,
+          appVersion: appVersion,
+          syncProtocolVersion: localProtocolVersion,
         );
       } catch (e) {
         logWarning('CloudSyncEngine', '写入设备 meta 失败（不影响同步）: $e');
@@ -235,6 +294,16 @@ class CloudSyncEngine {
 
   CloudSyncDeviceMetaService get _meta =>
       CloudSyncDeviceMetaService(config: config, storage: storage);
+
+  void _markBlocked(
+    CloudSyncRunResult result,
+    CloudSyncCompatibilityResult compatibility,
+  ) {
+    result.blockedByVersion = true;
+    result.blockReason = compatibility.reason;
+    result.blockSignature = compatibility.signature;
+    result.compatibility = compatibility;
+  }
 
   /// 配置（endpoint / bucket / prefix 等）切换后，旧后端的同步水位、
   /// 已应用记录、行版本与墓碑都不再适用。保留 oplog（本地待上传变更）
@@ -652,13 +721,19 @@ class CloudSyncEngine {
     if (applied.isEmpty) return;
 
     try {
-      final existing = await _meta.fetchState(deviceId);
-      final unchanged =
-          existing != null && _sameApplied(existing.applied, applied);
-      if (unchanged &&
-          DateTime.now().difference(existing.updatedAt) <
-              const Duration(hours: 24)) {
+      final existing = await _meta.readState(deviceId);
+      if (existing.isNewerFormat) {
+        logWarning('CloudSyncEngine', '设备 state 格式高于本机，已跳过写入');
         return;
+      }
+      final current = existing.value;
+      if (current != null) {
+        final unchanged = _sameApplied(current.applied, applied);
+        if (unchanged &&
+            DateTime.now().difference(current.updatedAt) <
+                const Duration(hours: 24)) {
+          return;
+        }
       }
       await _meta.saveState(
         CloudDeviceState(
@@ -703,9 +778,18 @@ class CloudSyncEngine {
       latestChunkKey: key,
       latestHlc: hlc,
       chunkCount: (row['head_chunk_count'] as int?) ?? 0,
+      appVersion: await CloudSyncCompatibilityService.localAppVersion(),
+      schemaVersion: DatabaseService.schemaVersion,
+      syncProtocolVersion: SyncOp.currentVersion,
       updatedAt: DateTime.now(),
     );
     try {
+      // 不覆盖更高格式的 head（降级 / 回退场景）。
+      final existing = await _meta.readHead(deviceId);
+      if (existing.isNewerFormat) {
+        result.errors.add('设备 head 格式高于本机，已跳过写入');
+        return;
+      }
       await _meta.saveHead(head);
       await db.update('sync_meta', {'head_dirty': 0}, where: 'id = 1');
     } catch (e) {

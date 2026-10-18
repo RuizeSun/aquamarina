@@ -30,6 +30,26 @@ class CloudSyncCancelledException implements Exception {
   String toString() => message;
 }
 
+/// 云端数据由更新版本创建，本机无法安全读取。
+///
+/// 与普通 [CloudSyncException] 区分：自动同步遇到它应进入“版本阻断”状态，
+/// 而不是按网络失败做指数退避。
+class CloudSyncIncompatibleException extends FormatException {
+  final int? remoteFormatVersion;
+  final int? requiredSchemaVersion;
+  final int? requiredProtocolVersion;
+
+  const CloudSyncIncompatibleException(
+    super.message, {
+    this.remoteFormatVersion,
+    this.requiredSchemaVersion,
+    this.requiredProtocolVersion,
+  });
+
+  @override
+  String toString() => message;
+}
+
 /// 云端快照元信息。
 class CloudSnapshotInfo {
   final String key;
@@ -94,6 +114,14 @@ class CloudDeviceManifest {
   final String deviceName;
   final int schemaVersion;
   final String appVersion;
+
+  /// 读取这份数据所需的最低数据库 schema / 同步协议版本。
+  ///
+  /// 旧清单没有这两个字段（为 null）。写入时只增不减，避免旧设备把
+  /// 新版本要求降回去。
+  final int? minSchemaVersion;
+  final int? minProtocolVersion;
+
   final DateTime updatedAt;
   final List<CloudSnapshotInfo> snapshots;
 
@@ -103,6 +131,8 @@ class CloudDeviceManifest {
     required this.deviceName,
     required this.schemaVersion,
     required this.appVersion,
+    this.minSchemaVersion,
+    this.minProtocolVersion,
     required this.updatedAt,
     required this.snapshots,
   });
@@ -115,7 +145,10 @@ class CloudDeviceManifest {
       throw const FormatException('清单缺少 format_version');
     }
     if (formatVersion > currentFormatVersion) {
-      throw FormatException('云端备份格式版本过新（$formatVersion），请先升级应用');
+      throw CloudSyncIncompatibleException(
+        '云端备份格式版本过新（$formatVersion），请先升级应用',
+        remoteFormatVersion: formatVersion,
+      );
     }
     if (formatVersion < 1) {
       throw const FormatException('云端备份格式版本无效');
@@ -139,6 +172,8 @@ class CloudDeviceManifest {
     if (rawSnapshots is! List) {
       throw const FormatException('清单中的快照列表格式错误');
     }
+    final minSchemaVersion = _optionalInt(json['min_schema_version']);
+    final minProtocolVersion = _optionalInt(json['min_protocol_version']);
     final snapshots = rawSnapshots.map((e) {
       if (e is! Map) {
         throw const FormatException('快照条目格式错误');
@@ -152,6 +187,8 @@ class CloudDeviceManifest {
       deviceName: deviceName,
       schemaVersion: schemaVersion,
       appVersion: appVersion,
+      minSchemaVersion: minSchemaVersion,
+      minProtocolVersion: minProtocolVersion,
       updatedAt: DateTime.parse(updatedAt),
       snapshots: snapshots,
     );
@@ -163,6 +200,8 @@ class CloudDeviceManifest {
     'device_name': deviceName,
     'schema_version': schemaVersion,
     'app_version': appVersion,
+    if (minSchemaVersion != null) 'min_schema_version': minSchemaVersion,
+    if (minProtocolVersion != null) 'min_protocol_version': minProtocolVersion,
     'updated_at': updatedAt.toUtc().toIso8601String(),
     'snapshots': snapshots.map((e) => e.toJson()).toList(),
   };
@@ -193,6 +232,8 @@ class CloudDeviceManifest {
     String? deviceName,
     int? schemaVersion,
     String? appVersion,
+    int? minSchemaVersion,
+    int? minProtocolVersion,
     DateTime? updatedAt,
     List<CloudSnapshotInfo>? snapshots,
   }) {
@@ -202,10 +243,20 @@ class CloudDeviceManifest {
       deviceName: deviceName ?? this.deviceName,
       schemaVersion: schemaVersion ?? this.schemaVersion,
       appVersion: appVersion ?? this.appVersion,
+      minSchemaVersion: minSchemaVersion ?? this.minSchemaVersion,
+      minProtocolVersion: minProtocolVersion ?? this.minProtocolVersion,
       updatedAt: updatedAt ?? this.updatedAt,
       snapshots: snapshots ?? this.snapshots,
     );
   }
+}
+
+int? _optionalInt(Object? value) {
+  if (value == null) return null;
+  if (value is! int || value < 1) {
+    throw const FormatException('版本字段格式错误');
+  }
+  return value;
 }
 
 /// 云端设备摘要（用于「从云端恢复」列表）。

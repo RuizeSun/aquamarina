@@ -17,6 +17,7 @@ class CloudSyncDeviceMetaService {
   /// 同一后端 + 设备最多每 24 小时检查一次 meta，避免每次同步都多一次 GET。
   static const Duration _metaRecheckInterval = Duration(hours: 24);
   static const String _metaCheckPrefPrefix = 'cloud_sync_meta_checked_v1:';
+  static const String _metaVersionPrefPrefix = 'cloud_sync_meta_version_v1:';
 
   final CloudSyncConfig config;
   final S3StorageService storage;
@@ -53,7 +54,9 @@ class CloudSyncDeviceMetaService {
     return sorted;
   }
 
-  Future<CloudDeviceHead?> fetchHead(String deviceId) async {
+  Future<CloudDeviceReadResult<CloudDeviceHead>> readHead(
+    String deviceId,
+  ) async {
     final key = config.headKey(deviceId);
     try {
       final bytes = await storage.getBytes(
@@ -61,12 +64,17 @@ class CloudSyncDeviceMetaService {
         maxBytes: _maxMetaBytes,
         nullIfMissing: true,
       );
-      if (bytes == null) return null;
-      return CloudDeviceMetaCodec.parseHead(bytes);
+      if (bytes == null) return const CloudDeviceReadResult.missing();
+      return CloudDeviceMetaCodec.decodeHead(bytes);
     } catch (e) {
       logWarning('CloudSyncDeviceMeta', '读取设备 head 失败 $key: $e');
-      return null;
+      return CloudDeviceReadResult.error(e);
     }
+  }
+
+  Future<CloudDeviceHead?> fetchHead(String deviceId) async {
+    final result = await readHead(deviceId);
+    return result.isOk ? result.value : null;
   }
 
   Future<void> saveHead(CloudDeviceHead head) async {
@@ -76,7 +84,9 @@ class CloudSyncDeviceMetaService {
     );
   }
 
-  Future<CloudDeviceState?> fetchState(String deviceId) async {
+  Future<CloudDeviceReadResult<CloudDeviceState>> readState(
+    String deviceId,
+  ) async {
     final key = config.stateKey(deviceId);
     try {
       final bytes = await storage.getBytes(
@@ -84,12 +94,17 @@ class CloudSyncDeviceMetaService {
         maxBytes: _maxMetaBytes,
         nullIfMissing: true,
       );
-      if (bytes == null) return null;
-      return CloudDeviceMetaCodec.parseState(bytes);
+      if (bytes == null) return const CloudDeviceReadResult.missing();
+      return CloudDeviceMetaCodec.decodeState(bytes);
     } catch (e) {
       logWarning('CloudSyncDeviceMeta', '读取设备 state 失败 $key: $e');
-      return null;
+      return CloudDeviceReadResult.error(e);
     }
+  }
+
+  Future<CloudDeviceState?> fetchState(String deviceId) async {
+    final result = await readState(deviceId);
+    return result.isOk ? result.value : null;
   }
 
   Future<void> saveState(CloudDeviceState state) async {
@@ -99,7 +114,9 @@ class CloudSyncDeviceMetaService {
     );
   }
 
-  Future<CloudDeviceMeta?> fetchMeta(String deviceId) async {
+  Future<CloudDeviceReadResult<CloudDeviceMeta>> readMeta(
+    String deviceId,
+  ) async {
     final key = config.metaKey(deviceId);
     try {
       final bytes = await storage.getBytes(
@@ -107,12 +124,17 @@ class CloudSyncDeviceMetaService {
         maxBytes: _maxMetaBytes,
         nullIfMissing: true,
       );
-      if (bytes == null) return null;
-      return CloudDeviceMetaCodec.parseMeta(bytes);
+      if (bytes == null) return const CloudDeviceReadResult.missing();
+      return CloudDeviceMetaCodec.decodeMeta(bytes);
     } catch (e) {
       logWarning('CloudSyncDeviceMeta', '读取设备 meta 失败 $key: $e');
-      return null;
+      return CloudDeviceReadResult.error(e);
     }
+  }
+
+  Future<CloudDeviceMeta?> fetchMeta(String deviceId) async {
+    final result = await readMeta(deviceId);
+    return result.isOk ? result.value : null;
   }
 
   Future<void> saveMeta(CloudDeviceMeta meta) async {
@@ -122,46 +144,144 @@ class CloudSyncDeviceMetaService {
     );
   }
 
-  /// 确保设备目录下存在 `meta.json`（名称 / 平台 / schema 版本 / 最近在线）。
+  /// 确保设备目录下存在 `meta.json`（名称 / 平台 / schema / App / 协议版本）。
   ///
-  /// 进程内做 24 小时节流；第一次同步会先 GET 一次判断是否缺失或名称已变。
-  Future<void> ensureMeta({
+  /// - 名称或任一版本变化时立即重写，不受 24 小时节流限制；
+  /// - 云端 meta 格式高于本机、或 schema 高于本机时**拒绝写入**，避免降级覆盖；
+  /// - 网络错误时不写，避免把“读不到”误判为“云端没有”。
+  Future<CloudMetaPublishResult> ensureMeta({
     required String deviceId,
     required String deviceName,
     required int schemaVersion,
+    String? appVersion,
+    int? syncProtocolVersion,
+    bool force = false,
   }) async {
     final cacheKey = '$_metaCheckPrefPrefix${config.backendIdentity}|$deviceId';
+    final versionKey =
+        '$_metaVersionPrefPrefix${config.backendIdentity}|$deviceId';
+    final versionTag =
+        '${appVersion ?? ''}|$schemaVersion|${syncProtocolVersion ?? ''}';
     final now = DateTime.now();
     SharedPreferences? prefs;
+    var versionChanged = true;
     try {
       prefs = await SharedPreferences.getInstance();
-      final checkedMs = prefs.getInt(cacheKey);
-      if (checkedMs != null &&
-          now.difference(DateTime.fromMillisecondsSinceEpoch(checkedMs)) <
-              _metaRecheckInterval) {
-        return;
+      versionChanged = prefs.getString(versionKey) != versionTag;
+      if (!force && !versionChanged) {
+        final checkedMs = prefs.getInt(cacheKey);
+        if (checkedMs != null &&
+            now.difference(DateTime.fromMillisecondsSinceEpoch(checkedMs)) <
+                _metaRecheckInterval) {
+          return const CloudMetaPublishResult(
+            outcome: CloudMetaPublishOutcome.unchanged,
+            remoteStatus: CloudDeviceReadStatus.missing,
+          );
+        }
       }
     } catch (_) {
       // 设置存储不可用时不做节流，仍继续补写 meta。
     }
-    final existing = await fetchMeta(deviceId);
+
+    final existing = await readMeta(deviceId);
+    switch (existing.status) {
+      case CloudDeviceReadStatus.error:
+        return CloudMetaPublishResult(
+          outcome: CloudMetaPublishOutcome.failed,
+          remoteStatus: existing.status,
+        );
+      case CloudDeviceReadStatus.newerFormat:
+        logWarning(
+          'CloudSyncDeviceMeta',
+          '本机 meta 格式低于云端（${existing.remoteFormatVersion}），拒绝覆盖',
+        );
+        return CloudMetaPublishResult(
+          outcome: CloudMetaPublishOutcome.skippedNewerFormat,
+          remoteStatus: existing.status,
+          remoteMeta: existing.value,
+          remoteFormatVersion: existing.remoteFormatVersion,
+        );
+      case CloudDeviceReadStatus.ok:
+        final remote = existing.value;
+        if (remote != null && remote.schemaVersion > schemaVersion) {
+          logWarning(
+            'CloudSyncDeviceMeta',
+            '云端 meta schema=${remote.schemaVersion} 高于本机 $schemaVersion，拒绝覆盖',
+          );
+          return CloudMetaPublishResult(
+            outcome: CloudMetaPublishOutcome.skippedNewerSchema,
+            remoteStatus: existing.status,
+            remoteMeta: remote,
+            remoteFormatVersion: existing.remoteFormatVersion,
+          );
+        }
+        break;
+      case CloudDeviceReadStatus.missing:
+      case CloudDeviceReadStatus.corrupted:
+        break;
+    }
+
+    final remote = existing.value;
     final fresh =
-        existing != null &&
-        existing.deviceName == deviceName &&
-        now.difference(existing.lastSeen) < _metaRecheckInterval;
-    if (!fresh) {
+        remote != null &&
+        !force &&
+        !versionChanged &&
+        remote.deviceName == deviceName &&
+        remote.schemaVersion == schemaVersion &&
+        remote.appVersion == appVersion &&
+        remote.syncProtocolVersion == syncProtocolVersion &&
+        now.difference(remote.lastSeen) < _metaRecheckInterval;
+    if (fresh) {
+      await _writeThrottle(prefs, cacheKey, versionKey, now, versionTag);
+      return CloudMetaPublishResult(
+        outcome: CloudMetaPublishOutcome.unchanged,
+        remoteStatus: existing.status,
+        remoteMeta: remote,
+        remoteFormatVersion: existing.remoteFormatVersion,
+      );
+    }
+
+    try {
       await saveMeta(
         CloudDeviceMeta(
           deviceId: deviceId,
           deviceName: deviceName,
           platform: _platformName(),
           schemaVersion: schemaVersion,
+          appVersion: appVersion,
+          syncProtocolVersion: syncProtocolVersion,
           lastSeen: now,
         ),
       );
+      await _writeThrottle(prefs, cacheKey, versionKey, now, versionTag);
+      return CloudMetaPublishResult(
+        outcome: CloudMetaPublishOutcome.written,
+        remoteStatus: existing.status,
+        remoteMeta: remote,
+        remoteFormatVersion: existing.remoteFormatVersion,
+      );
+    } catch (e) {
+      logWarning('CloudSyncDeviceMeta', '写入设备 meta 失败: $e');
+      return CloudMetaPublishResult(
+        outcome: CloudMetaPublishOutcome.failed,
+        remoteStatus: existing.status,
+        remoteMeta: remote,
+        remoteFormatVersion: existing.remoteFormatVersion,
+      );
     }
+  }
+
+  Future<void> _writeThrottle(
+    SharedPreferences? prefs,
+    String cacheKey,
+    String versionKey,
+    DateTime now,
+    String versionTag,
+  ) async {
+    if (prefs == null) return;
     try {
-      await prefs?.setInt(cacheKey, now.millisecondsSinceEpoch);
+      await prefs.setInt(cacheKey, now.millisecondsSinceEpoch);
+      await prefs.setString(versionKey, versionTag);
     } catch (_) {
       // 节流写入失败不影响 meta 本身。
     }

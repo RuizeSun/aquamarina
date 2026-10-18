@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aquamarina/models/cloud_sync_device_state.dart';
@@ -6,8 +7,10 @@ import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/cloud_sync_device_meta_service.dart';
 import 'package:aquamarina/services/cloud_sync_engine.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
+import 'package:aquamarina/services/database_service.dart';
 import 'package:aquamarina/services/sync_capture_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -209,13 +212,14 @@ void main() {
       'updated_at': '2026-10-02T00:00:00Z',
     });
 
-    storage.failPuts = 1;
+    storage.failPutKeyContains = '/chunks/';
     var result = await engine().run(pull: false);
     expect(result.pushedChunks, 0);
     expect(result.errors, isNotEmpty);
     expect(result.remainingLocalOps, 1);
     expect(await SyncCaptureService.pendingCount(db: db), 1);
 
+    storage.failPutKeyContains = null;
     result = await engine().run(pull: false);
     expect(result.pushedChunks, 1);
     expect(result.remainingLocalOps, 0);
@@ -757,5 +761,110 @@ void main() {
       ..errors.clear()
       ..skippedMissingParent = 1;
     expect(result.hasIncompleteWork, isTrue);
+  });
+
+  test('对端 schema 更高时版本门禁阻止 pull / push', () async {
+    final remoteMeta = CloudDeviceMeta(
+      deviceId: _deviceB,
+      deviceName: '新设备',
+      platform: 'Windows',
+      schemaVersion: DatabaseService.schemaVersion + 1,
+      appVersion: '9.9.9+99',
+      syncProtocolVersion: SyncOp.currentVersion,
+      lastSeen: DateTime.now(),
+    );
+    storage.objects[config.metaKey(_deviceB)] = CloudDeviceMetaCodec.encodeMeta(
+      remoteMeta,
+    );
+
+    await db.insert('word_notes', {
+      'word': 'blocked',
+      'note': '本地变更仍需保留',
+      'is_favorited': 0,
+      'updated_at': '2026-10-03T00:00:00Z',
+    });
+
+    final result = await engine().run();
+    expect(result.blockedByVersion, isTrue);
+    expect(result.pulledChunks, 0);
+    expect(result.pushedChunks, 0);
+    expect(result.remainingLocalOps, greaterThan(0));
+    expect(result.blockSignature, isNotNull);
+
+    final state = await CloudSyncSettings.loadState();
+    expect(state.versionBlockSignature, isNotNull);
+    expect(state.versionBlockReason, contains('schema'));
+  });
+
+  test('App 版本更高但 schema 相同时只提示并继续同步', () async {
+    PackageInfo.setMockInitialValues(
+      appName: 'Aquamarina',
+      packageName: 'com.example.aquamarina',
+      version: '1.4.1',
+      buildNumber: '24',
+      buildSignature: '',
+    );
+    final remoteMeta = CloudDeviceMeta(
+      deviceId: _deviceB,
+      deviceName: '新设备',
+      platform: 'Windows',
+      schemaVersion: DatabaseService.schemaVersion,
+      appVersion: '9.9.9+99',
+      syncProtocolVersion: SyncOp.currentVersion,
+      lastSeen: DateTime.now(),
+    );
+    storage.objects[config.metaKey(_deviceB)] = CloudDeviceMetaCodec.encodeMeta(
+      remoteMeta,
+    );
+
+    final ops = [
+      makeOp(
+        entity: 'word_notes',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'apple'},
+        data: {
+          'note': 'from B',
+          'is_favorited': 0,
+          'updated_at': '2026-10-01T00:00:00Z',
+        },
+        deviceId: _deviceB,
+      ),
+    ];
+    storage.objects[_chunkKey(config, _deviceB, ops)] = SyncChunkCodec.encode(
+      ops,
+    );
+
+    final result = await engine().run(push: false);
+    expect(result.blockedByVersion, isFalse);
+    expect(result.pulledChunks, 1);
+    final state = await CloudSyncSettings.loadState();
+    expect(state.versionBlockSignature, isNull);
+    expect(state.versionWarningSignature, isNotNull);
+  });
+
+  test('本机 meta 格式过新时拒绝降级覆盖并阻断', () async {
+    storage.objects[config.metaKey(_deviceA)] = Uint8List.fromList(
+      utf8.encode(
+        jsonEncode({
+          'format_version': CloudDeviceMeta.currentFormatVersion + 1,
+          'device_id': _deviceA,
+          'device_name': '本机',
+          'platform': 'Windows',
+          'schema_version': DatabaseService.schemaVersion,
+          'last_seen': DateTime.now().toIso8601String(),
+        }),
+      ),
+    );
+
+    final result = await engine().run(push: false);
+    expect(result.blockedByVersion, isTrue);
+    expect(result.pulledChunks, 0);
+
+    final meta = await db.query('sync_meta', where: 'id = 1');
+    expect(meta.single['head_dirty'], 0);
+    final raw = storage.objects[config.metaKey(_deviceA)]!;
+    final decoded = jsonDecode(utf8.decode(raw)) as Map<String, dynamic>;
+    expect(decoded['format_version'], CloudDeviceMeta.currentFormatVersion + 1);
   });
 }

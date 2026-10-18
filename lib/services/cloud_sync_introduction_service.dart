@@ -2,11 +2,13 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../models/cloud_sync_manifest.dart';
 import 'cloud_sync_bootstrap_service.dart';
+import 'cloud_sync_compatibility_service.dart';
 import 'cloud_sync_engine.dart';
 import 'cloud_sync_merge_service.dart';
 import 'cloud_sync_run_lock.dart';
 import 'cloud_sync_service.dart';
 import 'cloud_sync_settings.dart';
+import 'cloud_sync_version_gate_service.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 'sync_schema.dart';
@@ -108,6 +110,27 @@ class CloudSyncIntroductionService {
       final datasetId = manifest?.deviceId ?? '';
       if (datasetId.isEmpty || manifest?.latest == null) {
         throw const CloudSyncException('云端还没有可用数据');
+      }
+
+      final appVersion = await CloudSyncCompatibilityService.localAppVersion();
+      final compatibility = await CloudSyncCompatibilityService.evaluate(
+        config: service.config,
+        storage: service.storage,
+        localDeviceId: service.deviceId,
+        localAppVersion: appVersion,
+      );
+      if (compatibility.isBlocked) {
+        await CloudSyncVersionGateService.instance.report(compatibility);
+        throw CloudSyncIncompatibleException(
+          compatibility.reason,
+          requiredSchemaVersion: compatibility.peerSchemaVersion,
+          requiredProtocolVersion: compatibility.peerProtocolVersion,
+        );
+      }
+      if (compatibility.isSoftWarning) {
+        await CloudSyncVersionGateService.instance.report(compatibility);
+      } else {
+        await CloudSyncVersionGateService.instance.clear();
       }
 
       switch (action) {

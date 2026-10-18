@@ -139,7 +139,15 @@ for chunk in pull():
   - 仅当所有活跃设备（head/state 180 天内更新）都越过该 chunk 起始 HLC，且对象超过 30 天才删除；
   - 任一非 owner 活跃设备缺少 `state.json` 时，本轮跳过该 owner；
   - 删除后按「下一个保留 chunk 的起始 HLC」清理本地 `sync_applied`；墓碑在所有活跃设备水位越过且超过 180 天后清理。
-- 设备元信息（v20）：每次增量同步结束确保写入 `meta.json`（名称 / 平台 / schemaVersion / lastSeen），只拉取、从未上传快照的设备也能在设备页显示名称；按后端 + 设备 24 小时节流（持久化）。
+- 设备元信息（v20）：每次增量同步开始与结束都会确保写入 `meta.json`（名称 / 平台 / `schemaVersion` / `appVersion` / `syncProtocolVersion` / `lastSeen`），只拉取、从未上传快照的设备也能在设备页显示名称与版本；按后端 + 设备 24 小时节流（持久化），**版本变化时绕过节流立即重写**。
+- 版本采集与兼容门禁（客户端侧）：
+  - `meta.json` / `head.json` 新增可选字段 `app_version`、`schema_version`、`sync_protocol_version`；`meta.format_version` 继续保持 `1`，新增字段向后兼容，旧客户端会忽略未知字段。
+  - 读取 meta / head / state 时区分 `ok / missing / corrupted / newerFormat / error`；`newerFormat` 不再降级为 `null`，而是作为“本机无法解释对端元数据”的阻断信号。
+  - 写 meta / head / state 前做降级保护：云端格式高于本机、或 schema 高于本机时拒绝覆盖；网络错误时不写，避免把“读不到”误判为“云端没有”。
+  - 硬阻断条件：对端 `schema_version` 或 `sync_protocol_version` 高于本机；数据集清单的 `min_schema_version` / `min_protocol_version` 高于本机；对端元数据格式过新。命中后停止 pull / push / 快照上传 / 恢复 / 检查点，但**保留本地变更捕获**，升级后自动补传。
+  - 软提示条件：App 版本不同但 schema 与协议兼容；同步继续，设备页展示版本，主界面按 signature 只弹一次提示。
+  - 活跃窗口：超过 30 天未出现的设备不参与硬阻断，避免陈旧设备永久阻塞；已重置 / 忽略的设备不参与判定。
+  - 自动同步遇到版本阻断不进入指数退避；前台轮询继续检查，升级后下一次同步自动恢复并清除阻断状态。
 - 删除云端设备：除删除对象外，同时清理本机 `sync_state` / `sync_applied` / `sync_chunks` / `sync_backend_watermarks` 中该设备记录。
 - 运行时状态：自动同步、事件同步、检查点与维护的 `loadState → copyWith → saveState` 全部通过串行化 `updateState`，避免并发覆盖字段。
 - 手动操作：增量同步与快照上传的进度弹窗提供取消；引擎在小批边界响应 `isCancelled`，快照在同步/导出/PUT 完成后检查取消。
@@ -207,6 +215,8 @@ for chunk in pull():
 | `lib/services/ai_sentence_set_service.dart` | 句式集元数据迁入 SQLite（v14），CRUD 走事务并纳入触发器同步 |
 | `lib/services/cloud_sync_checkpoint_service.dart` | 7 天 / 5000 op 自动检查点 |
 | `lib/services/cloud_sync_bootstrap_service.dart` | 新设备空库检测与最新快照引导 |
+| `lib/services/cloud_sync_compatibility_service.dart` | 设备版本采集、schema/协议兼容判定、软提示与硬阻断结论 |
+| `lib/services/cloud_sync_version_gate_service.dart` | 阻断状态持久化、弹窗去重与启动恢复 |
 | `lib/services/cloud_sync_network_service.dart` | 仅 Wi-Fi / 以太网策略 |
 | `lib/services/sync_conflict_store.dart` | 冲突持久化与三种解决动作 |
 | `lib/pages/settings/cloud_sync_conflict_page.dart` | 冲突逐条处理页 |

@@ -1,9 +1,13 @@
 import '../models/cloud_sync_manifest.dart';
+import '../models/sync_op.dart';
 import 'cloud_sync_checkpoint_service.dart';
+import 'cloud_sync_compatibility_service.dart';
 import 'cloud_sync_engine.dart';
 import 'cloud_sync_introduction_service.dart';
 import 'cloud_sync_network_service.dart';
 import 'cloud_sync_settings.dart';
+import 'cloud_sync_version_gate_service.dart';
+import 'database_service.dart';
 import 'log_service.dart';
 
 /// 自动增量同步：启动 / 回到前台时触发，带冷却与并发保护。
@@ -66,6 +70,19 @@ class CloudSyncAutoSyncService {
 
       final engine = await CloudSyncEngine.create();
       final result = await engine.run();
+      if (result.blockedByVersion) {
+        // 门禁已把状态写入 runtime state；不要当作网络失败做指数退避。
+        await CloudSyncSettings.updateState(
+          (state) => state.copyWith(
+            lastAutoSyncAt: DateTime.now(),
+            clearError: true,
+            clearBackoff: true,
+            consecutiveFailures: 0,
+          ),
+        );
+        logWarning('CloudSyncAutoSync', '自动同步因版本不兼容已暂停: ${result.blockReason}');
+        return;
+      }
       if (result.hasErrors) {
         throw CloudSyncException(result.errors.first);
       }
@@ -84,6 +101,24 @@ class CloudSyncAutoSyncService {
       );
       // 自动检查点：内部有 7 天 / 5000 op 冷却，失败不影响同步。
       await CloudSyncCheckpointService.maybeCreate(config: config);
+    } on CloudSyncIncompatibleException catch (e) {
+      final appVersion = await CloudSyncCompatibilityService.localAppVersion();
+      final compatibility =
+          CloudSyncCompatibilityService.fromIncompatibleException(
+            error: e,
+            localSchemaVersion: DatabaseService.schemaVersion,
+            localProtocolVersion: SyncOp.currentVersion,
+            localAppVersion: appVersion,
+          );
+      await CloudSyncVersionGateService.instance.report(compatibility);
+      await CloudSyncSettings.updateState(
+        (state) => state.copyWith(
+          lastAutoSyncAt: DateTime.now(),
+          clearBackoff: true,
+          consecutiveFailures: 0,
+        ),
+      );
+      logWarning('CloudSyncAutoSync', '自动同步因版本不兼容已暂停: ${e.message}');
     } catch (e) {
       try {
         final cooldownMinutes =

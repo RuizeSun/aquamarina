@@ -362,6 +362,22 @@ class CloudSyncRuntimeState {
   final int consecutiveFailures;
   final DateTime? backoffUntil;
 
+  /// 版本不兼容导致的同步阻断（低版本设备停止远端收发）。
+  final String? versionBlockSignature;
+  final String? versionBlockReason;
+  final String? versionBlockPeerName;
+  final String? versionBlockPeerVersion;
+  final int? versionBlockPeerSchemaVersion;
+  final int? versionBlockPeerProtocolVersion;
+  final int? versionBlockLocalSchemaVersion;
+  final int? versionBlockLocalProtocolVersion;
+  final DateTime? versionBlockedAt;
+
+  /// App 版本不同但数据兼容时的软提示。
+  final String? versionWarningSignature;
+  final String? versionWarningMessage;
+  final DateTime? versionWarningAt;
+
   const CloudSyncRuntimeState({
     this.lastSuccessAt,
     this.lastUploadKey,
@@ -376,6 +392,18 @@ class CloudSyncRuntimeState {
     this.checkpointBackoffUntil,
     this.consecutiveFailures = 0,
     this.backoffUntil,
+    this.versionBlockSignature,
+    this.versionBlockReason,
+    this.versionBlockPeerName,
+    this.versionBlockPeerVersion,
+    this.versionBlockPeerSchemaVersion,
+    this.versionBlockPeerProtocolVersion,
+    this.versionBlockLocalSchemaVersion,
+    this.versionBlockLocalProtocolVersion,
+    this.versionBlockedAt,
+    this.versionWarningSignature,
+    this.versionWarningMessage,
+    this.versionWarningAt,
   });
 
   factory CloudSyncRuntimeState.fromJson(Map<String, dynamic> json) {
@@ -386,6 +414,8 @@ class CloudSyncRuntimeState {
     final lastCheckpointAttempt = json['last_checkpoint_attempt_at'];
     final checkpointBackoff = json['checkpoint_backoff_until'];
     final backoffUntil = json['backoff_until'];
+    final versionBlocked = json['version_blocked_at'];
+    final versionWarning = json['version_warning_at'];
     return CloudSyncRuntimeState(
       lastSuccessAt: lastSuccess is int
           ? DateTime.fromMillisecondsSinceEpoch(lastSuccess)
@@ -415,6 +445,25 @@ class CloudSyncRuntimeState {
       backoffUntil: backoffUntil is int
           ? DateTime.fromMillisecondsSinceEpoch(backoffUntil)
           : null,
+      versionBlockSignature: json['version_block_signature'] as String?,
+      versionBlockReason: json['version_block_reason'] as String?,
+      versionBlockPeerName: json['version_block_peer_name'] as String?,
+      versionBlockPeerVersion: json['version_block_peer_version'] as String?,
+      versionBlockPeerSchemaVersion: json['version_block_peer_schema'] as int?,
+      versionBlockPeerProtocolVersion:
+          json['version_block_peer_protocol'] as int?,
+      versionBlockLocalSchemaVersion:
+          json['version_block_local_schema'] as int?,
+      versionBlockLocalProtocolVersion:
+          json['version_block_local_protocol'] as int?,
+      versionBlockedAt: versionBlocked is int
+          ? DateTime.fromMillisecondsSinceEpoch(versionBlocked)
+          : null,
+      versionWarningSignature: json['version_warning_signature'] as String?,
+      versionWarningMessage: json['version_warning_message'] as String?,
+      versionWarningAt: versionWarning is int
+          ? DateTime.fromMillisecondsSinceEpoch(versionWarning)
+          : null,
     );
   }
 
@@ -433,6 +482,18 @@ class CloudSyncRuntimeState {
     'checkpoint_backoff_until': checkpointBackoffUntil?.millisecondsSinceEpoch,
     'consecutive_failures': consecutiveFailures,
     'backoff_until': backoffUntil?.millisecondsSinceEpoch,
+    'version_block_signature': versionBlockSignature,
+    'version_block_reason': versionBlockReason,
+    'version_block_peer_name': versionBlockPeerName,
+    'version_block_peer_version': versionBlockPeerVersion,
+    'version_block_peer_schema': versionBlockPeerSchemaVersion,
+    'version_block_peer_protocol': versionBlockPeerProtocolVersion,
+    'version_block_local_schema': versionBlockLocalSchemaVersion,
+    'version_block_local_protocol': versionBlockLocalProtocolVersion,
+    'version_blocked_at': versionBlockedAt?.millisecondsSinceEpoch,
+    'version_warning_signature': versionWarningSignature,
+    'version_warning_message': versionWarningMessage,
+    'version_warning_at': versionWarningAt?.millisecondsSinceEpoch,
   };
 
   CloudSyncRuntimeState copyWith({
@@ -449,10 +510,24 @@ class CloudSyncRuntimeState {
     DateTime? checkpointBackoffUntil,
     int? consecutiveFailures,
     DateTime? backoffUntil,
+    String? versionBlockSignature,
+    String? versionBlockReason,
+    String? versionBlockPeerName,
+    String? versionBlockPeerVersion,
+    int? versionBlockPeerSchemaVersion,
+    int? versionBlockPeerProtocolVersion,
+    int? versionBlockLocalSchemaVersion,
+    int? versionBlockLocalProtocolVersion,
+    DateTime? versionBlockedAt,
+    String? versionWarningSignature,
+    String? versionWarningMessage,
+    DateTime? versionWarningAt,
     bool clearBackoff = false,
     bool clearCheckpoint = false,
     bool clearCheckpointBackoff = false,
     bool clearError = false,
+    bool clearVersionBlock = false,
+    bool clearVersionWarning = false,
   }) {
     return CloudSyncRuntimeState(
       lastSuccessAt: lastSuccessAt ?? this.lastSuccessAt,
@@ -479,6 +554,46 @@ class CloudSyncRuntimeState {
           : (checkpointBackoffUntil ?? this.checkpointBackoffUntil),
       consecutiveFailures: consecutiveFailures ?? this.consecutiveFailures,
       backoffUntil: clearBackoff ? null : (backoffUntil ?? this.backoffUntil),
+      versionBlockSignature: clearVersionBlock
+          ? null
+          : (versionBlockSignature ?? this.versionBlockSignature),
+      versionBlockReason: clearVersionBlock
+          ? null
+          : (versionBlockReason ?? this.versionBlockReason),
+      versionBlockPeerName: clearVersionBlock
+          ? null
+          : (versionBlockPeerName ?? this.versionBlockPeerName),
+      versionBlockPeerVersion: clearVersionBlock
+          ? null
+          : (versionBlockPeerVersion ?? this.versionBlockPeerVersion),
+      versionBlockPeerSchemaVersion: clearVersionBlock
+          ? null
+          : (versionBlockPeerSchemaVersion ??
+                this.versionBlockPeerSchemaVersion),
+      versionBlockPeerProtocolVersion: clearVersionBlock
+          ? null
+          : (versionBlockPeerProtocolVersion ??
+                this.versionBlockPeerProtocolVersion),
+      versionBlockLocalSchemaVersion: clearVersionBlock
+          ? null
+          : (versionBlockLocalSchemaVersion ??
+                this.versionBlockLocalSchemaVersion),
+      versionBlockLocalProtocolVersion: clearVersionBlock
+          ? null
+          : (versionBlockLocalProtocolVersion ??
+                this.versionBlockLocalProtocolVersion),
+      versionBlockedAt: clearVersionBlock
+          ? null
+          : (versionBlockedAt ?? this.versionBlockedAt),
+      versionWarningSignature: clearVersionWarning
+          ? null
+          : (versionWarningSignature ?? this.versionWarningSignature),
+      versionWarningMessage: clearVersionWarning
+          ? null
+          : (versionWarningMessage ?? this.versionWarningMessage),
+      versionWarningAt: clearVersionWarning
+          ? null
+          : (versionWarningAt ?? this.versionWarningAt),
     );
   }
 }

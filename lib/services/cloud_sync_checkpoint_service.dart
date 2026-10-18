@@ -39,6 +39,9 @@ class CloudSyncCheckpointService {
         return null;
       }
       final state = await CloudSyncSettings.loadState();
+      if (state.versionBlockSignature != null) {
+        return null;
+      }
       final current = now ?? DateTime.now();
       if (state.checkpointBackoffUntil != null &&
           current.isBefore(state.checkpointBackoffUntil!)) {
