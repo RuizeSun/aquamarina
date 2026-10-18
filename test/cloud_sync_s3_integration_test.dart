@@ -43,7 +43,7 @@ void main() {
     );
     final message = await service.testConnection();
     expect(message, contains('连接成功'));
-  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+  }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
   test('流式文件上传/下载与 SHA-256 校验（真实存储）', () async {
     final storage = S3StorageService(
@@ -76,7 +76,7 @@ void main() {
       } catch (_) {}
       await tmpDir.delete(recursive: true);
     }
-  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+  }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
   test('设备清单上传/列举/清理（真实存储）', () async {
     const deviceId = '99999999-9999-4999-8999-999999999999';
@@ -137,7 +137,7 @@ void main() {
     }
 
     expect(await service.fetchManifest(deviceId), isNull);
-  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+  }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 
   test('两台设备通过真实 S3 增量同步并收敛', () async {
     final e2eConfig = CloudSyncConfig.create(
@@ -235,5 +235,5 @@ void main() {
       await dbA.close();
       await dbB.close();
     }
-  }, skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
+  }, timeout: const Timeout(Duration(minutes: 2)), skip: hasCredentials ? false : '未设置 S3_* 环境变量，跳过真实存储集成测试');
 }

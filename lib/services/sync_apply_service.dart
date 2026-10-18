@@ -615,6 +615,25 @@ class SyncApplyService {
       return _UpsertOutcome.skipped;
     }
 
+    // 父级已被删除且当前不存在时，晚到的句子 op 直接丢弃，避免孤儿行。
+    if (spec.entity == 'sentences') {
+      final setId = op.data['set_id'] ?? op.key['set_id'];
+      if (setId != null) {
+        final parentTombstone = ctx
+            .tombstones['sentence_sets\u0000${_keyFingerprint({'id': setId})}'];
+        if (parentTombstone != null) {
+          final parentRows = await txn.query(
+            'sentence_sets',
+            columns: ['id'],
+            where: 'id = ?',
+            whereArgs: [setId],
+            limit: 1,
+          );
+          if (parentRows.isEmpty) return _UpsertOutcome.skipped;
+        }
+      }
+    }
+
     if (spec.entity == 'word_book_entries') {
       final bookUuid = op.key['book_uuid'];
       final word = op.key['word'];
@@ -632,7 +651,12 @@ class SyncApplyService {
           whereArgs: [bookUuid],
           limit: 1,
         );
-        if (books.isEmpty) return _UpsertOutcome.pendingParent;
+        if (books.isEmpty) {
+          // 父级被删除且尚未重建：丢弃子表 op，而不是每轮 pending 重试。
+          return parentTombstone != null
+              ? _UpsertOutcome.skipped
+              : _UpsertOutcome.pendingParent;
+        }
         bookId = books.first['id'];
         ctx.putBookId(bookUuid, bookId);
       }
@@ -976,7 +1000,11 @@ class _ApplyContext {
     // 墓碑：普通 upsert / delete / bulk item 都预载，防止父级删除后旧子表
     // op 重新插入孤儿数据。
     final tombstoneKeysByEntity = <String, Set<String>>{};
-    void addTombstoneKey(String entity, Map<String, dynamic> key) {
+    void addTombstoneKey(
+      String entity,
+      Map<String, dynamic> key, [
+      Map<String, dynamic> data = const {},
+    ]) {
       tombstoneKeysByEntity
           .putIfAbsent(entity, () => <String>{})
           .add(_keyFingerprint(key));
@@ -990,17 +1018,24 @@ class _ApplyContext {
               .add(_keyFingerprint({'uuid': bookUuid}));
         }
       }
+      // 句子需要父级句式集墓碑：父级删除后，晚到的句子 op 不能成为孤儿。
+      if (entity == 'sentences') {
+        final setId = data['set_id'] ?? key['set_id'];
+        if (setId != null) {
+          tombstoneKeysByEntity
+              .putIfAbsent('sentence_sets', () => <String>{})
+              .add(_keyFingerprint({'id': setId}));
+        }
+      }
     }
 
     for (final op in ops) {
       if (op.isBulk) {
         for (final item in op.items) {
-          addTombstoneKey(item.entity, item.key);
+          addTombstoneKey(item.entity, item.key, item.data);
         }
       } else {
-        tombstoneKeysByEntity
-            .putIfAbsent(op.entity, () => <String>{})
-            .add(op.keyFingerprint);
+        addTombstoneKey(op.entity, op.key, op.data);
       }
     }
     for (final entry in tombstoneKeysByEntity.entries) {

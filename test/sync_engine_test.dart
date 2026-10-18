@@ -529,6 +529,26 @@ void main() {
       ], db: db);
       expect(await db.query('sentences'), isEmpty);
 
+      // 父级删除后、尚未重建时，晚到的句子 op 也不应成为孤儿。
+      await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'sentences',
+          seq: 4,
+          hlcMs: 400,
+          key: {'id': 'sentence-new'},
+          data: {
+            'set_id': 'set-1',
+            'english': 'orphan',
+            'chinese': '孤儿',
+            'extra_words': '[]',
+            'created_at': '2026-10-02T00:00:00Z',
+            'sort_index': 2.0,
+          },
+          deviceId: 'device-b',
+        ),
+      ], db: db);
+      expect(await db.query('sentences'), isEmpty);
+
       // 句式集重建后，迟到但更旧的句子 op 也不应复活。
       await SyncApplyService.applyOps([
         makeOp(
