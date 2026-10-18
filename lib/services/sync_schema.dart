@@ -99,6 +99,16 @@ class SyncSchema {
     )
     ''',
     '''
+    CREATE TABLE IF NOT EXISTS "sync_backend_watermarks" (
+      "backend_id" TEXT NOT NULL,
+      "device_id" TEXT NOT NULL,
+      "last_hlc" TEXT NOT NULL,
+      "last_chunk_key" TEXT,
+      "saved_at" TEXT NOT NULL,
+      PRIMARY KEY ("backend_id", "device_id")
+    )
+    ''',
+    '''
     CREATE TABLE IF NOT EXISTS "sync_row_versions" (
       "entity" TEXT NOT NULL,
       "key" TEXT NOT NULL,
@@ -238,6 +248,7 @@ class SyncSchema {
     }
   }
 
+  /// 每条备份 / 恢复水位对应一个来源设备。
   static const List<String> systemIndexDdl = [
     'CREATE INDEX IF NOT EXISTS idx_sync_applied_device_hlc '
         'ON sync_applied(device_id, hlc)',

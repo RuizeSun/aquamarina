@@ -272,6 +272,10 @@ void main() {
       await _columnsOf(db, 'sync_meta'),
       containsAll(['backend_id', 'restored_watermarks']),
     );
+    expect(
+      await _columnsOf(db, 'sync_backend_watermarks'),
+      containsAll(['backend_id', 'device_id', 'last_hlc', 'last_chunk_key']),
+    );
 
     const source = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     final watermark = SyncWatermark(

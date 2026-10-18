@@ -212,9 +212,9 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 ## 9. 后续阶段
 
-当前仅剩两项产品 / 安全增强，见 `cloud-sync-spec.md`：
+当前仅剩两项产品 / 安全增强，均已明确为 **not planned**，不纳入后续开发计划：
 
-- **P2-3 可选端到端加密**（口令 → Argon2id → AES-GCM；口令不落盘）；
-- **P2-4 账号 / 多租户与设备吊销**（需要服务端或明确的租户前缀策略）。
+- **P2-3 可选端到端加密**（not planned：口令 → Argon2id → AES-GCM；口令不落盘）；
+- **P2-4 账号 / 多租户与设备吊销**（not planned：需要服务端或明确的租户前缀策略）。
 
 性能、流式快照、自动检查点、冲突 UI、仅 Wi-Fi / 退避与设备管理均已完成。

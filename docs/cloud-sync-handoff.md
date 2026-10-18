@@ -13,7 +13,7 @@
 - Flutter / Dart：本机 Flutter 3.47 / Dart 3.13；CI 使用 Flutter 3.44.8；`pubspec.yaml` SDK `^3.11.5`。
 - 状态管理：`ChangeNotifier` / 单例服务为主，没有引入 Provider/Riverpod/Bloc。
 - 本地存储：
-  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 18**；
+  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 19**；
   - 设置：`SharedPreferences`；
   - 密钥：`flutter_secure_storage`；
   - 备份：ZIP（`aquamarina.db` + `preferences.json` + 可选 `secure_storage.json` + `backup_meta.json`）。
@@ -481,17 +481,19 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 - 设置页新增「从最新检查点引导」，不再只限于首次配置；
 - 仍复用现有 manifest/snapshot 布局；**未使用 checkpoint 水位裁剪 GC**（避免让仍在线设备回退到快照）。
 
-### P2-3：无端到端加密，仅 TLS + 私有桶
+### P2-3：无端到端加密，仅 TLS + 私有桶（not planned）
 
+**状态**：**not planned**，不纳入后续开发计划。当前安全边界为 TLS + 私有桶 + 设备前缀隔离。
 **现象**：笔记、学习记录以明文 JSON/DB 存在对象存储。  
 **后果**：第三方或共享桶场景隐私不足。  
-**修复方向**：可选口令 → Argon2id → AES-GCM 加密 chunk/checkpoint；口令不落盘。
+**曾评估方向**：可选口令 → Argon2id → AES-GCM 加密 chunk/checkpoint；口令不落盘。
 
-### P2-4：无账号 / 设备管理 / 多用户隔离
+### P2-4：无账号 / 设备管理 / 多用户隔离（not planned）
 
+**状态**：**not planned**，不纳入后续开发计划。多人共用需要各自规划独立 prefix / bucket。
 **现象**：同一 bucket + prefix 下按设备 ID 隔离；没有登录、设备吊销、权限模型。  
 **后果**：多人共用需要各自规划前缀；无法在 App 内管理/撤销遗失设备。  
-**修复方向**：用户/租户 prefix + 设备列表 + 吊销；或引入服务端账号。
+**曾评估方向**：用户/租户 prefix + 设备列表 + 吊销；或引入服务端账号。
 
 ### P2-5：恢复是覆盖式，不在后台自动合并（✅ 已在 UI / 文档明确）
 
@@ -559,9 +561,9 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 
 ### 阶段 D：安全与产品能力
 
-1. **可选端到端加密**（未做，P2-3）
+1. **可选端到端加密**（not planned，P2-3）
 2. **仅 Wi-Fi / 网络退避** ✅
-3. **账号体系**（未做，P2-4；当前仍按设备前缀隔离）
+3. **账号体系**（not planned，P2-4；当前仍按设备前缀隔离）
 4. **冲突解决 UI** ✅
 5. **设备管理** ✅（云端设备列表 / 删除旧设备）
 
@@ -619,13 +621,14 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 
 ### 5.3 数据库迁移注意事项
 
-- 当前 `schemaVersion=18`；
+- 当前 `schemaVersion=19`；
 - `migrateToV13` 幂等，负责同步就绪列、oplog、触发器；
 - `migrateToV14` 创建 `sentence_sets` 并再次 `SyncSchema.ensure`；
 - `migrateToV15` 补齐 head/state/应用 HLC 列，并从 chunk 键回填 `sync_chunks.min_hlc`；
 - `migrateToV16` 为 oplog 补 `captured_at_ms`、重建触发器、创建 `sync_conflicts` / `total_ops`；
 - `migrateToV17` 创建 `oplog_bulk` 与批量 op 索引；
 - `migrateToV18` 为 `sync_meta` 补 `backend_id` / `restored_watermarks`，并创建行版本 HLC 索引；
+- `migrateToV19` 创建 `sync_backend_watermarks`，在切换后端时保存/恢复来源水位；
 - 修改同步系统表结构（如 `sync_applied` 主键）时：
   - 已发布版本必须新增迁移重建表；
   - 未发布分支可直接改，但要在文档说明；
@@ -684,13 +687,13 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 当前云同步是**设备隔离的不可变 oplog + head/state 水位 + 流式完整快照**：正确性、幂等、并发安全已经比较扎实，适合个人多设备。  
 阶段 A（head/state、水位 GC、应用记录清理、恢复重放、全局锁）与阶段 B/C（gzip、完整 SHA、批量 apply、时间预算、流式快照、自动 checkpoint）均已完成。  
-剩余两项为产品 / 安全增强：**P2-3 端到端加密**、**P2-4 账号与多租户**。
+剩余两项产品 / 安全增强已明确为 **not planned**：**P2-3 端到端加密**、**P2-4 账号与多租户**。
 
 - **快照只用于灾备 / 引导**，不作为日常合并手段；日常合并走增量同步。
 
 ---
 
-## 7. 残余限制（v18 之后）
+## 7. 残余限制（v19 之后）
 
 以下不是阻塞性问题，但仍是后续可改进项：
 
@@ -703,7 +706,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
 7. **gzip / bulk op 滚动升级**：旧版本客户端不识别 `.jsonl.gz` 与 `op='bulk'`；发布时需确保所有设备升级。
 8. **并发锁是进程内锁**：`CloudSyncRunLock` 不能跨进程/跨 isolate 生效；单进程内已覆盖增量同步、快照上传/恢复、检查点与设备删除。
 9. **旧备份仍使用 baseline 近似**：新格式快照会在 `backup_meta.json` 写入 `sync_watermarks`，恢复后按来源水位精确过滤；旧版本导出的备份没有该字段，仍按“快照创建时间”跳过，快照源未拉全时可能漏数据。
-10. **切换回曾用过的后端会重新拉取该后端历史**：切换 endpoint / bucket / prefix 时会清空旧后端的运行时水位与去重记录；如果之后切回去，会按“新后端”重新应用历史 chunk，计数可能重复。建议用快照恢复而不是来回切换。
+10. **切换后端期间的本地变更不会自动补传到旧后端**：切换时会保存旧后端水位，切回来不会重拉历史；但在另一个后端期间产生的本地变更已经上传到另一个后端，切回旧后端后需要一次快照或重新编辑才能传播。
 11. **行版本 / 墓碑按 180 天 + 活跃设备水位清理**：离线超过 180 天的设备重新加入时，理论上仍可能带回已被清理的旧事件。
 12. **没有 head/state 的设备目录会被 GC 跳过**：这类目录（例如只上传过快照）不会参与活跃设备判断，也不会阻塞 GC；这是保守策略的一部分。
 13. **子表并发创建仍是 LWW 边界**：父级删除后，HLC 晚于删除时间的子表 op 仍可能成为孤儿，或被 `pendingParent` 拦住等待父级；当前墓碑只保证“更旧的子表 op 不复活”。

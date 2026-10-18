@@ -11,7 +11,7 @@ import 'sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 18;
+  static const int schemaVersion = 19;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -386,6 +386,8 @@ class DatabaseService {
         await migrateToV17(db);
         // ── v18：后端标识与快照来源水位 ──
         await migrateToV18(db);
+        // ── v19：按后端保存来源水位 ──
+        await migrateToV19(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -547,6 +549,10 @@ class DatabaseService {
         // 17 → 18：后端标识与快照来源水位
         if (oldVersion < 18) {
           await migrateToV18(db);
+        }
+        // 18 → 19：按后端保存来源水位
+        if (oldVersion < 19) {
+          await migrateToV19(db);
         }
       },
     );
@@ -750,6 +756,12 @@ class DatabaseService {
   static Future<void> migrateToV18(Database db) async {
     await SyncSchema.ensure(db);
     logInfo('DatabaseService', 'v18 后端标识与恢复水位 schema 迁移完成');
+  }
+
+  /// v18 → v19：按后端保存的来源水位（切换回来时复用）。
+  static Future<void> migrateToV19(Database db) async {
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v19 后端水位缓存 schema 迁移完成');
   }
 
   /// 从已有 `sync_chunks` 反推每个来源设备的水位，避免升级后

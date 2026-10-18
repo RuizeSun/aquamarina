@@ -144,7 +144,7 @@ for chunk in pull():
 - 快照/ chunk 默认不含 API Key；`ai_profiles_v2` 不同步。
 - 传输强制 HTTPS；HTTP 端点仅在开发调试中允许，并在 UI 明确警告。
 - 建议私有桶 + 最小权限：`s3:GetObject/PutObject/DeleteObject/ListBucket`，资源限制到 `{prefix}/*`。
-- 可选端到端加密：口令 → Argon2id → AES-GCM（chunk 头存 nonce/KDF 参数），口令不落盘。
+- 可选端到端加密：**not planned**，不纳入后续开发计划（曾评估：口令 → Argon2id → AES-GCM，chunk 头存 nonce/KDF 参数，口令不落盘）。
 
 ## 9. 测试门禁
 
@@ -203,7 +203,7 @@ for chunk in pull():
 已通过的验证：
 
 - `flutter analyze`：仅剩仓库原有的 9 条 info，无新增告警；
-- 无 S3 环境变量时 242 passed / 4 skipped；设置真实 S3 后 246 passed：含 v13–v18 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、HLC receive、bulk op 版本门禁、本机 chunk 不回放、设备重置隔离、接管完整性保护、后端配置切换、快照来源水位、级联子表墓碑、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
+- 无 S3 环境变量时 242 passed / 4 skipped；设置真实 S3 后 246 passed：含 v13–v19 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、HLC receive、bulk op 版本门禁、本机 chunk 不回放、设备重置隔离、接管完整性保护、后端配置切换与水位缓存、快照来源水位、级联子表墓碑、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、head/state、**双设备增量同步收敛**）。
 
 ### 当前已知限制
@@ -221,9 +221,9 @@ for chunk in pull():
   chunk 已按 50 op 小事务提交，时间预算/取消可在小批之间生效。
 - checkpoint 水位未用于裁剪 GC：直接用 checkpoint 删除 chunk 会让仍在线设备失去增量，
   因此继续使用活跃设备 `state.json` 水位。
-- **P2-3 端到端加密**、**P2-4 账号 / 多租户** 尚未实现；当前安全边界仍为
+- **P2-3 端到端加密**、**P2-4 账号 / 多租户** 均为 **not planned**，不纳入后续开发计划；当前安全边界仍为
   TLS + 私有桶 + 设备前缀隔离。
-- 切换 endpoint / bucket / prefix 时会清空旧后端的同步水位与去重记录；切换回曾用过的后端会重新应用其历史 chunk，建议用快照恢复而不是来回切换。
+- 切换 endpoint / bucket / prefix 时会保存旧后端水位并在切回时恢复，不会重拉历史；但在其它后端期间产生的本地变更已经上传到那个后端，切回后需要一次快照才能传播到旧后端。
 - 旧版本导出的快照没有 `sync_watermarks`，仍使用“快照创建时间”基线；导出方未拉全的其它设备变更可能被跳过。
 - 行版本 / 墓碑按 180 天 + 活跃设备水位清理；离线超过 180 天的设备重新加入时可能带回旧事件。
 - 没有 head/state 的设备目录会被 GC 跳过，不参与活跃设备判断。

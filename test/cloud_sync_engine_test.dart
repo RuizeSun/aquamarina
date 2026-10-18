@@ -593,7 +593,7 @@ void main() {
 
   test('切换对象存储配置会清理旧后端的同步水位', () async {
     await db.update('sync_meta', {
-      'backend_id': 'old-backend',
+      'backend_id': config.backendIdentity,
     }, where: 'id = 1');
     await db.insert('sync_state', {
       'device_id': _deviceB,
@@ -654,6 +654,25 @@ void main() {
     final meta = (await db.query('sync_meta')).single;
     expect(meta['backend_id'], nextConfig.backendIdentity);
     expect(meta['restored_watermarks'], 0);
+    final saved = await db.query('sync_backend_watermarks');
+    expect(saved.single['backend_id'], config.backendIdentity);
+    expect(saved.single['last_hlc'], const SyncHlc(1000, 0).value);
+
+    // 切回原后端：恢复上次保存的水位，避免重新拉取历史并重复计数。
+    final backEngine = CloudSyncEngine.forTesting(
+      config: config,
+      deviceId: _deviceA,
+      deviceName: '设备 A',
+      storage: FakeS3Storage(config),
+      database: db,
+    );
+    await backEngine.run(pull: true, push: false);
+    final restoredMeta = (await db.query('sync_meta')).single;
+    expect(restoredMeta['backend_id'], config.backendIdentity);
+    expect(restoredMeta['restored_watermarks'], 1);
+    final restoredState = await db.query('sync_state');
+    expect(restoredState.single['device_id'], _deviceB);
+    expect(restoredState.single['last_hlc'], const SyncHlc(1000, 0).value);
   });
 
   test('接管前的完整性判断覆盖预算/错误/缺失父级', () {

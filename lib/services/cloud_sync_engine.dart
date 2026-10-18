@@ -241,6 +241,7 @@ class CloudSyncEngine {
     if (current == identity) return;
     await db.transaction((txn) async {
       if (current.isNotEmpty) {
+        await _saveBackendWatermarks(txn, current);
         await txn.delete('sync_state');
         await txn.delete('sync_chunks');
         await txn.delete('sync_applied');
@@ -248,10 +249,11 @@ class CloudSyncEngine {
         await txn.delete('sync_tombstones');
         await txn.delete('sync_conflicts');
         logWarning('CloudSyncEngine', '检测到对象存储配置已切换，已清理旧后端的同步水位与去重记录');
+        final restored = await _restoreBackendWatermarks(txn, identity);
         await txn.update('sync_meta', {
           'backend_id': identity,
           'baseline_hlc': '',
-          'restored_watermarks': 0,
+          'restored_watermarks': restored ? 1 : 0,
           'head_hlc': '',
           'head_key': '',
           'head_chunk_count': 0,
@@ -265,6 +267,104 @@ class CloudSyncEngine {
         }, where: 'id = 1');
       }
     });
+  }
+
+  /// 离开一个后端前，把它当前的应用水位存到本地缓存。
+  ///
+  /// 只保存 `sync_state`（外加本机 head），不保存 `sync_applied` /
+  /// `sync_row_versions`；切回来时靠 HLC 水位跳过历史 chunk，不再重新应用。
+  Future<void> _saveBackendWatermarks(
+    DatabaseExecutor txn,
+    String backendId,
+  ) async {
+    final byDevice = <String, Map<String, String?>>{};
+    final stateRows = await txn.query(
+      'sync_state',
+      columns: ['device_id', 'last_hlc', 'last_chunk_key'],
+    );
+    for (final row in stateRows) {
+      final device = row['device_id'];
+      final hlc = row['last_hlc'];
+      if (device is! String ||
+          device.isEmpty ||
+          hlc is! String ||
+          hlc.isEmpty) {
+        continue;
+      }
+      byDevice[device] = {
+        'last_hlc': hlc,
+        'last_chunk_key': row['last_chunk_key'] as String?,
+      };
+    }
+    final metaRows = await txn.query(
+      'sync_meta',
+      columns: ['device_id', 'head_hlc', 'head_key'],
+      where: 'id = 1',
+      limit: 1,
+    );
+    if (metaRows.isNotEmpty) {
+      final row = metaRows.first;
+      final ownId = row['device_id'] as String? ?? '';
+      final headHlc = row['head_hlc'] as String? ?? '';
+      if (ownId.isNotEmpty && headHlc.isNotEmpty) {
+        final existing = byDevice[ownId]?['last_hlc'];
+        if (existing == null || headHlc.compareTo(existing) > 0) {
+          byDevice[ownId] = {
+            'last_hlc': headHlc,
+            'last_chunk_key': row['head_key'] as String?,
+          };
+        }
+      }
+    }
+    if (byDevice.isEmpty) return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final batch = txn.batch();
+    for (final entry in byDevice.entries) {
+      batch.insert('sync_backend_watermarks', {
+        'backend_id': backendId,
+        'device_id': entry.key,
+        'last_hlc': entry.value['last_hlc'],
+        'last_chunk_key': entry.value['last_chunk_key'],
+        'saved_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+    await batch.commit(noResult: true);
+  }
+
+  /// 切回一个用过的后端时，恢复它上次离开时的来源水位。
+  Future<bool> _restoreBackendWatermarks(
+    DatabaseExecutor txn,
+    String backendId,
+  ) async {
+    final rows = await txn.query(
+      'sync_backend_watermarks',
+      where: 'backend_id = ?',
+      whereArgs: [backendId],
+    );
+    if (rows.isEmpty) return false;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final batch = txn.batch();
+    var restored = false;
+    for (final row in rows) {
+      final device = row['device_id'];
+      final hlc = row['last_hlc'];
+      if (device is! String || device.isEmpty || hlc is! String) continue;
+      try {
+        SyncHlc.parse(hlc);
+      } on FormatException {
+        continue;
+      }
+      batch.insert('sync_state', {
+        'device_id': device,
+        'last_seq': 0,
+        'last_hlc': hlc,
+        'last_chunk_key': row['last_chunk_key'],
+        'updated_at': now,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      restored = true;
+    }
+    if (restored) await batch.commit(noResult: true);
+    return restored;
   }
 
   Future<void> _pull(
