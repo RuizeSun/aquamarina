@@ -409,6 +409,24 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
               color: colorScheme.onSurfaceVariant,
             ),
           ),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 18, color: colorScheme.tertiary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '首次启用时，增量同步只会上传「启用之后」的变更。'
+                  '如果本机已有历史学习数据，请先「立即上传备份」，'
+                  '再在其它设备「从云端恢复」，不要只依赖增量同步。',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );

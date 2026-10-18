@@ -297,7 +297,22 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
      - 清空 `sync_meta.device_id`，写入 `baseline_hlc = 备份创建时间`；
   5. 引擎拉取时跳过 HLC ≤ baseline 的 chunk，避免历史计数重复累加。
 
-### 2.11 触发时机
+### 2.11 变更捕获不变量
+
+**只要云同步配置完整（endpoint / bucket / AK / SK），`sync_meta.capture_enabled` 必须为 1。**
+
+原因：oplog 只在业务写入时由 SQLite 触发器记录。如果捕获关闭，写入仍然成功，但之后无法补传；
+快照恢复会把 `sync_meta` 按默认值重建（`capture_enabled=0`），所以恢复后到首次同步之间
+是高风险窗口。
+
+当前保证点：
+
+- 保存云同步配置后立即开启；
+- `BackupService.importBackupFromFile` 恢复完成后，如果配置完整，立即重新开启；
+- 应用启动时（`main.dart`）在任何业务写入 / 闪退会话恢复之前校正；
+- 设置页检测到「已配置但捕获关闭」时显示警告并支持一键修复。
+
+### 2.12 触发时机
 
 | 触发 | 实现 |
 |---|---|
@@ -315,7 +330,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 - `LearningService.markAsMasteredBatch` / `resetMasteredBatch`
 - `AiPracticeSessionPage._exitPractice`
 
-### 2.12 配置与默认值
+### 2.13 配置与默认值
 
 | 项 | 默认值 |
 |---|---|
@@ -339,7 +354,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 | 凭据存储 | Secure Storage：`cloud_sync_access_key` / `cloud_sync_secret_key` |
 | 非敏感配置 | Prefs：`cloud_sync_config_v1`、`cloud_sync_state_v1`、`cloud_sync_device_id_v1`、`cloud_sync_device_name_v1` |
 
-### 2.13 测试现状
+### 2.14 测试现状
 
 - `flutter test`：无 S3 环境变量时 **225 passed / 4 skipped**；设置真实 S3 后 **229 passed**；
 - 新增覆盖：gzip chunk、完整 SHA-256、时间预算续跑、`captured_at_ms` HLC、批量 oplog 回填、冲突持久化/解决/清理、检查点空库与退避、流式文件上传下载、网络策略；

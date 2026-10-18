@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../models/cloud_sync_manifest.dart';
+import '../../../services/cloud_sync_auto_sync_service.dart';
 import '../../../services/cloud_sync_bootstrap_service.dart';
 import '../../../services/cloud_sync_engine.dart';
 import '../../../services/cloud_sync_service.dart';
 import '../../../services/cloud_sync_settings.dart';
+import '../../../services/sync_capture_service.dart';
 import '../cloud_sync_config_page.dart';
 import '../cloud_sync_conflict_page.dart';
 import '../cloud_sync_devices_page.dart';
@@ -23,6 +27,7 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
   CloudSyncConfig? _config;
   CloudSyncRuntimeState _state = const CloudSyncRuntimeState();
   bool _hasCredentials = false;
+  bool _captureEnabled = false;
   bool _loading = true;
   bool _busy = false;
 
@@ -38,10 +43,19 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     final config = await CloudSyncSettings.loadConfig();
     final credentials = await CloudSyncSettings.loadCredentials();
     final state = await CloudSyncSettings.loadState();
+    var captureEnabled = false;
+    if (CloudSyncSettings.isCompleteConfiguration(config, credentials)) {
+      try {
+        captureEnabled = await SyncCaptureService.isCaptureEnabled();
+      } catch (_) {
+        // 数据库尚未就绪时不影响设置页展示
+      }
+    }
     if (!mounted) return;
     setState(() {
       _config = config;
       _hasCredentials = credentials?.isComplete ?? false;
+      _captureEnabled = captureEnabled;
       _state = state;
       _loading = false;
     });
@@ -56,6 +70,41 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         behavior: SnackBarBehavior.floating,
       ),
     );
+  }
+
+  /// 恢复完成后校正捕获状态，并尝试立即重建设备身份与水位。
+  ///
+  /// 恢复会重建 `sync_meta`，捕获开关可能回到 0；这里再做一次兜底，
+  /// 即使 BackupService 的自动开启失败，也不会让新学习记录静默丢失。
+  Future<bool> _finalizeRestore() async {
+    var enabled = false;
+    try {
+      if (await CloudSyncSettings.hasCompleteConfiguration()) {
+        await SyncCaptureService.setCaptureEnabled(enabled: true);
+      }
+      enabled = await SyncCaptureService.isCaptureEnabled();
+    } catch (_) {
+      enabled = false;
+    }
+    if (enabled) {
+      // 不阻塞恢复结果弹窗；失败会由前台轮询 / 学习结束事件重试。
+      unawaited(CloudSyncAutoSyncService.maybeSync(force: true));
+    }
+    return enabled;
+  }
+
+  Future<void> _enableCapture() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await SyncCaptureService.setCaptureEnabled(enabled: true);
+      await _load();
+      _showSnack('已开启变更捕获');
+    } catch (e) {
+      _showSnack('开启变更捕获失败：$e', isError: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   String _formatTime(DateTime? time) {
@@ -91,10 +140,29 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('从最新检查点引导'),
-          content: Text(
-            '将使用设备「${summary.manifest.deviceName}」在 '
-            '${_formatTime(summary.latest!.createdAt)} 的快照覆盖本机数据。\n\n'
-            '恢复前会自动保留本机数据库副本，但当前数据会被覆盖。',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '将使用设备「${summary.manifest.deviceName}」在 '
+                '${_formatTime(summary.latest!.createdAt)} 的快照覆盖本机数据。\n\n'
+                '备份大小：'
+                '${CloudSyncUtils.formatBytes(summary.latest!.size)}\n\n'
+                '恢复前会自动保留本机数据库副本，但当前数据会被覆盖。',
+              ),
+              if (summary.latest!.size < 64 * 1024) ...[
+                const SizedBox(height: 10),
+                Text(
+                  '注意：该快照体积很小，可能不包含完整学习数据。'
+                  '如果本机已有数据，请不要用它覆盖。',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
           ),
           actions: [
             TextButton(
@@ -117,8 +185,13 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           return candidate.service.restoreSnapshot(summary);
         },
       );
+      final captureEnabled = await _finalizeRestore();
       await _load();
-      _showSnack('已从云端最新检查点恢复，建议重启应用');
+      _showSnack(
+        captureEnabled
+            ? '已从云端最新检查点恢复，变更捕获已开启；建议重启应用'
+            : '已从云端最新检查点恢复；请重启后先执行一次增量同步再学习',
+      );
     } catch (e) {
       _showSnack('引导失败：$e', isError: true);
     } finally {
@@ -409,9 +482,14 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           return result;
         },
       );
+      final captureEnabled = await _finalizeRestore();
       await _load();
       if (!mounted) return;
-      await _showRestoreResult(outcome, snapshot);
+      await _showRestoreResult(
+        outcome,
+        snapshot,
+        captureEnabled: captureEnabled,
+      );
     } catch (e) {
       _showSnack('恢复失败：$e', isError: true);
     } finally {
@@ -453,6 +531,18 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
+            if ((snapshot?.size ?? 0) < 64 * 1024) ...[
+              const SizedBox(height: 10),
+              Text(
+                '注意：该快照仅 ${CloudSyncUtils.formatBytes(snapshot?.size ?? 0)}，'
+                '可能不包含完整学习数据。请确认来源设备，'
+                '避免用空快照覆盖本机已有数据。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
           ],
         ),
         actions: [
@@ -474,8 +564,9 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
 
   Future<void> _showRestoreResult(
     CloudRestoreOutcome outcome,
-    CloudSnapshotInfo snapshot,
-  ) async {
+    CloudSnapshotInfo snapshot, {
+    required bool captureEnabled,
+  }) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -501,7 +592,15 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
               ),
             ],
             const SizedBox(height: 12),
-            const Text('为避免页面状态与数据库不一致，建议立即重启应用。'),
+            Text(
+              captureEnabled
+                  ? '变更捕获已自动开启；建议重启应用后立即执行一次「增量同步」。'
+                  : '警告：变更捕获未开启。请重启应用后先执行一次「增量同步」，'
+                        '再开始学习，否则新记录不会上传。',
+              style: captureEnabled
+                  ? null
+                  : TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
           ],
         ),
         actions: [
@@ -536,6 +635,20 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           trailing: const Icon(Icons.chevron_right),
           onTap: _busy ? null : _openConfig,
         ),
+        if (_configured && !_captureEnabled)
+          ListTile(
+            leading: Icon(
+              Icons.warning_amber_rounded,
+              color: colorScheme.error,
+            ),
+            title: Text(
+              '同步变更捕获未开启',
+              style: TextStyle(color: colorScheme.error),
+            ),
+            subtitle: const Text('新学习记录可能无法上传；点击立即修复'),
+            enabled: !_busy,
+            onTap: _busy ? null : _enableCapture,
+          ),
         ListTile(
           leading: Icon(
             Icons.sync_outlined,

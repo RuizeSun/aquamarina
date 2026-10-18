@@ -609,6 +609,27 @@ class CloudSyncSettings {
     await prefs.setString(_stateKey, jsonEncode(state.toJson()));
   }
 
+  /// 配置与凭据是否齐全（纯函数，便于 UI / 测试复用）。
+  static bool isCompleteConfiguration(
+    CloudSyncConfig? config,
+    CloudSyncCredentials? credentials,
+  ) {
+    return config != null &&
+        config.isConfigured &&
+        (credentials?.isComplete ?? false);
+  }
+
+  /// 本机是否已具备完整云同步配置。
+  ///
+  /// 该判断用于决定是否必须开启 SQLite 变更捕获：只要配置完整，
+  /// 任何业务写入都应进入 oplog，避免恢复快照后到首次同步之间丢变更。
+  static Future<bool> hasCompleteConfiguration() async {
+    final config = await loadConfig();
+    if (config == null || !config.isConfigured) return false;
+    final credentials = await loadCredentials();
+    return isCompleteConfiguration(config, credentials);
+  }
+
   /// 清除云同步配置、凭据与状态（保留设备 ID）。
   static Future<void> clearAll() async {
     final prefs = await SharedPreferences.getInstance();

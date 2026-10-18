@@ -1,5 +1,7 @@
 import 'package:aquamarina/models/sync_op.dart';
 import 'package:aquamarina/services/database_service.dart';
+import 'package:aquamarina/services/sync_capture_service.dart';
+import 'package:aquamarina/services/sync_schema.dart';
 import 'package:aquamarina/services/sync_table_spec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -224,6 +226,42 @@ void main() {
       'note': 'captured',
       'is_favorited': 0,
     });
+    expect(await _oplogCount(db, 'word_notes'), 1);
+  });
+
+  test('恢复重置后重新开启捕获，可继续记录新写入', () async {
+    await DatabaseService.migrateToV13(db);
+    await SyncSchema.setCaptureEnabled(db, true);
+    await db.insert('word_notes', {
+      'word': 'apple',
+      'note': 'before restore',
+      'is_favorited': 0,
+    });
+    expect(await _oplogCount(db, 'word_notes'), 1);
+
+    await SyncSchema.resetRuntimeState(
+      db,
+      baseline: DateTime.utc(2026, 10, 18),
+    );
+    expect(await _oplogCount(db, 'word_notes'), 0);
+
+    // 快照恢复后 sync_meta 可能按默认值重建为 0；模拟这一状态。
+    await SyncSchema.setCaptureEnabled(db, false);
+    await db.insert('word_notes', {
+      'word': 'banana',
+      'note': 'not captured',
+      'is_favorited': 0,
+    });
+    expect(await _oplogCount(db, 'word_notes'), 0);
+
+    // BackupService 恢复完成后会执行这一步；之后的学习必须能再次进入 oplog。
+    await SyncSchema.setCaptureEnabled(db, true);
+    await db.insert('word_notes', {
+      'word': 'cherry',
+      'note': 'after restore',
+      'is_favorited': 0,
+    });
+    expect(await SyncCaptureService.isCaptureEnabled(db: db), isTrue);
     expect(await _oplogCount(db, 'word_notes'), 1);
   });
 

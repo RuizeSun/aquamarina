@@ -13,6 +13,7 @@ import 'cloud_sync_settings.dart';
 import 'database_service.dart';
 import 'log_service.dart';
 import 'mimo_tts_credentials.dart';
+import 'sync_capture_service.dart';
 import 'sync_schema.dart';
 import 'theme_mode_service.dart';
 import 'tts_service.dart';
@@ -453,6 +454,18 @@ class BackupService {
           );
         } catch (e) {
           logWarning('BackupService', '重置同步运行时状态失败（不影响恢复）: $e');
+        }
+
+        // 恢复会重建 sync_meta（capture_enabled 默认为 0）。如果本机已经
+        // 配置云同步，必须立刻重新开启捕获，否则用户在“恢复完成 → 下一次
+        // 增量同步”之间产生的学习记录不会进入 oplog，之后也无法补传。
+        try {
+          if (await CloudSyncSettings.hasCompleteConfiguration()) {
+            await SyncCaptureService.setCaptureEnabled(enabled: true, db: db);
+            logInfo('BackupService', '恢复后已自动开启同步变更捕获');
+          }
+        } catch (e) {
+          logWarning('BackupService', '恢复后开启同步变更捕获失败: $e');
         }
 
         try {

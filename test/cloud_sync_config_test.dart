@@ -188,6 +188,38 @@ void main() {
     });
   });
 
+  group('CloudSyncSettings.isCompleteConfiguration', () {
+    test('只有配置与凭据同时完整时才视为已配置', () {
+      final config = CloudSyncConfig.create(
+        endpointInput: 'https://example.com',
+        bucket: 'valid-bucket',
+        region: 'us-east-1',
+      );
+      const complete = CloudSyncCredentials(
+        accessKey: 'access',
+        secretKey: 'secret',
+      );
+      const missingSecret = CloudSyncCredentials(
+        accessKey: 'access',
+        secretKey: '   ',
+      );
+
+      expect(
+        CloudSyncSettings.isCompleteConfiguration(null, complete),
+        isFalse,
+      );
+      expect(CloudSyncSettings.isCompleteConfiguration(config, null), isFalse);
+      expect(
+        CloudSyncSettings.isCompleteConfiguration(config, missingSecret),
+        isFalse,
+      );
+      expect(
+        CloudSyncSettings.isCompleteConfiguration(config, complete),
+        isTrue,
+      );
+    });
+  });
+
   group('CloudSyncUtils', () {
     test('SHA-256 与已知向量一致', () {
       expect(

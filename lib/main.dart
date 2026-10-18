@@ -9,6 +9,7 @@ import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/cloud_sync_foreground_sync_service.dart';
+import 'services/cloud_sync_settings.dart';
 import 'services/database_service.dart';
 import 'services/dictionary_service.dart';
 import 'services/tts_service.dart';
@@ -17,7 +18,24 @@ import 'services/theme_mode_service.dart';
 import 'services/update_service.dart';
 import 'services/study_timer_service.dart';
 import 'services/log_service.dart';
+import 'services/sync_capture_service.dart';
 import 'models/ai_profile.dart';
+
+/// 云同步配置完整时，确保 SQLite 变更捕获处于开启状态。
+///
+/// 捕获开关是数据库里的持久状态；恢复快照、旧版本升级或异常退出都可能让它
+/// 变成 0。必须在任何业务写入（包括闪退恢复）之前校正，否则新数据不会进入
+/// oplog，后续增量同步永远看不到这些变更。
+Future<void> _ensureCloudSyncCaptureEnabled() async {
+  try {
+    if (!await CloudSyncSettings.hasCompleteConfiguration()) return;
+    if (await SyncCaptureService.isCaptureEnabled()) return;
+    await SyncCaptureService.setCaptureEnabled(enabled: true);
+    logInfo('CloudSync', '启动时已自动开启同步变更捕获');
+  } catch (e) {
+    logWarning('CloudSync', '启动时确保同步变更捕获失败: $e');
+  }
+}
 
 /// 后台预热词典数据库，失败时记录日志（搜索页会给用户明确提示）
 Future<void> _prewarmDictionaries() async {
@@ -54,6 +72,9 @@ void main() async {
     await DatabaseService.database; // 初始化业务数据库
     logInfo('DatabaseService', '业务数据库初始化完成');
     await SharedPreferences.getInstance(); // 预热 SharedPreferences
+
+    // 先确保云同步捕获已开启，再执行任何可能写库的启动逻辑
+    await _ensureCloudSyncCaptureEnabled();
 
     // 清理上次未正常结束的学习会话（闪退恢复）
     await StudyTimerService.recoverInterruptedSessions();

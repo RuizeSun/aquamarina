@@ -38,20 +38,41 @@ class CloudSyncBootstrapService {
     return false;
   }
 
-  /// 找到快照最新的设备；没有可用快照时返回 null。
+  /// 找到适合引导的快照；没有可用快照时返回 null。
   static Future<BootstrapCandidate?> findLatestSnapshot() async {
     final service = await CloudSyncService.create();
     final devices = await service.listDevices();
-    CloudDeviceSummary? best;
+    final chosen = chooseCandidate(devices);
+    if (chosen == null) return null;
+    return BootstrapCandidate(service: service, summary: chosen);
+  }
+
+  /// 选择引导快照的纯逻辑（便于测试）。
+  ///
+  /// 默认选择时间最新的快照，但如果最新快照明显小于另一台设备的最新快照
+  /// （例如新设备先上传了一个接近空库的快照），优先选择数据更完整的那个。
+  /// 体积相近时仍选最新，避免用旧的、已包含已删除数据的快照覆盖。
+  static CloudDeviceSummary? chooseCandidate(
+    Iterable<CloudDeviceSummary> devices,
+  ) {
+    CloudDeviceSummary? latest;
+    CloudDeviceSummary? largest;
     for (final device in devices) {
-      if (device.latest == null) continue;
-      if (best == null ||
-          device.latest!.createdAt.isAfter(best.latest!.createdAt)) {
-        best = device;
+      final snapshot = device.latest;
+      if (snapshot == null) continue;
+      if (latest == null ||
+          snapshot.createdAt.isAfter(latest.latest!.createdAt)) {
+        latest = device;
+      }
+      if (largest == null || snapshot.size > largest.latest!.size) {
+        largest = device;
       }
     }
-    if (best == null) return null;
-    return BootstrapCandidate(service: service, summary: best);
+    if (latest == null || largest == null) return null;
+    // 只有差距足够明显时才偏离「最新」：避免把正常的小体积备份误判为空库。
+    return largest != latest && largest.latest!.size >= latest.latest!.size * 2
+        ? largest
+        : latest;
   }
 }
 
