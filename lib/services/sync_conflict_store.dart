@@ -259,6 +259,24 @@ class SyncConflictStore {
       'key': key,
       'hlc': next.value,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+    // 冲突解决会产生一条新的本地写入；同步推进 HLC，避免本机时钟落后
+    // 于远端时，后续本地编辑拿到更小的 HLC 而被其它设备跳过。
+    final metaRows = await db.query(
+      'sync_meta',
+      columns: ['hlc_ms', 'hlc_counter'],
+      where: 'id = 1',
+      limit: 1,
+    );
+    if (metaRows.isNotEmpty) {
+      final ms = (metaRows.first['hlc_ms'] as int?) ?? 0;
+      final counter = (metaRows.first['hlc_counter'] as int?) ?? 0;
+      if (next.compareTo(SyncHlc(ms, counter)) > 0) {
+        await db.update('sync_meta', {
+          'hlc_ms': next.ms,
+          'hlc_counter': next.counter,
+        }, where: 'id = 1');
+      }
+    }
   }
 
   static PendingSyncConflict _fromRow(Map<String, Object?> row) {

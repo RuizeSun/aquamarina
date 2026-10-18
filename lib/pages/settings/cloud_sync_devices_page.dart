@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../models/cloud_sync_manifest.dart';
 import '../../services/cloud_sync_device_meta_service.dart';
 import '../../services/cloud_sync_engine.dart';
 import '../../services/cloud_sync_run_lock.dart';
@@ -73,6 +74,12 @@ class _CloudSyncDevicesPageState extends State<CloudSyncDevicesPage> {
       final result = await CloudSyncRunLock.runExclusive(() async {
         final engine = await CloudSyncEngine.create();
         final run = await engine.run(pull: true, push: false);
+        if (run.hasIncompleteWork) {
+          throw CloudSyncException(
+            '合并未完成（拉取失败、时间预算耗尽或存在缺失父级），'
+            '已保留设备 $deviceId 的云端数据，请稍后重试。',
+          );
+        }
         await data.service.deleteDeviceData(deviceId);
         return run;
       });

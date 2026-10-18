@@ -178,6 +178,10 @@ class SyncApplyService {
         }
 
         await ctx.flush(txn);
+        // HLC receive 步骤：本机看到远端事件后，后续本地写入必须排在它之后。
+        // 否则设备间时钟偏差会让“看到远端后再编辑”的本地写入拿到更小的
+        // HLC，被其它设备当作旧数据跳过。
+        await _advanceLocalClock(txn, slice);
         if (appliedInSlice > 0) {
           await txn.rawUpdate(
             'UPDATE sync_meta SET total_ops = total_ops + ? WHERE id = 1',
@@ -192,6 +196,32 @@ class SyncApplyService {
       }
     });
     return pending;
+  }
+
+  /// 把本地 HLC 推进到本批远端 op 的最大值（标准 HLC receive）。
+  static Future<void> _advanceLocalClock(
+    DatabaseExecutor txn,
+    List<SyncOp> ops,
+  ) async {
+    if (ops.isEmpty) return;
+    var remoteMax = ops.first.hlc;
+    for (final op in ops) {
+      if (op.hlc.compareTo(remoteMax) > 0) remoteMax = op.hlc;
+    }
+    final rows = await txn.query(
+      'sync_meta',
+      columns: ['hlc_ms', 'hlc_counter'],
+      where: 'id = 1',
+      limit: 1,
+    );
+    if (rows.isEmpty) return;
+    final localMs = (rows.first['hlc_ms'] as int?) ?? 0;
+    final localCounter = (rows.first['hlc_counter'] as int?) ?? 0;
+    if (remoteMax.compareTo(SyncHlc(localMs, localCounter)) <= 0) return;
+    await txn.update('sync_meta', {
+      'hlc_ms': remoteMax.ms,
+      'hlc_counter': remoteMax.counter,
+    }, where: 'id = 1');
   }
 
   static int _compareOps(SyncOp a, SyncOp b) {
@@ -266,6 +296,14 @@ class SyncApplyService {
         data: item.data,
         delta: item.delta,
       );
+      // bulk 与普通 op 使用同一套行版本门禁：旧批量导入不能覆盖更新版本。
+      final currentVersion = _versionOf(ctx, sub);
+      if (currentVersion != null && currentVersion.compareTo(sub.hlc) >= 0) {
+        result.skippedByVersion++;
+        await _recordVersionConflict(txn, ctx, spec, sub, result);
+        await _applyStaleCounterDeltas(txn, ctx, spec, sub);
+        continue;
+      }
       final outcome = await _applyUpsert(txn, ctx, spec, sub, result);
       if (outcome == _UpsertOutcome.pendingParent) {
         return _UpsertOutcome.pendingParent;
@@ -607,6 +645,15 @@ class _ApplyContext {
     return '$entity\u0000${SyncOp(deviceId: 'local', seq: 1, hlc: const SyncHlc(0, 0), entity: entity, key: key, op: 'upsert').keyFingerprint}';
   }
 
+  static String _keyFingerprint(Map<String, dynamic> key) => SyncOp(
+    deviceId: 'local',
+    seq: 1,
+    hlc: const SyncHlc(0, 0),
+    entity: 'local',
+    key: key,
+    op: 'upsert',
+  ).keyFingerprint;
+
   Map<String, Object?>? rowFor(SyncTableSpec spec, Map<String, dynamic> key) =>
       rows[_rowKey(spec.entity, key)];
 
@@ -772,11 +819,21 @@ class _ApplyContext {
     }
 
     // 行版本：按 entity 分组，key 列表分批查询。
+    // bulk op 的实体键在 items 里，必须展开，否则 bulk 无法读取既有版本，
+    // 会绕过版本门禁覆盖更新的行。
     final keysByEntity = <String, Set<String>>{};
     for (final op in ops) {
-      keysByEntity
-          .putIfAbsent(op.entity, () => <String>{})
-          .add(op.keyFingerprint);
+      if (op.isBulk) {
+        for (final item in op.items) {
+          keysByEntity
+              .putIfAbsent(item.entity, () => <String>{})
+              .add(_keyFingerprint(item.key));
+        }
+      } else {
+        keysByEntity
+            .putIfAbsent(op.entity, () => <String>{})
+            .add(op.keyFingerprint);
+      }
     }
     for (final entry in keysByEntity.entries) {
       final keys = entry.value.toList();

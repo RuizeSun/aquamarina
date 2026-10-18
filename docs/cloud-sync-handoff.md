@@ -246,21 +246,22 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 3. 对每个设备 GET head.json：
    - head.latest_hlc ≤ 本地 sync_state.last_hlc → 直接跳过（不 LIST）
    - 否则只 LIST 该设备的 chunks/，并用 startAfter=sync_state.last_chunk_key 只取尾部增量
-4. 过滤：本地 sync_chunks 已记录的、baseline 之前的
+4. 过滤：本地 sync_chunks 已记录的、被本机忽略的旧设备、baseline 之前的
 5. 按对象 key（HLC 前缀）排序
 6. 逐个 GET → 校验 SHA-256 前 16 位 → 解码 JSONL
 7. SyncApplyService.applyOps（单事务）
    - sync_applied 去重
-   - 行版本门禁
+   - 行版本门禁（普通 op 与 bulk item 都适用）
    - 按表语义应用
    - 缺失父级的 op 不记录 applied，后续重试
+   - HLC receive：把 sync_meta.hlc_ms/counter 推进到本批远端最大 HLC
 8. 应用成功后写入 sync_chunks(min_hlc / max_hlc) 并推进 sync_state
    - 只有连续成功的前缀才推进；中途失败保留旧位置
 9. 拉取结束后写本机 state.json（applied 水位）
 10. 本机推送：
    - takePendingBatch：按 captured_at_ms 分配 HLC、记录 sync_row_versions、切 500 op / 900 KB，gzip 后上传
    - PUT 到自己的 chunks/
-   - markUploaded 删除本地 oplog
+   - markUploaded 删除本地 oplog，并把本机 chunk 写入 sync_chunks（避免自己回放）
    - 更新 sync_meta head 水位并置 head_dirty=1
    - 最多 20 批 / 次
 11. 补写 head.json（失败保留 dirty，下次同步重试）
@@ -295,7 +296,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
      - 清空快照携带的 oplog；
      - 保留 `sync_applied` / `sync_chunks` / 行版本 / 墓碑（快照已包含其效果）；
      - 清空 `sync_meta.device_id`，写入 `baseline_hlc = 备份创建时间`；
-  5. 引擎拉取时跳过 HLC ≤ baseline 的 chunk，避免历史计数重复累加。
+  5. 引擎拉取时跳过 HLC ≤ baseline 的 chunk；本机推送成功的 chunk 会写入 `sync_chunks`，不会在下一轮被自己重放。
 
 ### 2.11 变更捕获不变量
 
@@ -356,7 +357,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 
 ### 2.14 测试现状
 
-- `flutter test`：无 S3 环境变量时 **225 passed / 4 skipped**；设置真实 S3 后 **229 passed**；
+- `flutter test`：无 S3 环境变量时 **236 passed / 4 skipped**；设置真实 S3 后 **240 passed**；
 - 新增覆盖：gzip chunk、完整 SHA-256、时间预算续跑、`captured_at_ms` HLC、批量 oplog 回填、冲突持久化/解决/清理、检查点空库与退避、流式文件上传下载、网络策略；
 - 覆盖：
   - v13/v14/v15 迁移、UUID/顺序回填、触发器数量与抑制；
@@ -407,11 +408,16 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 **修复（v15）**：`sync_applied` 记录 op HLC；GC 删除 chunk 后按「下一个保留 chunk 的起始 HLC」清理应用记录；墓碑在所有活跃设备水位越过且超过 180 天后清理。  
 **修复方向**：GC 删除 chunk 时按该 chunk 的 op 列表清理 `sync_applied`；墓碑按保留期/水位清理。
 
-### P0-4：快照恢复会跳过本机自己更新的 chunk（✅ 已解决）
+### P0-4：快照恢复会跳过本机自己更新的 chunk（✅ 已解决，后续修复重放语义）
 
 **原现象**：`_pull` 过滤 `_deviceOf(key) == deviceId`。  
 **修复（v15）**：基线存在时允许重放本机 `HLC > baseline` 的 chunk（只重放、不重复上传）；无基线时仍跳过本机 chunk。  
-**场景**：设备 A 上传 chunk → 之后恢复较旧的快照（同一设备）→ 恢复后 A 会拉回快照之后的本机变更。
+**后续问题**：baseline 永久存在，且本机推送的 chunk 没有记入 `sync_chunks`，因此恢复后的每一轮同步都会把**上一轮刚上传的本机 chunk 再应用一次**；普通字段被行版本门禁挡住，但计数增量仍会累加，`review_count` / `daily_activity` / `wrong_count` 会翻倍。  
+**最终修复**：
+- `SyncCaptureService.markUploaded` 支持把本机 chunk 同时写入 `sync_chunks`，pull 的 `appliedKeys` 会跳过它；
+- 本机在 baseline 之后的历史 chunk 仍会重放一次（内容确实不在快照里），但每轮最多一次；
+- 重置设备标识时把旧 ID 记入本机 ignored 列表，避免旧目录被当作远端设备重放；
+- 回归测试：恢复基线 → 连续推送两轮 → 计数保持不变。
 
 ### P1-1：GC 按时间而非水位，可能删掉离线设备仍需要的 chunk（✅ 已解决）
 
@@ -690,3 +696,6 @@ flutter test test/cloud_sync_s3_integration_test.dart
 6. **流式快照仍有磁盘峰值**：`VACUUM INTO` + 瘦身 `VACUUM` + ZIP 需要约 2–3 倍 DB 空间；未做剩余空间预检，未做 10 万/50 万级真机基准。
 7. **gzip / bulk op 滚动升级**：旧版本客户端不识别 `.jsonl.gz` 与 `op='bulk'`；发布时需确保所有设备升级。
 8. **并发锁是进程内锁**：`CloudSyncRunLock` 不能跨进程/跨 isolate 生效；单进程内已覆盖增量同步、快照上传/恢复、检查点与设备删除。
+9. **切换 endpoint / bucket / prefix 不会重建本地同步水位**：`sync_state` / `sync_chunks` / `sync_applied` / `sync_row_versions` 仍属于旧后端；如果新位置已有历史数据，可能出现 `startAfter` 过滤错误、seq 误判重复或旧 HLC 门禁。切换后建议从快照恢复，或先清除云同步配置并重新引导。
+10. **baseline 仍是“快照创建时间”的近似值**：如果快照源设备在导出前尚未拉全其它设备的变更，恢复后这些 chunk 的 HLC 可能 ≤ baseline 而被跳过；上传自动检查点前应先完成一次 pull。
+11. **GC 可能被没有 head/state 的设备目录阻塞**：只上传过快照、从未跑过增量同步的设备会被视为活跃且缺少 state，导致其它设备的历史 chunk 无法回收。

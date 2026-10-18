@@ -8,6 +8,7 @@ import 'package:aquamarina/services/cloud_sync_engine.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
 import 'package:aquamarina/services/sync_capture_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'fake_s3_storage.dart';
@@ -37,6 +38,7 @@ void main() {
   late CloudSyncConfig config;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     db = await openSyncTestDb();
     config = _config();
     storage = FakeS3Storage(config);
@@ -240,11 +242,17 @@ void main() {
     expect(result.errors, isNotEmpty);
     expect(await db.query('sync_chunks'), isEmpty);
     expect(await db.query('word_notes'), isEmpty);
+    var state = await CloudSyncSettings.loadState();
+    expect(state.lastError, isNotNull);
+    expect(state.lastSuccessAt, isNull);
 
     storage.objects[key] = goodBytes;
     result = await engine().run(push: false);
     expect(result.pulledChunks, 1);
     expect((await db.query('word_notes')).single['note'], 'from B');
+    state = await CloudSyncSettings.loadState();
+    expect(state.lastError, isNull);
+    expect(state.lastSuccessAt, isNotNull);
   });
 
   test('推送成功后写 head.json 并清理 dirty 标记', () async {
@@ -467,5 +475,86 @@ void main() {
     meta = await db.query('sync_meta', where: 'id = 1');
     expect(meta.single['head_dirty'], 0);
     expect(result.pushedChunks, 0);
+  });
+
+  test('恢复基线后本机新 chunk 不会被自己重放，计数不翻倍', () async {
+    await db.update('sync_meta', {
+      'baseline_hlc': const SyncHlc(1, 0).value,
+    }, where: 'id = 1');
+    await db.insert('user_word_records', {
+      'word': 'apple',
+      'stage': 1,
+      'review_count': 1,
+      'created_at': '2026-10-01T00:00:00Z',
+    });
+
+    // 第一轮：pull 无可拉取内容，push 本机 chunk。
+    var result = await engine().run();
+    expect(result.pushedChunks, 1);
+    expect((await db.query('sync_chunks')).length, 1);
+    expect((await db.query('user_word_records')).single['review_count'], 1);
+
+    await db.update(
+      'user_word_records',
+      {'review_count': 2},
+      where: 'word = ?',
+      whereArgs: ['apple'],
+    );
+
+    // 第二轮：pull 必须先跳过已标记的本机 chunk，再推送新 chunk。
+    result = await engine().run();
+    expect(result.pushedChunks, 1);
+    expect((await db.query('user_word_records')).single['review_count'], 2);
+
+    // 第三轮：两个本机 chunk 都已标记，pull 不应再应用任何计数增量。
+    result = await engine().run();
+    expect(result.pulledChunks, 0);
+    expect((await db.query('user_word_records')).single['review_count'], 2);
+  });
+
+  test('已重置的旧设备 ID 不参与拉取', () async {
+    SharedPreferences.setMockInitialValues({
+      'cloud_sync_ignored_devices_v1': [_deviceB],
+    });
+    final ops = [
+      makeOp(
+        entity: 'user_word_records',
+        seq: 1,
+        hlcMs: 5000,
+        key: {'word': 'banana'},
+        data: {
+          'stage': 1,
+          'review_count': 5,
+          'created_at': '2026-10-01T00:00:00Z',
+        },
+        delta: {'review_count': 5},
+        deviceId: _deviceB,
+      ),
+    ];
+    storage.objects[_chunkKey(config, _deviceB, ops)] = SyncChunkCodec.encode(
+      ops,
+    );
+
+    final result = await engine().run(pull: true, push: false);
+    expect(result.pulledChunks, 0);
+    expect(await db.query('user_word_records'), isEmpty);
+  });
+
+  test('接管前的完整性判断覆盖预算/错误/缺失父级', () {
+    final result = CloudSyncRunResult();
+    expect(result.hasIncompleteWork, isFalse);
+
+    result.budgetExhausted = true;
+    expect(result.hasIncompleteWork, isTrue);
+
+    result
+      ..budgetExhausted = false
+      ..errors.add('chunk 下载失败');
+    expect(result.hasIncompleteWork, isTrue);
+
+    result
+      ..errors.clear()
+      ..skippedMissingParent = 1;
+    expect(result.hasIncompleteWork, isTrue);
   });
 }

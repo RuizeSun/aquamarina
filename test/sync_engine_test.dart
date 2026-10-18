@@ -542,5 +542,89 @@ void main() {
       expect(row['words_learned'], 5);
       expect(row['correct_count'], 3);
     });
+
+    test('应用远端操作后推进本地 HLC，后续本地编辑排在远端之后', () async {
+      final remoteHlcMs = DateTime.now()
+          .add(const Duration(minutes: 10))
+          .millisecondsSinceEpoch;
+      await SyncApplyService.applyOps([
+        makeOp(
+          entity: 'word_notes',
+          seq: 1,
+          hlcMs: remoteHlcMs,
+          key: {'word': 'remote'},
+          data: {
+            'note': 'remote',
+            'is_favorited': 0,
+            'updated_at': '2026-10-02T00:00:00Z',
+          },
+          deviceId: 'device-b',
+        ),
+      ], db: db);
+
+      final meta = (await db.query('sync_meta')).single;
+      expect(meta['hlc_ms'], remoteHlcMs);
+
+      // 模拟本机时钟落后：新写入的 captured_at 仍早于远端 HLC。
+      await db.insert('word_notes', {
+        'word': 'local',
+        'note': 'local after remote',
+        'is_favorited': 0,
+        'updated_at': '2026-10-02T00:00:01Z',
+      });
+      final batch = await SyncCaptureService.takePendingBatch(
+        db: db,
+        deviceId: 'device-a',
+      );
+      expect(batch, isNotNull);
+      expect(
+        batch!.ops.single.hlc.compareTo(SyncHlc(remoteHlcMs, 0)),
+        greaterThan(0),
+      );
+    });
+
+    test('bulk op 同样受行版本门禁约束', () async {
+      await db.insert('sentences', {
+        'id': 'sentence-1',
+        'set_id': 'set-1',
+        'english': 'new text',
+        'chinese': '新文本',
+        'extra_words': '[]',
+        'created_at': '2026-10-01T00:00:00Z',
+        'sort_index': 1.0,
+      });
+      await db.insert('sync_row_versions', {
+        'entity': 'sentences',
+        'key': '{"id":"sentence-1"}',
+        'hlc': const SyncHlc(200, 0).value,
+      });
+
+      final bulk = SyncOp(
+        deviceId: 'device-b',
+        seq: 2,
+        hlc: const SyncHlc(100, 0),
+        entity: 'bulk',
+        key: const {},
+        op: 'bulk',
+        items: const [
+          SyncBulkItem(
+            entity: 'sentences',
+            key: {'id': 'sentence-1'},
+            data: {
+              'set_id': 'set-1',
+              'english': 'old text',
+              'chinese': '旧文本',
+              'extra_words': '[]',
+              'created_at': '2026-10-01T00:00:00Z',
+              'sort_index': 1.0,
+            },
+          ),
+        ],
+      );
+
+      final result = await SyncApplyService.applyOps([bulk], db: db);
+      expect(result.skippedByVersion, 1);
+      expect((await db.query('sentences')).single['english'], 'new text');
+    });
   });
 }

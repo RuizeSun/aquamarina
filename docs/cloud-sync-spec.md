@@ -54,7 +54,7 @@
 ```
 
 - `seq`：设备内单调递增，用于**恰好一次**去重（`sync_applied(device_id, seq)` 唯一索引）。
-- `hlc`：混合逻辑时钟（毫秒时间 + 逻辑计数），用于跨设备确定性排序；`HLC = max(now_ms, last_ms) ++`，相同毫秒用计数推进。
+- `hlc`：混合逻辑时钟（毫秒时间 + 逻辑计数），用于跨设备确定性排序；`HLC = max(now_ms, last_ms) ++`，相同毫秒用计数推进。应用远端 op 时必须执行 receive 步骤：把本地 HLC 推进到本批远端 op 的最大 HLC，保证“看到远端后再编辑”的本地写入排在远端之后。
 - `op`：`upsert` / `delete` / `bulk`；`bulk` 使用 `items: [{entity,key,data,delta}]` 承载多条实体操作（用于大批量导入，只占一条 seq）。
 - `delta`：仅计数类实体使用（复习次数、错题次数、每日统计）。
 - `deleted_at`：墓碑时间；删除后保留墓碑 ≥ 12 个月（或所有设备水位线越过）。
@@ -133,7 +133,10 @@ for chunk in pull():
   - 任一非 owner 活跃设备缺少 `state.json` 时，本轮不按水位删除；
   - 删除后按「下一个保留 chunk 的起始 HLC」清理本地 `sync_applied`；墓碑在所有活跃设备水位越过且超过 180 天后清理。
 - 设备失联：180 天未更新 `head.json` / `state.json` 视为失联，可从水位线计算中排除。
-- 恢复快照后：`baseline_hlc` 之前的 chunk 全部跳过；本机在基线之后上传的 chunk 允许重放（幂等），避免快照之后的变更丢失。
+- 恢复快照后：`baseline_hlc` 之前的 chunk 全部跳过；本机在基线之后、且尚未被本机标记为已应用的 chunk 只重放一次。
+  - 本机推送成功后会把 chunk 写入 `sync_chunks`，避免下一轮 pull 把自己刚上传的 chunk 再应用一次；
+  - 计数类字段不能承受任何重放，因此这条“只重放一次”是必须保持的不变量。
+- 重置设备标识后，旧设备 ID 会写入本机 `cloud_sync_ignored_devices_v1`：不再拉取旧目录，但会用其 `head.json` 水位发布 `state.json`，避免旧目录永久阻塞 GC。
 
 ## 8. 安全
 
@@ -163,9 +166,9 @@ for chunk in pull():
 | 3 | schema v13 + 触发器生成器（`sentence_sets` 于 v14 入库） | ✅ 已完成（DB 内 14 张同步表） |
 | 4 | chunk push/pull + 应用引擎（LWW/delta/墓碑） | ✅ 已完成 |
 | 5 | 自动同步编排、GC、冲突/状态 UI | ✅ 启动/回前台同步、学习结束事件同步、前台轮询、head/state 水位 GC、冲突页、设备管理、仅 Wi-Fi / 退避均已完成 |
-| 6 | 收敛性/幂等/崩溃/迁移测试与文档 | ✅ 229 项测试通过；含 gzip、完整 SHA、时间预算、captured_at HLC、批量 op、冲突解决、真实 S3 双设备 E2E |
+| 6 | 收敛性/幂等/崩溃/迁移测试与文档 | ✅ 236 项测试通过（真实 S3 下 240 项）；含 gzip、完整 SHA、时间预算、captured_at HLC、HLC receive、批量 op、冲突解决、真实 S3 双设备 E2E |
 | 7 | 性能与快照 | ✅ gzip、完整 SHA、apply 预载/batch、流式快照、快照瘦身、自动检查点、新设备引导 |
-| 8 | 批量与设备管理 | ✅ bulk op、chunk 50-op 小事务、接管并合并旧设备、冲突版本推进、墙钟钳制 |
+| 8 | 批量与设备管理 | ✅ bulk op（含与普通 op 相同的行版本门禁）、chunk 50-op 小事务、接管并合并旧设备（拉取不完整时禁止删除）、冲突版本推进、墙钟钳制、本机 chunk 不回放、设备重置隔离、HLC receive |
 
 > 阶段 2 的快照能力不会白做：它就是阶段 3+ 的 checkpoint/bootstrap 载体。
 
@@ -200,7 +203,7 @@ for chunk in pull():
 已通过的验证：
 
 - `flutter analyze`：仅剩仓库原有的 9 条 info，无新增告警；
-- 无 S3 环境变量时 225 passed / 4 skipped；设置真实 S3 后 229 passed：含 v13–v17 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、bulk op、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
+- 无 S3 环境变量时 236 passed / 4 skipped；设置真实 S3 后 240 passed：含 v13–v17 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、HLC receive、bulk op 版本门禁、本机 chunk 不回放、设备重置隔离、接管完整性保护、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、head/state、**双设备增量同步收敛**）。
 
 ### 当前已知限制
@@ -220,4 +223,9 @@ for chunk in pull():
   因此继续使用活跃设备 `state.json` 水位。
 - **P2-3 端到端加密**、**P2-4 账号 / 多租户** 尚未实现；当前安全边界仍为
   TLS + 私有桶 + 设备前缀隔离。
+- 切换 endpoint / bucket / prefix 不会重建本地同步水位；目标位置已有历史数据时
+  可能漏拉或误判重复，建议切换后从快照恢复或重新引导。
+- 快照基线仍使用“快照创建时间”：导出方尚未拉全的其它设备变更可能被跳过；
+  自动检查点前应先完成一次 pull。
+- 没有 head/state 的设备目录会被 GC 视为活跃，可能长期阻止历史 chunk 回收。
 

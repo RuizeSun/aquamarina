@@ -38,6 +38,16 @@ class CloudSyncRunResult {
   /// 调用方主动取消。
   bool cancelled = false;
 
+  /// 本次 run 是否还有未完成/不可安全接管的工作。
+  ///
+  /// 用于“接管并合并旧设备”等会删除云端数据的操作：只要拉取因预算、
+  /// 取消、父级缺失或任何 chunk 错误而中断，就不能删除旧设备数据。
+  bool get hasIncompleteWork =>
+      budgetExhausted ||
+      cancelled ||
+      errors.isNotEmpty ||
+      skippedMissingParent > 0;
+
   final List<String> errors = [];
   final List<String> conflictDetails = [];
 
@@ -179,12 +189,18 @@ class CloudSyncEngine {
 
     result.remainingLocalOps = await SyncCaptureService.pendingCount(db: db);
     try {
-      await CloudSyncSettings.saveState(
-        (await CloudSyncSettings.loadState()).copyWith(
-          lastSuccessAt: DateTime.now(),
-          clearError: true,
-        ),
-      );
+      final state = await CloudSyncSettings.loadState();
+      if (result.errors.isEmpty) {
+        await CloudSyncSettings.saveState(
+          state.copyWith(lastSuccessAt: DateTime.now(), clearError: true),
+        );
+      } else {
+        // 有 chunk 失败/损坏/缺失父级时不要伪装成成功：保留 lastError，
+        // 让设置页可见，并让自动同步按失败进入退避而不是等完整间隔。
+        await CloudSyncSettings.saveState(
+          state.copyWith(lastError: result.errors.first),
+        );
+      }
     } catch (_) {
       // 状态展示失败不影响同步结果
     }
@@ -210,7 +226,17 @@ class CloudSyncEngine {
     bool Function()? isCancelled,
     void Function(CloudSyncRunPhase phase, int done, int total)? onProgress,
   }) async {
-    final deviceIds = await _meta.listDeviceIds();
+    final allDeviceIds = await _meta.listDeviceIds();
+    // 重置设备标识后，旧设备目录仍留在云端；本机数据已经包含这些变更，
+    // 不能再把它们当作其它设备重放（否则计数类字段会翻倍）。把旧 ID 的
+    // head 水位记录到本地 state，既跳过拉取，也让 GC 能继续回收旧 chunk。
+    final ignoredDeviceIds = await CloudSyncSettings.loadIgnoredDeviceIds();
+    for (final ignored in allDeviceIds.where(ignoredDeviceIds.contains)) {
+      await _rememberIgnoredDevice(db, ignored);
+    }
+    final deviceIds = allDeviceIds
+        .where((id) => !ignoredDeviceIds.contains(id))
+        .toList();
     if (deviceIds.isEmpty) {
       await _flushState(db, result);
       return;
@@ -380,6 +406,37 @@ class CloudSyncEngine {
     }
   }
 
+  /// 已重置的旧设备 ID：只记录其最新水位，不再拉取/应用它的 chunk。
+  ///
+  /// 这些 chunk 的内容已经包含在本机数据库里（重置设备标识不会清库）。
+  /// 记录水位后 `_flushState` 会把它发布到 state.json，避免旧目录永久
+  /// 阻塞其它设备的 chunk GC。
+  Future<void> _rememberIgnoredDevice(
+    Database db,
+    String ignoredDeviceId,
+  ) async {
+    final head = await _meta.fetchHead(ignoredDeviceId);
+    if (head == null || head.latestHlc.isEmpty) return;
+    final stateRows = await db.query(
+      'sync_state',
+      where: 'device_id = ?',
+      whereArgs: [ignoredDeviceId],
+      limit: 1,
+    );
+    final existing = stateRows.isEmpty
+        ? ''
+        : (stateRows.first['last_hlc'] as String? ?? '');
+    if (existing.isNotEmpty && _compareHlc(head.latestHlc, existing) <= 0) {
+      return;
+    }
+    await _saveSyncState(
+      db,
+      sourceDevice: ignoredDeviceId,
+      lastHlc: head.latestHlc,
+      lastChunkKey: head.latestChunkKey,
+    );
+  }
+
   Future<void> _saveSyncState(
     Database db, {
     required String sourceDevice,
@@ -499,7 +556,12 @@ class CloudSyncEngine {
         result.errors.add('上传 chunk 失败：$e');
         break;
       }
-      await SyncCaptureService.markUploaded(batch, db: db);
+      await SyncCaptureService.markUploaded(
+        batch,
+        db: db,
+        ownChunkDeviceId: deviceId,
+        ownChunkKey: key,
+      );
       result.pushedChunks++;
       result.pushedOps += batch.ops.length;
       onProgress?.call(

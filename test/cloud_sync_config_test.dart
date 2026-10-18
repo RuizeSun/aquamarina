@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
 import 'package:aquamarina/services/cloud_sync_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('S3Endpoint', () {
@@ -241,6 +242,20 @@ void main() {
       expect(CloudSyncUtils.formatBytes(1023), '1023 B');
       expect(CloudSyncUtils.formatBytes(1024), '1.0 KB');
       expect(CloudSyncUtils.formatBytes(1024 * 1024), '1.0 MB');
+    });
+  });
+
+  group('CloudSyncSettings.resetDeviceId', () {
+    test('重置后把旧设备 ID 记入忽略列表，避免本机重放旧 chunk', () async {
+      const oldId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      SharedPreferences.setMockInitialValues({
+        'cloud_sync_device_id_v1': oldId,
+      });
+
+      final newId = await CloudSyncSettings.resetDeviceId();
+      expect(newId, isNot(oldId));
+      expect(await CloudSyncSettings.loadIgnoredDeviceIds(), contains(oldId));
+      expect(await CloudSyncSettings.getOrCreateDeviceId(), newId);
     });
   });
 }

@@ -310,7 +310,18 @@ class SyncCaptureService {
   }
 
   /// 上传成功后删除对应 oplog 行（幂等）。
-  static Future<void> markUploaded(SyncBatch batch, {Database? db}) async {
+  ///
+  /// [ownChunkDeviceId] / [ownChunkKey] 非空时，同时把本机刚上传的 chunk
+  /// 记入 `sync_chunks`。本机 chunk 的内容已经存在于本地数据库，不需要
+  /// 再通过 pull 应用一次；记录后 `_pull` 的 `appliedKeys` 会跳过它。
+  /// 这对恢复快照后的 `baseline` 重放尤其重要：否则本机新 chunk 会在
+  /// 下一轮同步被自己拉回，计数增量被重复累加。
+  static Future<void> markUploaded(
+    SyncBatch batch, {
+    Database? db,
+    String? ownChunkDeviceId,
+    String? ownChunkKey,
+  }) async {
     final database = await _db(db);
     await database.transaction((txn) async {
       var uploaded = 0;
@@ -337,6 +348,20 @@ class SyncCaptureService {
           'UPDATE sync_meta SET total_ops = total_ops + ? WHERE id = 1',
           [uploaded],
         );
+      }
+      if (ownChunkDeviceId != null &&
+          ownChunkDeviceId.isNotEmpty &&
+          ownChunkKey != null &&
+          ownChunkKey.isNotEmpty) {
+        final bounds = _hlcBounds(batch.ops);
+        await txn.insert('sync_chunks', {
+          'device_id': ownChunkDeviceId,
+          'chunk_key': ownChunkKey,
+          'sha256': batch.sha256,
+          'min_hlc': bounds.$1,
+          'max_hlc': bounds.$2,
+          'applied_at': DateTime.now().toUtc().toIso8601String(),
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
   }
@@ -408,6 +433,18 @@ class SyncCaptureService {
     if (!enabled) {
       await clearAll(db: database);
     }
+  }
+
+  /// chunk 内 op 的 HLC 范围；空批次返回空字符串。
+  static (String, String) _hlcBounds(List<SyncOp> ops) {
+    if (ops.isEmpty) return ('', '');
+    var min = ops.first.hlc;
+    var max = ops.first.hlc;
+    for (final op in ops) {
+      if (op.hlc.compareTo(min) < 0) min = op.hlc;
+      if (op.hlc.compareTo(max) > 0) max = op.hlc;
+    }
+    return (min.value, max.value);
   }
 
   static SyncOp _bulkRowToOp(Map<String, Object?> row, String deviceId) {

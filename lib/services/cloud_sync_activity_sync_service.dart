@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../models/cloud_sync_manifest.dart';
 import 'cloud_sync_auto_sync_service.dart';
 import 'cloud_sync_checkpoint_service.dart';
 import 'cloud_sync_engine.dart';
@@ -21,7 +22,11 @@ class CloudSyncActivitySyncService {
 
   static Duration debounce = const Duration(seconds: 2);
 
+  /// 自动同步进行中时的补跑延迟，避免在微任务级别反复轮询。
+  static Duration followUpDelay = const Duration(seconds: 2);
+
   static Timer? _debounceTimer;
+  static Timer? _followUpTimer;
   static bool _running = false;
   static bool _followUp = false;
 
@@ -42,6 +47,8 @@ class CloudSyncActivitySyncService {
   static Future<void> flushNow() => _flush();
 
   static Future<void> _flush() async {
+    _followUpTimer?.cancel();
+    _followUpTimer = null;
     if (_running) {
       _followUp = true;
       return;
@@ -77,7 +84,10 @@ class CloudSyncActivitySyncService {
         await debugRun!(pullDue);
       } else {
         final engine = await CloudSyncEngine.create();
-        await engine.run(pull: pullDue, push: true);
+        final result = await engine.run(pull: pullDue, push: true);
+        if (result.hasErrors) {
+          throw CloudSyncException(result.errors.first);
+        }
         await CloudSyncSettings.saveState(
           (await CloudSyncSettings.loadState()).copyWith(
             lastAutoSyncAt: DateTime.now(),
@@ -115,7 +125,8 @@ class CloudSyncActivitySyncService {
       }
       if (_followUp) {
         _followUp = false;
-        unawaited(_flush());
+        _followUpTimer?.cancel();
+        _followUpTimer = Timer(followUpDelay, () => unawaited(_flush()));
       }
     }
   }
@@ -124,9 +135,12 @@ class CloudSyncActivitySyncService {
   static void resetForTesting() {
     _debounceTimer?.cancel();
     _debounceTimer = null;
+    _followUpTimer?.cancel();
+    _followUpTimer = null;
     _running = false;
     _followUp = false;
     debounce = const Duration(seconds: 2);
+    followUpDelay = const Duration(seconds: 2);
     debugRun = null;
     debugPendingCount = null;
     debugConfig = null;

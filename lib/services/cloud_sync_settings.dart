@@ -461,6 +461,9 @@ class CloudSyncSettings {
   static const String _stateKey = 'cloud_sync_state_v1';
   static const String _deviceIdKey = 'cloud_sync_device_id_v1';
   static const String _deviceNameKey = 'cloud_sync_device_name_v1';
+
+  /// 已重置的旧设备 ID：本机不再把它们当作远端设备拉取。
+  static const String _ignoredDeviceIdsKey = 'cloud_sync_ignored_devices_v1';
   static const String accessKeyStorageKey = 'cloud_sync_access_key';
   static const String secretKeyStorageKey = 'cloud_sync_secret_key';
 
@@ -534,12 +537,40 @@ class CloudSyncSettings {
   }
 
   /// 重新生成设备标识（危险操作：云端会视为一台新设备）。
+  ///
+  /// 旧设备目录不会被删除；把它记入 ignored 列表，避免本机在后续同步中
+  /// 把旧目录当成“其它设备”重放，造成计数类字段翻倍。
   static Future<String> resetDeviceId() async {
     final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_deviceIdKey);
+    if (previous != null &&
+        previous.isNotEmpty &&
+        RegExp(r'^[a-fA-F0-9-]{8,64}$').hasMatch(previous)) {
+      final ignored = (prefs.getStringList(_ignoredDeviceIdsKey) ?? []).toList(
+        growable: true,
+      );
+      if (!ignored.contains(previous)) {
+        ignored.add(previous);
+        await prefs.setStringList(_ignoredDeviceIdsKey, ignored);
+      }
+    }
     final id = const Uuid().v4();
     await prefs.setString(_deviceIdKey, id);
     await prefs.remove(_deviceNameKey);
     return id;
+  }
+
+  /// 本机已重置/忽略的旧设备 ID（不参与拉取）。
+  static Future<Set<String>> loadIgnoredDeviceIds() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return (prefs.getStringList(_ignoredDeviceIdsKey) ?? const [])
+          .where((id) => id.isNotEmpty)
+          .toSet();
+    } catch (_) {
+      // 设置存储不可用时退化为空集合，不影响正常同步。
+      return <String>{};
+    }
   }
 
   static Future<String> getOrCreateDeviceName(String deviceId) async {
@@ -590,16 +621,17 @@ class CloudSyncSettings {
   }
 
   static Future<CloudSyncRuntimeState> loadState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_stateKey);
-    if (raw == null || raw.isEmpty) {
-      return const CloudSyncRuntimeState();
-    }
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_stateKey);
+      if (raw == null || raw.isEmpty) {
+        return const CloudSyncRuntimeState();
+      }
       final decoded = jsonDecode(raw);
       if (decoded is! Map) return const CloudSyncRuntimeState();
       return CloudSyncRuntimeState.fromJson(decoded.cast<String, dynamic>());
     } catch (_) {
+      // 设置存储不可用或内容损坏时退化为默认状态。
       return const CloudSyncRuntimeState();
     }
   }
