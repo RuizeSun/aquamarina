@@ -15,6 +15,15 @@ class ProfilePage extends StatefulWidget {
 }
 
 class ProfilePageState extends State<ProfilePage> {
+  /// 宽屏断点：达到后切换为「左学习进度 / 右功能入口」双栏布局
+  static const double _wideBreakpoint = 900;
+
+  /// 双栏布局下内容的最大宽度，避免左右两栏被拉得过开
+  static const double _maxWideContentWidth = 1120;
+
+  /// 单栏布局下内容的最大宽度，避免卡片、统计项被无限拉伸
+  static const double _maxNarrowContentWidth = 800;
+
   /// 外部调用以刷新数据（供 MainShell 切 tab 时使用）
   void refresh() => _loadData();
 
@@ -67,28 +76,103 @@ class ProfilePageState extends State<ProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final isWide = screenWidth >= _wideBreakpoint;
+    // 宽屏时内容收窄并居中，否则头像、统计项与入口箭头会被推到窗口两端。
+    final maxContentWidth = isWide
+        ? _maxWideContentWidth
+        : _maxNarrowContentWidth;
+    final horizontalInset = screenWidth > maxContentWidth
+        ? (screenWidth - maxContentWidth) / 2
+        : 0.0;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('个人'), centerTitle: false),
+      appBar: AppBar(
+        title: const Text('个人'),
+        centerTitle: false,
+        // 让标题与下方内容左边缘对齐，而不是贴着窗口最左侧
+        titleSpacing: horizontalInset + 16,
+      ),
       body: RefreshIndicator(
         onRefresh: _loadData,
         child: ListView(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          padding: EdgeInsets.symmetric(
+            vertical: 8,
+            horizontal: horizontalInset,
+          ),
           children: [
-            _buildProfileHeader(context),
-            const SizedBox(height: 16),
-            if (_isLoading)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else ...[
-              _buildStatsCard(context),
-              const SizedBox(height: 8),
-            ],
-            const Divider(),
-            _buildEntryList(context),
+            isWide ? _buildWideLayout(context) : _buildNarrowLayout(context),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 窄屏 / 中屏：个人信息 + 学习进度 + 功能入口纵向排列
+  Widget _buildNarrowLayout(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildProfileHeader(context),
+        const SizedBox(height: 16),
+        if (_isLoading)
+          const Padding(
+            padding: EdgeInsets.all(24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else ...[
+          _buildStatsCard(context),
+          const SizedBox(height: 8),
+        ],
+        const Divider(),
+        _buildEntryList(context),
+      ],
+    );
+  }
+
+  /// 宽屏：左侧学习进度、右侧功能入口，提高横向空间利用率
+  Widget _buildWideLayout(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildProfileHeader(context),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  key: const ValueKey('profile-progress-column'),
+                  child: _isLoading
+                      ? _buildStatsLoadingCard()
+                      : _buildStatsCard(context, margin: EdgeInsets.zero),
+                ),
+              ),
+              const SizedBox(width: 24),
+              Expanded(
+                flex: 2,
+                child: SizedBox(
+                  key: const ValueKey('profile-options-column'),
+                  child: _buildEntryCard(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 学习进度加载中的占位卡片（宽屏左栏）
+  Widget _buildStatsLoadingCard() {
+    return const Card(
+      margin: EdgeInsets.zero,
+      child: SizedBox(
+        height: 220,
+        child: Center(child: CircularProgressIndicator()),
       ),
     );
   }
@@ -99,6 +183,7 @@ class ProfilePageState extends State<ProfilePage> {
     final colorScheme = theme.colorScheme;
 
     return Padding(
+      key: const ValueKey('profile-header'),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
@@ -138,7 +223,10 @@ class ProfilePageState extends State<ProfilePage> {
   }
 
   /// 学习统计卡片
-  Widget _buildStatsCard(BuildContext context) {
+  Widget _buildStatsCard(
+    BuildContext context, {
+    EdgeInsetsGeometry margin = const EdgeInsets.symmetric(horizontal: 16),
+  }) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final stats = _stats;
@@ -151,7 +239,7 @@ class ProfilePageState extends State<ProfilePage> {
     );
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
+      margin: margin,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () {
@@ -299,8 +387,46 @@ class ProfilePageState extends State<ProfilePage> {
     );
   }
 
+  /// 宽屏右栏的功能入口卡片
+  Widget _buildEntryCard(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.apps_rounded,
+                  size: 18,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '快捷入口',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          _buildEntryList(context, divided: true),
+        ],
+      ),
+    );
+  }
+
   /// 功能入口列表
-  Widget _buildEntryList(BuildContext context) {
+  Widget _buildEntryList(BuildContext context, {bool divided = false}) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Column(
@@ -316,6 +442,7 @@ class ProfilePageState extends State<ProfilePage> {
             ).push(MaterialPageRoute(builder: (context) => const NotesPage()));
           },
         ),
+        if (divided) const Divider(height: 1, indent: 56, endIndent: 16),
         ListTile(
           leading: Icon(
             Icons.star_outline_rounded,
@@ -330,6 +457,7 @@ class ProfilePageState extends State<ProfilePage> {
             );
           },
         ),
+        if (divided) const Divider(height: 1, indent: 56, endIndent: 16),
         ListTile(
           leading: Icon(Icons.settings_outlined, color: colorScheme.primary),
           title: const Text('设置'),
