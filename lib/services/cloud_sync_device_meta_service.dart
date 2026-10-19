@@ -7,6 +7,33 @@ import 'cloud_sync_settings.dart';
 import 'log_service.dart';
 import 's3_storage_service.dart';
 
+/// 以有限并发执行异步任务。
+///
+/// 设备元数据是彼此独立的小对象请求。串行执行会把每次往返的 RTT 累加
+/// 起来（设备越多越慢），而对象存储通常可以轻松承受少量并发 GET。
+/// [concurrency] 保持较小值，避免触发部分服务商的并发限流。
+Future<void> runWithConcurrency<T>(
+  Iterable<T> items,
+  Future<void> Function(T item) action, {
+  int concurrency = 4,
+}) async {
+  final list = items.toList(growable: false);
+  if (list.isEmpty) return;
+  final limit = concurrency < 1 ? 1 : concurrency;
+  var next = 0;
+  Future<void> worker() async {
+    while (true) {
+      final index = next++;
+      if (index >= list.length) return;
+      await action(list[index]);
+    }
+  }
+
+  await Future.wait([
+    for (var i = 0; i < limit && i < list.length; i++) worker(),
+  ]);
+}
+
 /// 设备级同步元数据（`meta.json` / `head.json` / `state.json`）的读写入口。
 ///
 /// 读取失败（对象不存在、内容损坏、权限不足）一律降级为 null，

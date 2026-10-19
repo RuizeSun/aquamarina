@@ -249,14 +249,17 @@ class CloudSyncService {
   ///
   /// 先用 CommonPrefixes 发现设备目录，再按设备读取 `manifest.json`，
   /// 避免为了找清单而递归列举全部 chunk。
+  ///
+  /// 每台设备的清单读取互不依赖，使用有限并发，避免设备较多时把
+  /// 所有 RTT 串行累加。
   Future<List<CloudDeviceSummary>> listDevices() async {
     final meta = CloudSyncDeviceMetaService(config: config, storage: storage);
     final deviceIds = await meta.listDeviceIds();
     final summaries = <CloudDeviceSummary>[];
-    for (final deviceId in deviceIds) {
+    await runWithConcurrency<String>(deviceIds, (deviceId) async {
       try {
         final manifest = await fetchManifest(deviceId);
-        if (manifest == null) continue;
+        if (manifest == null) return;
         summaries.add(
           CloudDeviceSummary(
             manifest: manifest,
@@ -267,7 +270,7 @@ class CloudSyncService {
         // 单个设备的清单损坏不应阻塞其它设备
         logWarning('CloudSync', '跳过损坏的云端清单 device=$deviceId: $e');
       }
-    }
+    });
     summaries.sort(
       (a, b) => b.manifest.updatedAt.compareTo(a.manifest.updatedAt),
     );

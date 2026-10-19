@@ -25,64 +25,79 @@ class _CloudSyncDevicesPageState extends State<CloudSyncDevicesPage> {
   Future<_DeviceListData> _load() async {
     final service = await CloudSyncService.create();
     final currentId = await CloudSyncSettings.getOrCreateDeviceId();
+    final currentName = await CloudSyncSettings.getOrCreateDeviceName(
+      currentId,
+    );
     final meta = CloudSyncDeviceMetaService(
       config: service.config,
       storage: service.storage,
     );
     final ids = await meta.listDeviceIds();
-    final summaries = await service.listDevices();
-    final names = {
-      for (final item in summaries)
-        item.manifest.deviceId: item.manifest.deviceName,
-    };
 
+    // 设备之间互不依赖：并发读取，避免设备较多时把每个 RTT 串行累加。
+    // 注意不要调用 service.listDevices()：v2 起云端只写
+    // dataset/manifest.json，逐设备 manifest 已不存在，那会为每台设备
+    // 白白多打一次 404 请求。
     final devices = <String, _DeviceInfo>{};
-    for (final id in ids) {
-      var info = _DeviceInfo(name: names[id]);
-      final metaRead = await meta.readMeta(id);
-      if (metaRead.value != null) {
-        final value = metaRead.value!;
-        info = info.copyWith(
-          name: value.deviceName,
-          appVersion: value.appVersion,
-          schemaVersion: value.schemaVersion,
-          protocolVersion: value.syncProtocolVersion,
-          platform: value.platform,
-          lastSeen: value.lastSeen,
-          newerFormat: metaRead.isNewerFormat,
-          metadataError: metaRead.isCorrupted || metaRead.isError,
-        );
-      } else {
-        // 旧数据 / 只上传过快照的设备：回退到 head / state 中的名称；
-        // head 也可能带有版本信息。
-        final headRead = await meta.readHead(id);
-        final head = headRead.value;
-        final stateRead = await meta.readState(id);
-        final state = stateRead.value;
-        info = info.copyWith(
-          name: head?.deviceName ?? state?.deviceName,
-          appVersion: head?.appVersion,
-          schemaVersion: head?.schemaVersion,
-          protocolVersion: head?.syncProtocolVersion,
-          lastSeen: head?.updatedAt ?? state?.updatedAt,
-          newerFormat:
-              metaRead.isNewerFormat ||
-              headRead.isNewerFormat ||
-              stateRead.isNewerFormat,
-          metadataError:
-              metaRead.isCorrupted ||
-              metaRead.isError ||
-              headRead.isCorrupted ||
-              stateRead.isCorrupted,
-        );
-      }
-      devices[id] = info;
-    }
+    await runWithConcurrency<String>(ids, (id) async {
+      devices[id] = await _readDeviceInfo(
+        meta,
+        id,
+        fallbackName: id == currentId ? currentName : null,
+      );
+    });
     return _DeviceListData(
       currentId: currentId,
       deviceIds: ids,
       devices: devices,
       localSchemaVersion: DatabaseService.schemaVersion,
+    );
+  }
+
+  Future<_DeviceInfo> _readDeviceInfo(
+    CloudSyncDeviceMetaService meta,
+    String id, {
+    String? fallbackName,
+  }) async {
+    final metaRead = await meta.readMeta(id);
+    if (metaRead.value != null) {
+      final value = metaRead.value!;
+      return _DeviceInfo(
+        name: value.deviceName.trim().isEmpty ? fallbackName : value.deviceName,
+        appVersion: value.appVersion,
+        schemaVersion: value.schemaVersion,
+        protocolVersion: value.syncProtocolVersion,
+        platform: value.platform,
+        lastSeen: value.lastSeen,
+        newerFormat: metaRead.isNewerFormat,
+        metadataError: metaRead.isCorrupted || metaRead.isError,
+      );
+    }
+
+    // 旧数据 / 只上传过快照的设备：回退到 head / state 中的名称；
+    // head 也可能带有版本信息。两个请求同时发出，避免再串行等两轮。
+    final headFuture = meta.readHead(id);
+    final stateFuture = meta.readState(id);
+    final headRead = await headFuture;
+    final stateRead = await stateFuture;
+    final head = headRead.value;
+    final state = stateRead.value;
+    final name = (head?.deviceName ?? state?.deviceName)?.trim();
+    return _DeviceInfo(
+      name: name == null || name.isEmpty ? fallbackName : name,
+      appVersion: head?.appVersion,
+      schemaVersion: head?.schemaVersion,
+      protocolVersion: head?.syncProtocolVersion,
+      lastSeen: head?.updatedAt ?? state?.updatedAt,
+      newerFormat:
+          metaRead.isNewerFormat ||
+          headRead.isNewerFormat ||
+          stateRead.isNewerFormat,
+      metadataError:
+          metaRead.isCorrupted ||
+          metaRead.isError ||
+          headRead.isCorrupted ||
+          stateRead.isCorrupted,
     );
   }
 
@@ -208,26 +223,4 @@ class _DeviceInfo {
     this.newerFormat = false,
     this.metadataError = false,
   });
-
-  _DeviceInfo copyWith({
-    String? name,
-    String? appVersion,
-    int? schemaVersion,
-    int? protocolVersion,
-    String? platform,
-    DateTime? lastSeen,
-    bool? newerFormat,
-    bool? metadataError,
-  }) {
-    return _DeviceInfo(
-      name: name ?? this.name,
-      appVersion: appVersion ?? this.appVersion,
-      schemaVersion: schemaVersion ?? this.schemaVersion,
-      protocolVersion: protocolVersion ?? this.protocolVersion,
-      platform: platform ?? this.platform,
-      lastSeen: lastSeen ?? this.lastSeen,
-      newerFormat: newerFormat ?? this.newerFormat,
-      metadataError: metadataError ?? this.metadataError,
-    );
-  }
 }
