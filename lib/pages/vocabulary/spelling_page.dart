@@ -1,6 +1,8 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../services/learning_service.dart';
 import '../../services/log_service.dart';
 import '../../services/study_timer_service.dart';
@@ -147,9 +149,36 @@ class _SpellingPageState extends State<SpellingPage>
     });
     _animController.forward(from: 0);
     // 等待动画后聚焦输入框
+    _focusInput();
+  }
+
+  /// 当前是否为移动端平台。
+  bool get _isMobilePlatform =>
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+
+  /// 聚焦输入框，并在移动端强制弹出系统软键盘。
+  ///
+  /// 放到下一帧执行，确保输入框已完成重建（例如从结果态回到输入态）。
+  void _focusInput() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _inputFocus.requestFocus();
+      if (!mounted) return;
+      _inputFocus.requestFocus();
+      if (_isMobilePlatform) {
+        SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+      }
     });
+  }
+
+  /// 处理输入框提交（电脑端 Enter / 手机键盘完成键）。
+  ///
+  /// 结果展示阶段按 Enter 直接进入下一个词，无需再用鼠标点击「下一个」。
+  void _handleSubmitted() {
+    if (_showingResult) {
+      _onNext();
+    } else {
+      _onSubmit();
+    }
   }
 
   /// 确认拼写
@@ -177,6 +206,10 @@ class _SpellingPageState extends State<SpellingPage>
       _lastCorrect = correct;
     });
     _animController.forward(from: 0);
+    // 提交后重新聚焦输入框：
+    // - 电脑端可继续按 Enter 进入下一个词；
+    // - 手机端保持软键盘打开。
+    _focusInput();
   }
 
   /// 进入下一个词；拼错且未达上限的词追加到队列末尾
@@ -306,11 +339,14 @@ class _SpellingPageState extends State<SpellingPage>
           TextField(
             controller: _inputController,
             focusNode: _inputFocus,
-            enabled: !_showingResult,
             autofocus: true,
             autocorrect: false,
             enableSuggestions: false,
             textCapitalization: TextCapitalization.none,
+            textInputAction: TextInputAction.done,
+            // 阻止 TextInputAction.done 的默认失焦行为，
+            // 否则提交后按 Enter 无法再次触发 onSubmitted。
+            onEditingComplete: () {},
             textAlign: TextAlign.center,
             style: theme.textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.w600,
@@ -323,7 +359,7 @@ class _SpellingPageState extends State<SpellingPage>
               filled: true,
               fillColor: colorScheme.surface,
             ),
-            onSubmitted: (_) => _onSubmit(),
+            onSubmitted: (_) => _handleSubmitted(),
           ),
           const SizedBox(height: 24),
           // 结果区域
