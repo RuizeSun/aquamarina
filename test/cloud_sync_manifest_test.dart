@@ -5,6 +5,12 @@ import 'package:flutter_test/flutter_test.dart';
 
 String _fakeSha(String char) => List.filled(64, char).join();
 
+const String _deviceA = '11111111-1111-4111-8111-111111111111';
+const String _deviceB = '22222222-2222-4222-8222-222222222222';
+
+String _datasetSnapshotKey(String deviceId) =>
+    'aquamarina/dataset/snapshots/20261018T120000000Z-$deviceId.zip';
+
 CloudSnapshotInfo _snapshot(String key, DateTime createdAt) {
   return CloudSnapshotInfo(
     key: key,
@@ -15,7 +21,10 @@ CloudSnapshotInfo _snapshot(String key, DateTime createdAt) {
   );
 }
 
-CloudDeviceManifest _manifest(List<CloudSnapshotInfo> snapshots) {
+CloudDeviceManifest _manifest(
+  List<CloudSnapshotInfo> snapshots, {
+  List<String> contributors = const [],
+}) {
   return CloudDeviceManifest(
     deviceId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     deviceName: 'Windows-abcd',
@@ -23,6 +32,7 @@ CloudDeviceManifest _manifest(List<CloudSnapshotInfo> snapshots) {
     appVersion: '1.3.0+22',
     updatedAt: DateTime.utc(2026, 10, 17),
     snapshots: snapshots,
+    contributors: contributors,
   );
 }
 
@@ -72,6 +82,82 @@ void main() {
       expect(restored.deviceId, manifest.deviceId);
       expect(restored.schemaVersion, 12);
       expect(restored.appVersion, '1.3.0+22');
+    });
+
+    test('contributors 随清单往返，旧清单缺省为空', () {
+      final manifest = _manifest(
+        [_snapshot(_datasetSnapshotKey(_deviceA), DateTime.utc(2026, 10, 17))],
+        contributors: [_deviceA, _deviceB],
+      );
+      final restored = CloudSyncUtils.parseManifest(
+        CloudSyncUtils.encodeManifest(manifest),
+      );
+      expect(restored.contributors, [_deviceA, _deviceB]);
+
+      final legacyJson = _manifest([]).toJson();
+      expect(legacyJson.containsKey('contributors'), isFalse);
+      expect(CloudDeviceManifest.fromJson(legacyJson).contributors, isEmpty);
+    });
+
+    test('拒绝非法的 contributors', () {
+      final json = _manifest([]).toJson();
+      json['contributors'] = 'device-a';
+      expect(
+        () => CloudDeviceManifest.fromJson(json),
+        throwsA(isA<FormatException>()),
+      );
+
+      json['contributors'] = ['device-a', 1];
+      expect(
+        () => CloudDeviceManifest.fromJson(json),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('旧清单可从快照 key 反推贡献设备', () {
+      expect(
+        CloudSyncUtils.snapshotUploaderDeviceId(_datasetSnapshotKey(_deviceA)),
+        _deviceA,
+      );
+      expect(
+        CloudSyncUtils.snapshotContributorIds([
+          _snapshot(_datasetSnapshotKey(_deviceA), DateTime.utc(2026, 10, 17)),
+          _snapshot(_datasetSnapshotKey(_deviceB), DateTime.utc(2026, 10, 16)),
+          _snapshot('snapshots/old-format.zip', DateTime.utc(2026, 10, 15)),
+        ]),
+        {_deviceA, _deviceB},
+      );
+    });
+
+    test('resolveContributorIds 合并保留、替换重置', () {
+      final snapshots = [
+        _snapshot(_datasetSnapshotKey(_deviceB), DateTime.utc(2026, 10, 17)),
+      ];
+      expect(
+        CloudSyncUtils.resolveContributorIds(
+          stored: const [],
+          snapshots: snapshots,
+          deviceId: _deviceA,
+        ),
+        unorderedEquals([_deviceB, _deviceA]),
+      );
+      expect(
+        CloudSyncUtils.resolveContributorIds(
+          stored: const [],
+          snapshots: snapshots,
+          deviceId: _deviceA,
+          reset: true,
+        ),
+        [_deviceA],
+      );
+      expect(
+        CloudSyncUtils.resolveContributorIds(
+          stored: const [_deviceB],
+          snapshots: const [],
+          deviceId: _deviceA,
+        ),
+        [_deviceB, _deviceA],
+      );
     });
 
     test('拒绝过新的格式版本', () {

@@ -538,6 +538,7 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           final info = await service.uploadSnapshot(
             includeApiKeys: includeApiKeys,
             startNewDataset: true,
+            resetContributors: true,
             isCancelled: () => cancelToken.isCancelled,
             onProgress: (sent, total) {
               final percent = total <= 0 ? 0 : (sent * 100 / total).round();

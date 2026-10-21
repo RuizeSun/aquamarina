@@ -75,7 +75,9 @@ flutter test test/cloud_sync_s3_integration_test.dart
      - **以本机为准**：忽略云端历史，本机数据成为新的云端统一数据；
      - **以云端为准**：用云端统一快照覆盖本机，并自动保留本机安全副本。
    - 选择后自动执行，不需要用户手动上传备份或恢复。
-   - 选择结果按 `datasetId` 记录，同一设备不重复询问；合并/替换会产生新的 datasetId，让其它设备重新确认一次。
+   - 选择结果按 `datasetId` 记录，同一设备不重复询问。
+   - 合并时若本机历史数据尚未进入该数据集（`contributors` 不含本机），上传新快照并更换 datasetId，让其它设备合并一次；若本机已贡献过，则只做本地合并，不再换 datasetId，避免两端来回确认。
+   - 「以本机为准」和手动上传替换云端会重置 `contributors` 并更换 datasetId，其它设备需要重新确认。
 4. **云端统一快照**
    - 「立即上传备份」：把本机数据库 + 设置打包为 ZIP，更新云端统一快照；
    - 自动检查点：每 7 天或累计 5000 条变更更新一份统一快照；
@@ -182,10 +184,11 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
   "device_name": "...",
   "schema_version": 14,
   "app_version": "1.3.0+22",
+  "contributors": ["device-a-id", "device-b-id"],
   "updated_at": "...",
   "snapshots": [
     {
-      "key": ".../snapshots/20261017T130719123Z.zip",
+      "key": ".../snapshots/20261017T130719123Z-device-a-id.zip",
       "size": 1834200,
       "sha256": "…",
       "created_at": "...",
@@ -194,6 +197,8 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
   ]
 }
 ```
+
+- `contributors`：已经把自己的数据合并进该数据集的设备 ID。合并后若本机已在其中，只更新本机、不再更换 datasetId；旧清单没有该字段时，客户端会从快照 key 的上传者反推。旧版本客户端不认识该字段，上传时会丢掉它，可能导致多一次确认；升级后下一次上传会重新写入。
 
 ### 2.5 事件模型
 

@@ -125,6 +125,17 @@ class CloudDeviceManifest {
   final DateTime updatedAt;
   final List<CloudSnapshotInfo> snapshots;
 
+  /// 已经把本机数据合并进该数据集的设备 ID。
+  ///
+  /// 用于判断合并后是否还需要生成新的 datasetId：
+  /// - 本机已在列表中：历史数据已经包含在云端快照里，合并后只需更新本机；
+  /// - 本机不在列表中：首次贡献数据，需要上传新快照并更换 datasetId，
+  ///   让其它设备合并这份新数据。
+  ///
+  /// 旧版清单没有该字段，读取时为空；调用方可用
+  /// [CloudSyncUtils.snapshotContributorIds] 从快照 key 反推上传者。
+  final List<String> contributors;
+
   const CloudDeviceManifest({
     this.formatVersion = currentFormatVersion,
     required this.deviceId,
@@ -135,6 +146,7 @@ class CloudDeviceManifest {
     this.minProtocolVersion,
     required this.updatedAt,
     required this.snapshots,
+    this.contributors = const [],
   });
 
   CloudSnapshotInfo? get latest => snapshots.isEmpty ? null : snapshots.first;
@@ -174,6 +186,7 @@ class CloudDeviceManifest {
     }
     final minSchemaVersion = _optionalInt(json['min_schema_version']);
     final minProtocolVersion = _optionalInt(json['min_protocol_version']);
+    final contributors = _parseContributors(json['contributors']);
     final snapshots = rawSnapshots.map((e) {
       if (e is! Map) {
         throw const FormatException('快照条目格式错误');
@@ -191,6 +204,7 @@ class CloudDeviceManifest {
       minProtocolVersion: minProtocolVersion,
       updatedAt: DateTime.parse(updatedAt),
       snapshots: snapshots,
+      contributors: contributors,
     );
   }
 
@@ -202,6 +216,7 @@ class CloudDeviceManifest {
     'app_version': appVersion,
     if (minSchemaVersion != null) 'min_schema_version': minSchemaVersion,
     if (minProtocolVersion != null) 'min_protocol_version': minProtocolVersion,
+    if (contributors.isNotEmpty) 'contributors': contributors,
     'updated_at': updatedAt.toUtc().toIso8601String(),
     'snapshots': snapshots.map((e) => e.toJson()).toList(),
   };
@@ -236,6 +251,7 @@ class CloudDeviceManifest {
     int? minProtocolVersion,
     DateTime? updatedAt,
     List<CloudSnapshotInfo>? snapshots,
+    List<String>? contributors,
   }) {
     return CloudDeviceManifest(
       formatVersion: formatVersion,
@@ -247,8 +263,24 @@ class CloudDeviceManifest {
       minProtocolVersion: minProtocolVersion ?? this.minProtocolVersion,
       updatedAt: updatedAt ?? this.updatedAt,
       snapshots: snapshots ?? this.snapshots,
+      contributors: contributors ?? this.contributors,
     );
   }
+}
+
+List<String> _parseContributors(Object? raw) {
+  if (raw == null) return const [];
+  if (raw is! List) {
+    throw const FormatException('清单中的 contributors 格式错误');
+  }
+  final contributors = <String>[];
+  for (final item in raw) {
+    if (item is! String || item.isEmpty) {
+      throw const FormatException('清单中的 contributors 条目格式错误');
+    }
+    contributors.add(item);
+  }
+  return List.unmodifiable(contributors);
 }
 
 int? _optionalInt(Object? value) {
@@ -276,6 +308,10 @@ class CloudDeviceSummary {
 class CloudSyncUtils {
   CloudSyncUtils._();
 
+  /// 设备 ID 只允许十六进制与 `-`，长度 8–64（与设备重置逻辑一致）。
+  /// 用于过滤旧格式/非数据集快照 key，避免把文件名片段误认成设备 ID。
+  static final RegExp _deviceIdPattern = RegExp(r'^[a-fA-F0-9-]{8,64}$');
+
   /// SHA-256（小写十六进制）。
   static String sha256Hex(List<int> bytes) => sha256.convert(bytes).toString();
 
@@ -299,6 +335,51 @@ class CloudSyncUtils {
       return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
     }
     return '${(bytes / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+  }
+
+  /// 从统一数据集快照 key 中解析上传该快照的设备 ID。
+  ///
+  /// key 形如：
+  /// `{prefix}/dataset/snapshots/20261018T120000000Z-{deviceId}.zip`
+  /// 时间戳部分不含 `-`，因此第一个 `-` 之后直到 `.zip` 就是设备 ID。
+  static String? snapshotUploaderDeviceId(String key) {
+    final name = key.split('/').last;
+    if (!name.endsWith('.zip')) return null;
+    final separator = name.indexOf('-');
+    if (separator <= 0 || separator >= name.length - 4) return null;
+    final id = name.substring(separator + 1, name.length - 4);
+    return _deviceIdPattern.hasMatch(id) ? id : null;
+  }
+
+  /// 旧版清单没有 `contributors` 字段时，从快照 key 反推贡献设备。
+  static Set<String> snapshotContributorIds(
+    Iterable<CloudSnapshotInfo> snapshots,
+  ) {
+    final ids = <String>{};
+    for (final snapshot in snapshots) {
+      final id = snapshotUploaderDeviceId(snapshot.key);
+      if (id != null) ids.add(id);
+    }
+    return ids;
+  }
+
+  /// 计算上传新快照后的 contributors。
+  ///
+  /// - [stored] 是清单里已有的 contributors；非空时以它为准；
+  /// - 旧清单没有该字段时，从 [snapshots] 的上传者反推；
+  /// - [reset] 为 true 表示“以本机为准 / 手动上传替换云端”，
+  ///   新数据集只记录本机，其它设备需要重新确认。
+  static List<String> resolveContributorIds({
+    required Iterable<String> stored,
+    required Iterable<CloudSnapshotInfo> snapshots,
+    required String deviceId,
+    bool reset = false,
+  }) {
+    final base = reset
+        ? const <String>[]
+        : (stored.isNotEmpty ? stored : snapshotContributorIds(snapshots));
+    final ids = <String>{...base, if (deviceId.isNotEmpty) deviceId};
+    return ids.toList(growable: false);
   }
 
   /// 解析清单字节流（UTF-8 JSON），失败时抛出 [FormatException]。

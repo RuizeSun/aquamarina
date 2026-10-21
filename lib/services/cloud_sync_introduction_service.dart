@@ -96,6 +96,19 @@ class CloudSyncIntroductionService {
     );
   }
 
+  /// 本机是否已经把自己的数据合并进该数据集。
+  ///
+  /// 旧版清单没有 `contributors` 字段，退化为从快照 key 反推上传者。
+  /// 已经贡献过数据的设备再次合并时不需要上传/更换 datasetId，
+  /// 否则两端会互相把对方重新变成“未确认”状态，形成确认循环。
+  static bool hasContributed(CloudDeviceManifest? manifest, String deviceId) {
+    if (manifest == null || deviceId.isEmpty) return false;
+    final contributors = manifest.contributors.isNotEmpty
+        ? manifest.contributors.toSet()
+        : CloudSyncUtils.snapshotContributorIds(manifest.snapshots);
+    return contributors.contains(deviceId);
+  }
+
   /// 执行用户选择。整个过程在全局同步锁内串行完成。
   static Future<CloudSyncMergeResult?> apply(
     CloudSyncIntroAction action, {
@@ -136,6 +149,7 @@ class CloudSyncIntroductionService {
 
       switch (action) {
         case CloudSyncIntroAction.merge:
+          final alreadyContributed = hasContributed(manifest, service.deviceId);
           onProgress?.call('正在下载云端数据…');
           final file = await service.downloadLatestDatasetSnapshot();
           try {
@@ -151,19 +165,30 @@ class CloudSyncIntroductionService {
               baseline: result.snapshotCreatedAt ?? manifest!.latest!.createdAt,
               backendId: service.config.backendIdentity,
             );
-            onProgress?.call('正在上传合并后的云端数据…');
-            await service.uploadSnapshot(
-              includeApiKeys: false,
-              startNewDataset: true,
-            );
-            final updated = await service.fetchDatasetManifest();
-            await CloudSyncSettings.saveIntroDecision(
-              updated?.deviceId ?? datasetId,
-              action.storageValue,
-            );
+            if (alreadyContributed) {
+              // 本机历史数据已经在云端快照里，合并后不需要换 datasetId；
+              // 否则另一端会因为 datasetId 变化再次确认，两端来回换 ID。
+              onProgress?.call('正在保存合并结果…');
+              await CloudSyncSettings.saveIntroDecision(
+                datasetId,
+                action.storageValue,
+              );
+              logInfo('CloudSyncIntro', '本机已贡献该数据集，合并后保持 datasetId=$datasetId');
+            } else {
+              onProgress?.call('正在上传合并后的云端数据…');
+              await service.uploadSnapshot(
+                includeApiKeys: false,
+                startNewDataset: true,
+              );
+              final updated = await service.fetchDatasetManifest();
+              await CloudSyncSettings.saveIntroDecision(
+                updated?.deviceId ?? datasetId,
+                action.storageValue,
+              );
+            }
             logInfo(
               'CloudSyncIntro',
-              '首次接入合并完成 inserted=${result.inserted} '
+              '合并完成 inserted=${result.inserted} '
                   'updated=${result.updated} conflicts=${result.conflicts}',
             );
             if (result.inserted > 0 || result.updated > 0) {
@@ -185,6 +210,7 @@ class CloudSyncIntroductionService {
           await service.uploadSnapshot(
             includeApiKeys: false,
             startNewDataset: true,
+            resetContributors: true,
           );
           final updated = await service.fetchDatasetManifest();
           await CloudSyncSettings.saveIntroDecision(

@@ -281,11 +281,16 @@ class CloudSyncService {
   ///
   /// [startNewDataset] 为 true 时会生成新的 datasetId，用于“以本机为准”
   /// 替换云端数据：其它设备看到新的 datasetId 后会重新确认接入方式。
+  ///
+  /// [resetContributors] 只应和 [startNewDataset] 一起用于“替换云端”：
+  /// 新数据集只记录本机；普通合并会保留旧 contributors 并加入本机，
+  /// 供 [CloudSyncIntroductionService] 判断是否需要再次换 datasetId。
   Future<CloudSnapshotInfo> uploadSnapshot({
     required bool includeApiKeys,
     void Function(int sent, int total)? onProgress,
     bool Function()? isCancelled,
     bool startNewDataset = false,
+    bool resetContributors = false,
   }) {
     // 与增量同步、恢复、设备删除共用同一把全局锁，避免 manifest / 数据库
     // 文件被并发读写。
@@ -295,6 +300,7 @@ class CloudSyncService {
         onProgress: onProgress,
         isCancelled: isCancelled,
         startNewDataset: startNewDataset,
+        resetContributors: resetContributors,
       ),
     );
   }
@@ -343,6 +349,7 @@ class CloudSyncService {
     void Function(int sent, int total)? onProgress,
     bool Function()? isCancelled,
     bool startNewDataset = false,
+    bool resetContributors = false,
   }) async {
     await _assertCompatibleForWrite();
     if (_requireSyncedSnapshot) {
@@ -382,6 +389,14 @@ class CloudSyncService {
 
     final appVersion = await _appVersion();
     final existing = await fetchDatasetManifest();
+    // 合并只增加数据，不应把已经贡献过数据的设备从 contributors 里抹掉；
+    // 只有“以本机为准 / 手动上传替换云端”才重置为新数据集。
+    final contributors = CloudSyncUtils.resolveContributorIds(
+      stored: existing?.contributors ?? const <String>[],
+      snapshots: existing?.snapshots ?? const <CloudSnapshotInfo>[],
+      deviceId: deviceId,
+      reset: startNewDataset && resetContributors,
+    );
     final base = startNewDataset
         ? CloudDeviceManifest(
             // 生成新的 datasetId，让其它设备重新确认；旧快照仍保留在清单里，
@@ -419,6 +434,7 @@ class CloudSyncService {
             base.minProtocolVersion ?? 0,
             SyncOp.currentVersion,
           ),
+          contributors: contributors,
         )
         .addSnapshot(snapshot, retainCount: config.retainCount);
 
