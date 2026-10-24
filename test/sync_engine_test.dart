@@ -393,6 +393,46 @@ void main() {
       expect(rows.single['review_count'], 1);
     });
 
+    test('seq 被复用时按 HLC 视为新操作，而不是已应用', () async {
+      // 模拟设备从快照恢复后 oplog 序列从 1 重新开始：
+      // 同一个 (device, entity, seq) 出现两次，但 HLC 不同。
+      final first = makeOp(
+        entity: 'user_word_records',
+        seq: 1,
+        hlcMs: 1000,
+        key: {'word': 'apple'},
+        data: {
+          'stage': 1,
+          'last_reviewed_at': '2026-10-01T00:00:00Z',
+          'created_at': '2026-10-01T00:00:00Z',
+        },
+        delta: {'review_count': 1},
+      );
+      var result = await SyncApplyService.applyOps([first], db: db);
+      expect(result.applied, 1);
+
+      final reusedSeq = makeOp(
+        entity: 'user_word_records',
+        seq: 1,
+        hlcMs: 2000,
+        key: {'word': 'apple'},
+        data: {'stage': 2, 'last_reviewed_at': '2026-10-02T00:00:00Z'},
+        delta: {'review_count': 1},
+      );
+      result = await SyncApplyService.applyOps([reusedSeq], db: db);
+      expect(result.duplicates, 0);
+      expect(result.applied, 1);
+      var rows = await db.query('user_word_records');
+      expect(rows.single['stage'], 2);
+      expect(rows.single['review_count'], 2);
+
+      // 同一 HLC 的 chunk 重传仍然幂等，不会再次累加计数。
+      result = await SyncApplyService.applyOps([reusedSeq], db: db);
+      expect(result.duplicates, 1);
+      rows = await db.query('user_word_records');
+      expect(rows.single['review_count'], 2);
+    });
+
     test('自然时间戳较旧的远端字段不覆盖本地笔记', () async {
       await db.insert('word_notes', {
         'word': 'apple',

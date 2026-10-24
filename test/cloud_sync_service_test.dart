@@ -268,7 +268,7 @@ void main() {
         'device_id': device,
         'entity': 'word_notes',
         'seq': 1,
-        'hlc': null,
+        'hlc': '',
         'applied_at': now,
       });
       await db.insert('sync_chunks', {

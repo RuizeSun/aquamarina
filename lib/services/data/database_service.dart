@@ -11,7 +11,7 @@ import '../cloud/sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 19;
+  static const int schemaVersion = 20;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -388,6 +388,8 @@ class DatabaseService {
         await migrateToV18(db);
         // ── v19：按后端保存来源水位 ──
         await migrateToV19(db);
+        // ── v20：去重键加入 HLC，并重放快照后的远端增量 ──
+        await migrateToV20(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
@@ -553,6 +555,10 @@ class DatabaseService {
         // 18 → 19：按后端保存来源水位
         if (oldVersion < 19) {
           await migrateToV19(db);
+        }
+        // 19 → 20：去重键加入 HLC，修复 seq 复用导致的静默丢操作
+        if (oldVersion < 20) {
+          await migrateToV20(db);
         }
       },
     );
@@ -764,6 +770,21 @@ class DatabaseService {
     logInfo('DatabaseService', 'v19 后端水位缓存 schema 迁移完成');
   }
 
+  /// v19 → v20：同步去重键从 (device, entity, seq) 扩展为
+  /// (device, entity, seq, hlc)，并重放快照之后的远端 chunk。
+  ///
+  /// 快照恢复会重建 oplog 表，使 AUTOINCREMENT 从 1 重新开始。旧 seq 被
+  /// 复用时，只按 seq 去重会把新操作当成已应用而永久丢弃；这里同时修复
+  /// 去重记录，并让曾恢复过快照的设备重新校验基线之后的远端数据。
+  static Future<void> migrateToV20(Database db) async {
+    await SyncSchema.ensure(db);
+    final upgraded = await SyncSchema.upgradeAppliedPrimaryKey(db);
+    final repaired = upgraded
+        ? await SyncSchema.resetRemoteProgressForRepair(db)
+        : false;
+    logInfo('DatabaseService', 'v20 同步去重键迁移完成（重放快照后远端增量：$repaired）');
+  }
+
   /// 从已有 `sync_chunks` 反推每个来源设备的水位，避免升级后
   /// 已同步设备因为 `sync_state` 为空而长期阻塞云端 GC。
   static Future<void> _backfillSyncState(Database db) async {
@@ -937,6 +958,7 @@ class DatabaseService {
           if (oldVersion < 17) await migrateToV17(db);
           if (oldVersion < 18) await migrateToV18(db);
           if (oldVersion < 19) await migrateToV19(db);
+          if (oldVersion < 20) await migrateToV20(db);
         },
       ),
     );

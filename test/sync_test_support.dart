@@ -44,6 +44,7 @@ Future<Database> openSyncTestDb() async {
   await DatabaseService.migrateToV17(db);
   await DatabaseService.migrateToV18(db);
   await DatabaseService.migrateToV19(db);
+  await DatabaseService.migrateToV20(db);
   await SyncSchema.setCaptureEnabled(db, true);
   return db;
 }

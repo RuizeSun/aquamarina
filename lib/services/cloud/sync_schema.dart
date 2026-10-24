@@ -84,9 +84,9 @@ class SyncSchema {
       "device_id" TEXT NOT NULL,
       "entity" TEXT NOT NULL,
       "seq" INTEGER NOT NULL,
-      "hlc" TEXT,
+      "hlc" TEXT NOT NULL DEFAULT '',
       "applied_at" TEXT NOT NULL,
-      PRIMARY KEY ("device_id", "entity", "seq")
+      PRIMARY KEY ("device_id", "entity", "seq", "hlc")
     )
     ''',
     '''
@@ -246,6 +246,86 @@ class SyncSchema {
     for (final sql in systemIndexDdl) {
       await db.execute(sql);
     }
+  }
+
+  /// v19 → v20：去重键加入 HLC。
+  ///
+  /// 旧主键是 (device_id, entity, seq)。设备从快照恢复后，oplog 表由备份
+  /// 导入重建，AUTOINCREMENT 会从 1 重新开始；此时同一设备后续 chunk 会
+  /// 复用旧 seq。若仍只按 seq 去重，新操作会被误判为“已应用”而永久丢弃，
+  /// 但 chunk 水位照常前进，表现为两端都显示同步成功、数据却不同。
+  ///
+  /// 新主键保留 seq，同时加入该 op 的 HLC；重新上传同一 chunk 时 HLC 不变，
+  /// 仍是幂等；seq 被复用时 HLC 不同，会作为新操作应用。
+  /// 返回是否真的重建了表；调用方据此决定是否执行一次性重放修复。
+  static Future<bool> upgradeAppliedPrimaryKey(Database db) async {
+    final columns = await db.rawQuery('PRAGMA table_info("sync_applied")');
+    var hlcIsPrimaryKey = false;
+    for (final column in columns) {
+      if (column['name'] == 'hlc' && ((column['pk'] as int?) ?? 0) > 0) {
+        hlcIsPrimaryKey = true;
+        break;
+      }
+    }
+    if (hlcIsPrimaryKey) return false;
+
+    await db.execute('DROP TABLE IF EXISTS "sync_applied_v20"');
+    await db.execute('''
+      CREATE TABLE "sync_applied_v20" (
+        "device_id" TEXT NOT NULL,
+        "entity" TEXT NOT NULL,
+        "seq" INTEGER NOT NULL,
+        "hlc" TEXT NOT NULL DEFAULT '',
+        "applied_at" TEXT NOT NULL,
+        PRIMARY KEY ("device_id", "entity", "seq", "hlc")
+      )
+    ''');
+    await db.execute('''
+      INSERT OR IGNORE INTO "sync_applied_v20"
+        ("device_id", "entity", "seq", "hlc", "applied_at")
+      SELECT "device_id", "entity", "seq", COALESCE("hlc", ''), "applied_at"
+      FROM "sync_applied"
+    ''');
+    await db.execute('DROP TABLE "sync_applied"');
+    await db.execute('ALTER TABLE "sync_applied_v20" RENAME TO "sync_applied"');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_sync_applied_device_hlc '
+      'ON sync_applied(device_id, hlc)',
+    );
+    return true;
+  }
+
+  /// v20 一次性修复：设备曾用快照恢复过时，重新校验快照之后的远端 chunk。
+  ///
+  /// seq 复用造成的丢失发生在“本机已把该 chunk 记为完成”之后，仅修改
+  /// 去重逻辑不会重读旧 chunk。这里只清掉其它设备的水位与已应用 chunk 记录，
+  /// 保留 sync_applied（HLC 仍匹配的操作会按重复跳过），并保留快照基线，
+  /// 因此下一次同步只会重放快照基线之后的 chunk，不会重复累加历史计数。
+  static Future<bool> resetRemoteProgressForRepair(Database db) async {
+    final rows = await db.query(
+      'sync_meta',
+      columns: ['device_id', 'restored_watermarks', 'baseline_hlc'],
+      where: 'id = 1',
+      limit: 1,
+    );
+    if (rows.isEmpty) return false;
+    final row = rows.first;
+    final ownDeviceId = row['device_id'] as String? ?? '';
+    final restored = ((row['restored_watermarks'] as int?) ?? 0) == 1;
+    final baseline = row['baseline_hlc'] as String? ?? '';
+    if (ownDeviceId.isEmpty || !restored || baseline.isEmpty) return false;
+
+    await db.delete(
+      'sync_state',
+      where: 'device_id != ?',
+      whereArgs: [ownDeviceId],
+    );
+    await db.delete(
+      'sync_chunks',
+      where: 'device_id != ?',
+      whereArgs: [ownDeviceId],
+    );
+    return true;
   }
 
   /// 每条备份 / 恢复水位对应一个来源设备。

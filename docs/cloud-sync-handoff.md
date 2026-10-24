@@ -13,7 +13,7 @@
 - Flutter / Dart：本机 Flutter 3.47 / Dart 3.13；CI 使用 Flutter 3.44.8；`pubspec.yaml` SDK `^3.11.5`。
 - 状态管理：`ChangeNotifier` / 单例服务为主，没有引入 Provider/Riverpod/Bloc。
 - 本地存储：
-  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 19**；
+  - 业务数据：SQLite（`sqflite` + `sqflite_common_ffi`），当前 **schemaVersion = 20**；
   - 设置：`SharedPreferences`；
   - 密钥：`flutter_secure_storage`；
   - 备份：ZIP（`aquamarina.db` + `preferences.json` + 可选 `secure_storage.json` + `backup_meta.json`）。
@@ -114,7 +114,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 - **每台设备只写自己的前缀**：不存在跨设备覆盖同一对象的冲突；
 - **head / state 水位**：其它设备先读 head 判断是否需要 LIST，再按 `startAfter` 只拉增量；
 - **oplog 捕获与业务写入同事务**：数据落库 ⇒ 变更已记录；
-- **chunk 不可变**：重传幂等，远端按 `(device_id, entity, seq)` 去重；
+- **chunk 不可变**：重传幂等，远端按 `(device_id, entity, seq, hlc)` 去重；不能只按 seq，因为快照恢复后 oplog 的 AUTOINCREMENT 会重置并复用旧 seq；
 - **HLC + 行版本 + 墓碑**：乱序/迟到操作不会覆盖新数据；
 - **GC 按水位**：所有活跃设备都应用后才删除 chunk，并同步收缩本地应用记录。
 
@@ -219,7 +219,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 }
 ```
 
-- `seq`：单表内自增，用于 `(device_id, entity, seq)` 去重；
+- `seq`：单表内自增，仅用于本地排序 / 定位；去重键还要包含 `hlc`（`(device_id, entity, seq, hlc)`），避免快照恢复后 seq 复用被误判为重复；
 - `hlc`：混合逻辑时钟（毫秒 + 计数），导出 chunk 时以 oplog 的 `captured_at_ms` 为基准分配并持久化；
 - `op`：`upsert` / `delete` / `bulk`；`bulk` 使用 `items` 数组承载多条实体操作；
 - `delta`：计数类字段增量（复习次数、错题次数、每日统计）；
@@ -230,7 +230,7 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 | 表 | 用途 | 是否清理 |
 |---|---|---|
 | `sync_meta` | 单行：设备 ID、`applying`、HLC、基线、`capture_enabled`、head 水位 / `head_dirty`、`total_ops` | 不清理 |
-| `sync_applied` | 已应用远端 `(device_id, entity, seq)` + `hlc` | GC 删除 chunk 时按 HLC 边界清理 |
+| `sync_applied` | 已应用远端 `(device_id, entity, seq, hlc)` | GC 删除 chunk 时按 HLC 边界清理 |
 | `sync_chunks` | 已应用 chunk key + sha256 + `min_hlc` / `max_hlc` | GC 删除对应远端 chunk 时清理 |
 | `sync_row_versions` | 每实体键的最新 HLC，LWW 门禁 | 不清理（规模≈实体数） |
 | `sync_state` | 每个来源设备已完整应用的最大 chunk 起始 HLC / 最后 chunk key | 随拉取进度更新 |
@@ -640,7 +640,7 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 
 ### 5.3 数据库迁移注意事项
 
-- 当前 `schemaVersion=19`；
+- 当前 `schemaVersion=20`；
 - `migrateToV13` 幂等，负责同步就绪列、oplog、触发器；
 - `migrateToV14` 创建 `sentence_sets` 并再次 `SyncSchema.ensure`；
 - `migrateToV15` 补齐 head/state/应用 HLC 列，并从 chunk 键回填 `sync_chunks.min_hlc`；
@@ -648,6 +648,7 @@ d8adb0f test(cloud-sync): add settings section widget smoke test
 - `migrateToV17` 创建 `oplog_bulk` 与批量 op 索引；
 - `migrateToV18` 为 `sync_meta` 补 `backend_id` / `restored_watermarks`，并创建行版本 HLC 索引；
 - `migrateToV19` 创建 `sync_backend_watermarks`，在切换后端时保存/恢复来源水位；
+- `migrateToV20` 把 `sync_applied` 主键从 `(device_id, entity, seq)` 重建为 `(device_id, entity, seq, hlc)`；对曾恢复过快照的设备清除其它设备的 `sync_state` / `sync_chunks`（保留 `sync_applied` 与快照基线），下次同步会重放基线之后的 chunk，修复因 seq 复用而静默丢失的操作；
 - 修改同步系统表结构（如 `sync_applied` 主键）时：
   - 已发布版本必须新增迁移重建表；
   - 未发布分支可直接改，但要在文档说明；
@@ -712,7 +713,7 @@ flutter test test/cloud_sync_s3_integration_test.dart
 
 ---
 
-## 7. 残余限制（v19 之后）
+## 7. 残余限制（v20 之后）
 
 以下不是阻塞性问题，但仍是后续可改进项：
 

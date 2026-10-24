@@ -344,15 +344,20 @@ class SyncApplyService {
     return appliedAny ? _UpsertOutcome.applied : _UpsertOutcome.skipped;
   }
 
+  /// 去重键必须包含 HLC，不能只看 seq。
+  ///
+  /// 设备从快照恢复后 oplog 的 AUTOINCREMENT 会重新从 1 开始，同一设备会
+  /// 在后续 chunk 中复用旧 seq；只看 seq 会把新操作误判为已应用。
   static bool _isApplied(_ApplyContext ctx, SyncOp op) {
-    final seqs = ctx.applied[op.deviceId]?[op.entity];
-    return seqs != null && seqs.contains(op.seq);
+    final applied = ctx.applied[op.deviceId]?[op.entity];
+    return applied != null &&
+        applied.contains(_appliedKey(op.seq, op.hlc.value));
   }
 
   static void _recordApplied(_ApplyContext ctx, SyncOp op) {
     final byEntity = ctx.applied.putIfAbsent(op.deviceId, () => {});
-    final seqs = byEntity.putIfAbsent(op.entity, () => <int>{});
-    if (!seqs.add(op.seq)) return;
+    final applied = byEntity.putIfAbsent(op.entity, () => <String>{});
+    if (!applied.add(_appliedKey(op.seq, op.hlc.value))) return;
     ctx.appliedRows.add({
       'device_id': op.deviceId,
       'entity': op.entity,
@@ -816,8 +821,8 @@ class SyncApplyService {
 ///
 /// 预载 + 事务末尾批量写回，避免逐条 SELECT / INSERT 占用 SQLite 写锁。
 class _ApplyContext {
-  /// deviceId → entity → 已应用的 seq。
-  final Map<String, Map<String, Set<int>>> applied = {};
+  /// deviceId → entity → 已应用的 (seq, HLC) 去重键。
+  final Map<String, Map<String, Set<String>>> applied = {};
 
   /// `entity\u0000keyFingerprint` → 最新 HLC。
   final Map<String, SyncHlc> versions = {};
@@ -988,7 +993,7 @@ class _ApplyContext {
     final ctx = _ApplyContext();
     if (ops.isEmpty) return ctx;
 
-    // 已应用 seq：按 (device, entity) 一次查询。
+    // 已应用 (seq, HLC)：按 (device, entity) 一次查询。
     final appliedGroups = <String, Set<int>>{};
     for (final op in ops) {
       appliedGroups
@@ -1002,15 +1007,18 @@ class _ApplyContext {
         final slice = seqs.sublist(i, (i + 400).clamp(0, seqs.length));
         final placeholders = List.filled(slice.length, '?').join(',');
         final rows = await txn.rawQuery(
-          'SELECT seq FROM sync_applied '
+          'SELECT seq, hlc FROM sync_applied '
           'WHERE device_id = ? AND entity = ? AND seq IN ($placeholders)',
           [parts[0], parts[1], ...slice],
         );
         final byEntity = ctx.applied.putIfAbsent(parts[0], () => {});
-        final set = byEntity.putIfAbsent(parts[1], () => <int>{});
+        final set = byEntity.putIfAbsent(parts[1], () => <String>{});
         for (final row in rows) {
           final seq = row['seq'];
-          if (seq is int) set.add(seq);
+          final hlc = row['hlc'];
+          if (seq is int) {
+            set.add(_appliedKey(seq, hlc is String ? hlc : ''));
+          }
         }
       }
     }
@@ -1242,3 +1250,9 @@ class _RowWrite {
 }
 
 enum _UpsertOutcome { applied, skipped, pendingParent }
+
+/// 去重键必须包含 HLC，不能只看 seq。
+///
+/// 设备从快照恢复后 oplog 的 AUTOINCREMENT 会重新从 1 开始，同一设备会
+/// 在后续 chunk 中复用旧 seq；只看 seq 会把新操作误判为已应用。
+String _appliedKey(int seq, String hlc) => '$seq\u0000$hlc';

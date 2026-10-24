@@ -54,7 +54,7 @@
 }
 ```
 
-- `seq`：设备内单调递增，用于**恰好一次**去重（`sync_applied(device_id, seq)` 唯一索引）。
+- `seq`：单表内自增，用于 op 的本地定位；**不能单独作为跨设备去重键**，因为快照恢复会重建 oplog 表，`AUTOINCREMENT` 会从 1 重新开始并复用旧 seq。去重键为 `sync_applied(device_id, entity, seq, hlc)`：重传同一 chunk 时 HLC 不变，仍然幂等；seq 被复用时 HLC 不同，会作为新 op 应用。
 - `hlc`：混合逻辑时钟（毫秒时间 + 逻辑计数），用于跨设备确定性排序；`HLC = max(now_ms, last_ms) ++`，相同毫秒用计数推进。应用远端 op 时必须执行 receive 步骤：把本地 HLC 推进到本批远端 op 的最大 HLC，保证“看到远端后再编辑”的本地写入排在远端之后。
 - `op`：`upsert` / `delete` / `bulk`；`bulk` 使用 `items: [{entity,key,data,delta}]` 承载多条实体操作（用于大批量导入，只占一条 seq）。
 - `delta`：仅计数类实体使用（复习次数、错题次数、每日统计）。
@@ -106,7 +106,7 @@ for chunk in pull():
   BEGIN IMMEDIATE
     applying = 1
     for op in sort(chunk.ops):
-      if sync_applied 已存在 (device_id, seq): continue
+      if sync_applied 已存在 (device_id, entity, seq, hlc): continue
       apply(op)
       insert sync_applied
     applying = 0
@@ -225,7 +225,7 @@ for chunk in pull():
 已通过的验证：
 
 - `flutter analyze`：仅剩仓库原有的 9 条 info，无新增告警；
-- 无 S3 环境变量时 247 passed / 4 skipped；设置真实 S3 后 251 passed：含 v13–v19 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、HLC receive、bulk op 版本门禁、本机 chunk 不回放、设备重置隔离、接管完整性保护、后端配置切换与水位缓存、快照来源水位、级联子表墓碑、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
+- 无 S3 环境变量时 247 passed / 4 skipped；设置真实 S3 后 251 passed：含 v13–v20 迁移、捕获开关、触发器、捕获/应用引擎、词书父级重试、墓碑与计数、句式集入库、自动同步配置、前台轮询/事件同步、上传失败与损坏 chunk 重试、gzip/完整 SHA、时间预算、`captured_at_ms` HLC、HLC receive、bulk op 版本门禁、本机 chunk 不回放、设备重置隔离、接管完整性保护、后端配置切换与水位缓存、快照来源水位、级联子表墓碑、冲突解决/清理、检查点退避、流式文件上传下载、网络策略；
 - 真实 Rain S3 集成测试通过（连接自检、设备清单、head/state、**双设备增量同步收敛**）。
 
 ### 当前已知限制
