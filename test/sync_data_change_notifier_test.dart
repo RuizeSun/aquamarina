@@ -1,4 +1,4 @@
-import 'package:aquamarina/services/sync_data_change_notifier.dart';
+import 'package:aquamarina/services/cloud/sync_data_change_notifier.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
-import '../services/ai_sentence_set_service.dart';
+import '../services/ai/ai_sentence_set_service.dart';
 import '../widgets/sentence_note_bar.dart';
 
 class SentenceSetEditPage extends StatefulWidget {

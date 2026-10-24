@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../models/word_book.dart';
-import '../../services/word_book_service.dart';
+import '../../services/data/word_book_service.dart';
 import 'word_book_create_page.dart';
 import 'online_wordbook_list_page.dart';
 

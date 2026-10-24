@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../services/ai_usage_service.dart';
+import '../../../services/ai/ai_usage_service.dart';
 
 /// 时间范围筛选
 enum _AiUsageRange {

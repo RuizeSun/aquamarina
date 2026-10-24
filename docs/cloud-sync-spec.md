@@ -197,28 +197,28 @@ for chunk in pull():
 | 文件 | 职责 |
 |---|---|
 | `lib/models/cloud_sync_manifest.dart` | 清单/快照模型、版本校验、SHA-256、对象键时间戳 |
-| `lib/services/cloud_sync_settings.dart` | 配置校验、Prefs 持久化、Secure Storage 凭据、设备标识 |
-| `lib/services/s3_storage_service.dart` | MinIO 客户端封装、超时、错误中文化、连接自检 |
-| `lib/services/cloud_sync_service.dart` | 统一数据集快照上传/恢复、单一清单维护、历史清理、恢复前本机快照 |
+| `lib/services/cloud/cloud_sync_settings.dart` | 配置校验、Prefs 持久化、Secure Storage 凭据、设备标识 |
+| `lib/services/cloud/s3_storage_service.dart` | MinIO 客户端封装、超时、错误中文化、连接自检 |
+| `lib/services/cloud/cloud_sync_service.dart` | 统一数据集快照上传/恢复、单一清单维护、历史清理、恢复前本机快照 |
 | `lib/pages/settings/cloud_sync_config_page.dart` | 配置表单、连接测试、设备标识管理 |
 | `lib/pages/settings/sections/cloud_sync_section.dart` | 云同步入口、上传、设备选择与恢复 |
-| `lib/services/backup_service.dart` | 新增 `localOnlyPrefPrefix`：云同步配置不进入备份、不被恢复覆盖；恢复后清理快照携带的 oplog 并写入同步基线 |
-| `lib/services/sync_table_spec.dart` | 同步表规格 + oplog 表 / 触发器生成 |
-| `lib/services/sync_schema.dart` | 同步系统表、v13 安装、恢复后运行时状态重置 |
-| `lib/services/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
-| `lib/services/sync_apply_service.dart` | 幂等应用、行版本门禁、计数增量、墓碑、父级重试 |
-| `lib/services/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
-| `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、按配置间隔冷却、并发保护 |
-| `lib/services/cloud_sync_foreground_sync_service.dart` | 前台轮询、生命周期启停、事件同步后重置计时 |
-| `lib/services/cloud_sync_activity_sync_service.dart` | 学习结束事件同步：2 秒防抖、push 优先、按需 pull |
-| `lib/services/cloud_sync_maintenance_service.dart` | 保守 chunk GC（每设备保留最近 1000 个 + 180 天） |
-| `lib/services/ai_sentence_set_service.dart` | 句式集元数据迁入 SQLite（v14），CRUD 走事务并纳入触发器同步 |
-| `lib/services/cloud_sync_checkpoint_service.dart` | 7 天 / 5000 op 自动检查点 |
-| `lib/services/cloud_sync_bootstrap_service.dart` | 新设备空库检测与最新快照引导 |
-| `lib/services/cloud_sync_compatibility_service.dart` | 设备版本采集、schema/协议兼容判定、软提示与硬阻断结论 |
-| `lib/services/cloud_sync_version_gate_service.dart` | 阻断状态持久化、弹窗去重与启动恢复 |
-| `lib/services/cloud_sync_network_service.dart` | 仅 Wi-Fi / 以太网策略 |
-| `lib/services/sync_conflict_store.dart` | 冲突持久化与三种解决动作 |
+| `lib/services/data/backup_service.dart` | 新增 `localOnlyPrefPrefix`：云同步配置不进入备份、不被恢复覆盖；恢复后清理快照携带的 oplog 并写入同步基线 |
+| `lib/services/cloud/sync_table_spec.dart` | 同步表规格 + oplog 表 / 触发器生成 |
+| `lib/services/cloud/sync_schema.dart` | 同步系统表、v13 安装、恢复后运行时状态重置 |
+| `lib/services/cloud/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
+| `lib/services/cloud/sync_apply_service.dart` | 幂等应用、行版本门禁、计数增量、墓碑、父级重试 |
+| `lib/services/cloud/cloud_sync_engine.dart` | 拉取远端 chunk + 推送本机 chunk、基线过滤、消费 `sync_chunks` |
+| `lib/services/cloud/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步、按配置间隔冷却、并发保护 |
+| `lib/services/cloud/cloud_sync_foreground_sync_service.dart` | 前台轮询、生命周期启停、事件同步后重置计时 |
+| `lib/services/cloud/cloud_sync_activity_sync_service.dart` | 学习结束事件同步：2 秒防抖、push 优先、按需 pull |
+| `lib/services/cloud/cloud_sync_maintenance_service.dart` | 保守 chunk GC（每设备保留最近 1000 个 + 180 天） |
+| `lib/services/ai/ai_sentence_set_service.dart` | 句式集元数据迁入 SQLite（v14），CRUD 走事务并纳入触发器同步 |
+| `lib/services/cloud/cloud_sync_checkpoint_service.dart` | 7 天 / 5000 op 自动检查点 |
+| `lib/services/cloud/cloud_sync_bootstrap_service.dart` | 新设备空库检测与最新快照引导 |
+| `lib/services/cloud/cloud_sync_compatibility_service.dart` | 设备版本采集、schema/协议兼容判定、软提示与硬阻断结论 |
+| `lib/services/cloud/cloud_sync_version_gate_service.dart` | 阻断状态持久化、弹窗去重与启动恢复 |
+| `lib/services/cloud/cloud_sync_network_service.dart` | 仅 Wi-Fi / 以太网策略 |
+| `lib/services/cloud/sync_conflict_store.dart` | 冲突持久化与三种解决动作 |
 | `lib/pages/settings/cloud_sync_conflict_page.dart` | 冲突逐条处理页 |
 | `lib/pages/settings/cloud_sync_devices_page.dart` | 云端设备列表 / 删除旧设备 |
 

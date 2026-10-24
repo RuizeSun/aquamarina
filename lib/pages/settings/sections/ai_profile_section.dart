@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../models/ai_profile.dart';
-import '../../../services/ai_profile_service.dart';
+import '../../../services/ai/ai_profile_service.dart';
 import '../../ai_profile_edit_page.dart';
 
 /// 隐私政策 SharedPreferences 键前缀（与 ai_practice_page.dart 保持一致）

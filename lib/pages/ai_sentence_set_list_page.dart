@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/ai_sentence_set.dart';
-import '../services/ai_sentence_set_service.dart';
+import '../services/ai/ai_sentence_set_service.dart';
 import 'ai_sentence_set_edit_page.dart';
 import 'online_corpus_list_page.dart';
 

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:aquamarina/main.dart';
-import 'package:aquamarina/services/study_timer_service.dart';
+import 'package:aquamarina/services/data/study_timer_service.dart';
 import 'package:aquamarina/pages/vocabulary/shared/word_utils.dart';
 import 'package:aquamarina/pages/vocabulary/spelling_page.dart';
 

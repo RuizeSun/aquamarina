@@ -1,4 +1,4 @@
-import 'package:aquamarina/services/cloud_sync_merge_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_merge_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

@@ -1,4 +1,4 @@
-import 'package:aquamarina/services/sync_conflict_store.dart';
+import 'package:aquamarina/services/cloud/sync_conflict_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

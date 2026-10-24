@@ -1,7 +1,7 @@
 import 'dart:convert';
 
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
-import 'package:aquamarina/services/cloud_sync_settings.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

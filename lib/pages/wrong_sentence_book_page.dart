@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/ai_sentence.dart';
 import '../models/ai_sentence_set.dart';
-import '../services/ai_sentence_service.dart';
+import '../services/ai/ai_sentence_service.dart';
 import 'ai_practice_session_page.dart';
 
 /// 错题本查看页面

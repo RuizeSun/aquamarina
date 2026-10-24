@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
-import '../../services/dictionary_service.dart';
-import '../../services/word_book_service.dart';
+import '../../services/data/dictionary_service.dart';
+import '../../services/data/word_book_service.dart';
 import '../ai_sentence_set_list_page.dart';
 import '../word_detail_page.dart';
 import 'ai_sentence_set_generate_page.dart';

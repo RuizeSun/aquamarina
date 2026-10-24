@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../models/ai_sentence.dart';
-import '../../../services/ai_sentence_service.dart';
+import '../../../services/ai/ai_sentence_service.dart';
 
 /// AI 句子练习设置分区
 class AiSentenceSettingsSection extends StatefulWidget {

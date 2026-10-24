@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:aquamarina/models/ai_sentence.dart';
 import 'package:aquamarina/models/ai_sentence_set.dart';
-import 'package:aquamarina/services/ai_sentence_set_service.dart';
+import 'package:aquamarina/services/ai/ai_sentence_set_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';

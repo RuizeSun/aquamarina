@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../services/learning_service.dart';
-import '../../services/study_timer_service.dart';
+import '../../services/data/learning_service.dart';
+import '../../services/data/study_timer_service.dart';
 
 /// 单词学习统计页：打卡日历、7天趋势、连续打卡、学习时长
 class StatsPage extends StatefulWidget {

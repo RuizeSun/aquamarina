@@ -7,10 +7,10 @@ import '../../models/ai_profile.dart';
 import '../../models/ai_sentence.dart';
 import '../../models/ai_sentence_set.dart';
 import '../../models/sentence_difficulty.dart';
-import '../../services/ai_profile_service.dart';
-import '../../services/ai_sentence_generate_service.dart';
-import '../../services/ai_sentence_set_service.dart';
-import '../../services/ai_usage_service.dart';
+import '../../services/ai/ai_profile_service.dart';
+import '../../services/ai/ai_sentence_generate_service.dart';
+import '../../services/ai/ai_sentence_set_service.dart';
+import '../../services/ai/ai_usage_service.dart';
 import '../settings/settings_page.dart';
 
 /// 生成结束后的回传结果（供调用方提示用户）

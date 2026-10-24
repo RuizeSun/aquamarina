@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import '../../../services/update_service.dart';
+import '../../../services/system/update_service.dart';
 
 /// 关于分区
 class AboutSection extends StatefulWidget {

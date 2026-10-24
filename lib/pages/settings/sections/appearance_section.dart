@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../services/theme_mode_service.dart';
+import '../../../services/system/theme_mode_service.dart';
 
 /// 外观设置分区（深色模式、主题色）
 class AppearanceSection extends StatelessWidget {

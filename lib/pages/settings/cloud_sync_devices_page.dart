@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../services/cloud_sync_device_meta_service.dart';
-import '../../services/cloud_sync_service.dart';
-import '../../services/cloud_sync_settings.dart';
-import '../../services/database_service.dart';
+import '../../services/cloud/cloud_sync_device_meta_service.dart';
+import '../../services/cloud/cloud_sync_service.dart';
+import '../../services/cloud/cloud_sync_settings.dart';
+import '../../services/data/database_service.dart';
 
 /// 已连接设备（只读）：云端只有一份数据，这里仅展示哪些设备在使用它。
 class CloudSyncDevicesPage extends StatefulWidget {

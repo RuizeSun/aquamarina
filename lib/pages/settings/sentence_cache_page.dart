@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../services/sentence_eval_cache_service.dart';
+import '../../services/data/sentence_eval_cache_service.dart';
 
 /// 句型练习缓存管理页面
 ///

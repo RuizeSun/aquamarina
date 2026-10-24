@@ -1,5 +1,5 @@
-import 'package:aquamarina/services/cloud_sync_checkpoint_service.dart';
-import 'package:aquamarina/services/cloud_sync_settings.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_checkpoint_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 

@@ -1,7 +1,7 @@
 import 'package:aquamarina/models/sync_op.dart';
-import 'package:aquamarina/services/database_service.dart';
-import 'package:aquamarina/services/sync_schema.dart';
-import 'package:aquamarina/services/sync_table_spec.dart';
+import 'package:aquamarina/services/data/database_service.dart';
+import 'package:aquamarina/services/cloud/sync_schema.dart';
+import 'package:aquamarina/services/cloud/sync_table_spec.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// 测试用：按同步规格创建最小业务表（含本地自增 id 与关联列）。

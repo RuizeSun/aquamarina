@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
-import '../services/online_assets_service.dart';
-import '../services/ai_sentence_set_service.dart';
+import '../services/system/online_assets_service.dart';
+import '../services/ai/ai_sentence_set_service.dart';
 
 class OnlineCorpusListPage extends StatefulWidget {
   const OnlineCorpusListPage({super.key});

@@ -9,20 +9,20 @@ import 'pages/ai_practice_page.dart'
 import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
-import 'services/cloud_sync_foreground_sync_service.dart';
-import 'services/cloud_sync_compatibility_service.dart';
-import 'services/cloud_sync_settings.dart';
-import 'services/cloud_sync_version_gate_service.dart';
-import 'services/database_service.dart';
-import 'services/dictionary_service.dart';
-import 'services/sync_data_change_notifier.dart';
-import 'services/tts_service.dart';
-import 'services/ai_profile_service.dart';
-import 'services/theme_mode_service.dart';
-import 'services/update_service.dart';
-import 'services/study_timer_service.dart';
-import 'services/log_service.dart';
-import 'services/sync_capture_service.dart';
+import 'services/cloud/cloud_sync_foreground_sync_service.dart';
+import 'services/cloud/cloud_sync_compatibility_service.dart';
+import 'services/cloud/cloud_sync_settings.dart';
+import 'services/cloud/cloud_sync_version_gate_service.dart';
+import 'services/data/database_service.dart';
+import 'services/data/dictionary_service.dart';
+import 'services/cloud/sync_data_change_notifier.dart';
+import 'services/tts/tts_service.dart';
+import 'services/ai/ai_profile_service.dart';
+import 'services/system/theme_mode_service.dart';
+import 'services/system/update_service.dart';
+import 'services/data/study_timer_service.dart';
+import 'services/system/log_service.dart';
+import 'services/cloud/sync_capture_service.dart';
 import 'models/ai_profile.dart';
 
 /// 云同步配置完整时，确保 SQLite 变更捕获处于开启状态。

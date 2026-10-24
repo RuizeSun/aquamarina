@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/word_entry.dart';
-import '../services/dictionary_service.dart';
-import '../services/log_service.dart';
+import '../services/data/dictionary_service.dart';
+import '../services/system/log_service.dart';
 import 'vocabulary/shared/word_utils.dart';
 import 'word_detail_page.dart';
 

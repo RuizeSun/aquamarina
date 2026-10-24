@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../services/learning_service.dart';
-import '../../services/dictionary_service.dart';
+import '../../services/data/learning_service.dart';
+import '../../services/data/dictionary_service.dart';
 import '../word_detail_page.dart';
 
 /// 格式化复习日期，显示友好文本

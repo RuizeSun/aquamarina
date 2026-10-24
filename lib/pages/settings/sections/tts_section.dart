@@ -1,11 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import '../../../services/log_service.dart';
-import '../../../services/mimo_tts_credentials.dart';
-import '../../../services/mimo_tts_engine.dart';
-import '../../../services/tts_settings.dart';
-import '../../../services/tts_service.dart';
+import '../../../services/system/log_service.dart';
+import '../../../services/tts/mimo_tts_credentials.dart';
+import '../../../services/tts/mimo_tts_engine.dart';
+import '../../../services/tts/tts_settings.dart';
+import '../../../services/tts/tts_service.dart';
 
 /// 语音设置分区（TTS）
 class TtsSettingsSection extends StatefulWidget {

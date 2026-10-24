@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../../services/log_service.dart';
+import '../../../services/system/log_service.dart';
 import '../log_viewer_page.dart';
 
 /// 日志设置分区

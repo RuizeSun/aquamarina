@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../../services/sentence_eval_cache_service.dart';
+import '../../../services/data/sentence_eval_cache_service.dart';
 import '../sentence_cache_page.dart';
 
 /// 句型练习缓存设置分区：开关 + 缓存管理入口

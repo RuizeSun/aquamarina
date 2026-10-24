@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import '../../services/cloud_sync_run_lock.dart';
-import '../../services/sync_conflict_store.dart';
+import '../../services/cloud/cloud_sync_run_lock.dart';
+import '../../services/cloud/sync_conflict_store.dart';
 
 /// 逐条查看并处理同步冲突（P2-6）。
 class CloudSyncConflictPage extends StatefulWidget {

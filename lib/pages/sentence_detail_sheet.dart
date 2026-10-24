@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/ai_sentence.dart';
 import '../models/sentence_note.dart';
-import '../services/sentence_note_service.dart';
+import '../services/data/sentence_note_service.dart';
 
 /// 展示句子详情底部弹窗：可查看内容、编辑笔记、取消收藏。
 ///

@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import '../models/word_book.dart';
 import '../models/word_entry.dart';
-import '../services/dictionary_service.dart';
-import '../services/tts_service.dart';
-import '../services/word_book_service.dart';
-import '../services/word_note_service.dart';
+import '../services/data/dictionary_service.dart';
+import '../services/tts/tts_service.dart';
+import '../services/data/word_book_service.dart';
+import '../services/data/word_note_service.dart';
 import 'vocabulary/shared/word_utils.dart';
 import 'word_card.dart';
 

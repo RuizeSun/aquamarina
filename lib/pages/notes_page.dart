@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
-import '../services/dictionary_service.dart';
-import '../services/sentence_note_service.dart';
-import '../services/word_note_service.dart';
+import '../services/data/dictionary_service.dart';
+import '../services/data/sentence_note_service.dart';
+import '../services/data/word_note_service.dart';
 import 'saved_filter_bar.dart';
 import 'saved_models.dart';
 import 'sentence_detail_sheet.dart';

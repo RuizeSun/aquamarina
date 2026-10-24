@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../models/word_book.dart';
-import '../services/word_book_service.dart';
-import '../services/learning_service.dart';
-import '../services/log_service.dart';
+import '../services/data/word_book_service.dart';
+import '../services/data/learning_service.dart';
+import '../services/system/log_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'vocabulary/word_book_list_page.dart';
 import 'vocabulary/learning_page.dart';

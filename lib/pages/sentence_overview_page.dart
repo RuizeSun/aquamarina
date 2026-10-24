@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/ai_sentence.dart';
-import '../services/ai_sentence_service.dart';
-import '../services/ai_sentence_set_service.dart';
+import '../services/ai/ai_sentence_service.dart';
+import '../services/ai/ai_sentence_set_service.dart';
 import 'shared/dashboard_widgets.dart';
 
 /// 句型总览页：查看某个句式集的全部句子，并标注练习状态。

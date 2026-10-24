@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../models/word_entry.dart';
-import '../../../services/tts_service.dart';
+import '../../../services/tts/tts_service.dart';
 import 'word_utils.dart';
 
 /// 回忆阶段1：显示单词，提示用户回忆含义

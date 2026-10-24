@@ -1,8 +1,8 @@
 import 'dart:io';
 
 import 'package:aquamarina/models/sync_op.dart';
-import 'package:aquamarina/services/backup_service.dart';
-import 'package:aquamarina/services/sync_schema.dart';
+import 'package:aquamarina/services/data/backup_service.dart';
+import 'package:aquamarina/services/cloud/sync_schema.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

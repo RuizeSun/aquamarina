@@ -2,9 +2,9 @@ import 'dart:typed_data';
 
 import 'package:aquamarina/models/cloud_sync_device_state.dart';
 import 'package:aquamarina/models/sync_op.dart';
-import 'package:aquamarina/services/cloud_sync_device_meta_service.dart';
-import 'package:aquamarina/services/cloud_sync_maintenance_service.dart';
-import 'package:aquamarina/services/cloud_sync_settings.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_device_meta_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_maintenance_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_settings.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

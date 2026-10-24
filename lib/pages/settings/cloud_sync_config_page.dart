@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 
-import '../../../models/cloud_sync_manifest.dart';
-import '../../../services/cloud_sync_bootstrap_service.dart';
-import '../../../services/cloud_sync_introduction_service.dart';
-import '../../../services/cloud_sync_service.dart';
-import '../../../services/cloud_sync_settings.dart';
-import '../../../services/cloud_sync_foreground_sync_service.dart';
-import '../../../services/cloud_sync_run_lock.dart';
-import '../../../services/sync_capture_service.dart';
+import '../../models/cloud_sync_manifest.dart';
+import '../../services/cloud/cloud_sync_bootstrap_service.dart';
+import '../../services/cloud/cloud_sync_introduction_service.dart';
+import '../../services/cloud/cloud_sync_service.dart';
+import '../../services/cloud/cloud_sync_settings.dart';
+import '../../services/cloud/cloud_sync_foreground_sync_service.dart';
+import '../../services/cloud/cloud_sync_run_lock.dart';
+import '../../services/cloud/sync_capture_service.dart';
 import 'cloud_sync_progress.dart';
 
 /// 对象存储配置页。

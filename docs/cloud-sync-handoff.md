@@ -18,7 +18,7 @@
   - 密钥：`flutter_secure_storage`；
   - 备份：ZIP（`aquamarina.db` + `preferences.json` + 可选 `secure_storage.json` + `backup_meta.json`）。
 - 主要目录：
-  - `lib/services/`：数据库、备份、同步、AI、TTS 等；
+  - `lib/services/`：按领域分为 `ai/`、`cloud/`、`data/`、`system/`、`tts/`；
   - `lib/pages/`：页面；
   - `lib/models/`：数据模型；
   - `test/`：单元/组件/真实 S3 集成测试；
@@ -122,34 +122,34 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 
 | 文件 | 职责 |
 |---|---|
-| `lib/services/cloud_sync_settings.dart` | 非敏感配置、Secure Storage 凭据、设备 ID/名称、运行状态、配置校验 |
-| `lib/services/s3_storage_service.dart` | MinIO 客户端封装：PUT/GET/HEAD/LIST/DELETE、超时、错误中文化、连接自检 |
-| `lib/services/cloud_sync_service.dart` | 统一数据集：共享快照上传、清单读取、恢复、历史保留、恢复前本机快照 |
-| `lib/services/cloud_sync_engine.dart` | 增量同步编排：head/state 水位、按设备增量拉取、恢复后重放本机 chunk、推送本机 chunk、调用 GC |
-| `lib/services/cloud_sync_introduction_service.dart` | 首次接入：检测待确认、记录用户选择、编排合并 / 以本机为准 / 以云端为准 |
-| `lib/services/cloud_sync_merge_service.dart` | 统一快照非覆盖合并：插入缺失、LWW、计数器 max、集合并集、词书父子映射 |
-| `lib/services/cloud_sync_device_meta_service.dart` | 设备发现（CommonPrefixes）、`meta.json` / `head.json` / `state.json` 读写与容错 |
-| `lib/services/cloud_sync_run_lock.dart` | 进程内全局互斥，手动 / 自动 / 事件同步串行执行 |
-| `lib/services/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步，按配置间隔冷却，手动可复用 |
-| `lib/services/cloud_sync_foreground_sync_service.dart` | 前台 `Timer.periodic` 轮询、生命周期启停、事件同步后重置计时 |
-| `lib/services/cloud_sync_activity_sync_service.dart` | 学习结束事件同步：2 秒防抖、push 优先、按需 pull |
-| `lib/services/cloud_sync_maintenance_service.dart` | 按所有活跃设备水位清理 chunk，并清理本地 `sync_chunks` / `sync_applied` / 墓碑 |
-| `lib/services/cloud_sync_checkpoint_service.dart` | 自动检查点：7 天 / 5000 op 触发完整快照 |
-| `lib/services/cloud_sync_bootstrap_service.dart` | 新设备首配时查找最新快照并引导 |
-| `lib/services/cloud_sync_network_service.dart` | 仅 Wi-Fi / 以太网策略与测试注入 |
-| `lib/services/sync_conflict_store.dart` | 冲突持久化、采用远端、保留双方 |
+| `lib/services/cloud/cloud_sync_settings.dart` | 非敏感配置、Secure Storage 凭据、设备 ID/名称、运行状态、配置校验 |
+| `lib/services/cloud/s3_storage_service.dart` | MinIO 客户端封装：PUT/GET/HEAD/LIST/DELETE、超时、错误中文化、连接自检 |
+| `lib/services/cloud/cloud_sync_service.dart` | 统一数据集：共享快照上传、清单读取、恢复、历史保留、恢复前本机快照 |
+| `lib/services/cloud/cloud_sync_engine.dart` | 增量同步编排：head/state 水位、按设备增量拉取、恢复后重放本机 chunk、推送本机 chunk、调用 GC |
+| `lib/services/cloud/cloud_sync_introduction_service.dart` | 首次接入：检测待确认、记录用户选择、编排合并 / 以本机为准 / 以云端为准 |
+| `lib/services/cloud/cloud_sync_merge_service.dart` | 统一快照非覆盖合并：插入缺失、LWW、计数器 max、集合并集、词书父子映射 |
+| `lib/services/cloud/cloud_sync_device_meta_service.dart` | 设备发现（CommonPrefixes）、`meta.json` / `head.json` / `state.json` 读写与容错 |
+| `lib/services/cloud/cloud_sync_run_lock.dart` | 进程内全局互斥，手动 / 自动 / 事件同步串行执行 |
+| `lib/services/cloud/cloud_sync_auto_sync_service.dart` | 启动 / 回前台自动同步，按配置间隔冷却，手动可复用 |
+| `lib/services/cloud/cloud_sync_foreground_sync_service.dart` | 前台 `Timer.periodic` 轮询、生命周期启停、事件同步后重置计时 |
+| `lib/services/cloud/cloud_sync_activity_sync_service.dart` | 学习结束事件同步：2 秒防抖、push 优先、按需 pull |
+| `lib/services/cloud/cloud_sync_maintenance_service.dart` | 按所有活跃设备水位清理 chunk，并清理本地 `sync_chunks` / `sync_applied` / 墓碑 |
+| `lib/services/cloud/cloud_sync_checkpoint_service.dart` | 自动检查点：7 天 / 5000 op 触发完整快照 |
+| `lib/services/cloud/cloud_sync_bootstrap_service.dart` | 新设备首配时查找最新快照并引导 |
+| `lib/services/cloud/cloud_sync_network_service.dart` | 仅 Wi-Fi / 以太网策略与测试注入 |
+| `lib/services/cloud/sync_conflict_store.dart` | 冲突持久化、采用远端、保留双方 |
 | `lib/pages/settings/cloud_sync_conflict_page.dart` | 冲突逐条处理 UI |
 | `lib/pages/settings/cloud_sync_devices_page.dart` | 云端设备列表与旧设备删除 |
-| `lib/services/sync_table_spec.dart` | 同步表单一规格（键/数据列/计数列/LWW 列），生成 oplog 表与触发器 |
-| `lib/services/sync_schema.dart` | 同步系统表、触发器安装、恢复后运行时状态重置 |
-| `lib/services/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
-| `lib/services/sync_apply_service.dart` | 幂等应用、行版本门禁、自然时间戳 LWW、计数增量、墓碑、父级重试 |
+| `lib/services/cloud/sync_table_spec.dart` | 同步表单一规格（键/数据列/计数列/LWW 列），生成 oplog 表与触发器 |
+| `lib/services/cloud/sync_schema.dart` | 同步系统表、触发器安装、恢复后运行时状态重置 |
+| `lib/services/cloud/sync_capture_service.dart` | HLC 分配、JSONL chunk 导出、本地行版本、上传后清理 |
+| `lib/services/cloud/sync_apply_service.dart` | 幂等应用、行版本门禁、自然时间戳 LWW、计数增量、墓碑、父级重试 |
 | `lib/models/sync_op.dart` | op/HLC 模型、JSONL 编解码 |
 | `lib/models/cloud_sync_manifest.dart` | 快照清单/快照元信息、格式版本、SHA-256、对象键工具 |
 | `lib/models/cloud_sync_device_state.dart` | `head.json` / `state.json` 模型、JSON 编解码与水位合并 |
 | `lib/pages/settings/sections/cloud_sync_section.dart` | 设置页云同步分区与同步结果 UI |
 | `lib/pages/settings/cloud_sync_config_page.dart` | 对象存储配置表单、连接测试、自动同步间隔、设备标识管理 |
-| `lib/services/backup_service.dart` | ZIP 备份/恢复；保护 `cloud_sync_*` Prefs；恢复后重置同步运行时并写基线 |
+| `lib/services/data/backup_service.dart` | ZIP 备份/恢复；保护 `cloud_sync_*` Prefs；恢复后重置同步运行时并写基线 |
 
 ### 2.4 云端对象布局
 
@@ -690,13 +690,13 @@ flutter test test/cloud_sync_s3_integration_test.dart
 按理解顺序：
 
 1. `docs/cloud-sync-spec.md`（协议设计）
-2. `lib/services/sync_table_spec.dart`（哪些表、如何生成触发器）
-3. `lib/services/database_service.dart` 的 `migrateToV13/14`
-4. `lib/services/sync_capture_service.dart`
-5. `lib/services/sync_apply_service.dart`
-6. `lib/services/cloud_sync_engine.dart`
-7. `lib/services/cloud_sync_service.dart`（快照）
-8. `lib/services/backup_service.dart`（导入/导出、基线）
+2. `lib/services/cloud/sync_table_spec.dart`（哪些表、如何生成触发器）
+3. `lib/services/data/database_service.dart` 的 `migrateToV13/14`
+4. `lib/services/cloud/sync_capture_service.dart`
+5. `lib/services/cloud/sync_apply_service.dart`
+6. `lib/services/cloud/cloud_sync_engine.dart`
+7. `lib/services/cloud/cloud_sync_service.dart`（快照）
+8. `lib/services/data/backup_service.dart`（导入/导出、基线）
 9. `lib/pages/settings/cloud_sync_config_page.dart` / `sections/cloud_sync_section.dart`
 10. `test/sync_*`、`test/cloud_sync_*`
 

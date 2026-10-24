@@ -1,5 +1,5 @@
-import 'package:aquamarina/services/cloud_sync_activity_sync_service.dart';
-import 'package:aquamarina/services/cloud_sync_settings.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_activity_sync_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_settings.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/ai_sentence.dart';
-import '../services/sentence_note_service.dart';
+import '../services/data/sentence_note_service.dart';
 
 /// 句子收藏与笔记按钮组
 ///

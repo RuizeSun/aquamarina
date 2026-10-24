@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../services/learning_service.dart';
-import '../services/study_timer_service.dart';
+import '../services/data/learning_service.dart';
+import '../services/data/study_timer_service.dart';
 import 'favorites_page.dart';
 import 'vocabulary/stats_page.dart';
 import 'notes_page.dart';

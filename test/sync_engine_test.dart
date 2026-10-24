@@ -1,8 +1,8 @@
 import 'package:aquamarina/models/sync_op.dart';
-import 'package:aquamarina/services/sync_apply_service.dart';
-import 'package:aquamarina/services/sync_capture_service.dart';
-import 'package:aquamarina/services/sync_schema.dart';
-import 'package:aquamarina/services/sync_table_spec.dart';
+import 'package:aquamarina/services/cloud/sync_apply_service.dart';
+import 'package:aquamarina/services/cloud/sync_capture_service.dart';
+import 'package:aquamarina/services/cloud/sync_schema.dart';
+import 'package:aquamarina/services/cloud/sync_table_spec.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

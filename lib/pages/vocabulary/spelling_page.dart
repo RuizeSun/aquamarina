@@ -3,9 +3,9 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../services/learning_service.dart';
-import '../../services/log_service.dart';
-import '../../services/study_timer_service.dart';
+import '../../services/data/learning_service.dart';
+import '../../services/system/log_service.dart';
+import '../../services/data/study_timer_service.dart';
 
 /// 将拼写成绩映射为复习计划中的结果标记。
 ///

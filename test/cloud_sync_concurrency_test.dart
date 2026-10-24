@@ -1,4 +1,4 @@
-import 'package:aquamarina/services/cloud_sync_device_meta_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_device_meta_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

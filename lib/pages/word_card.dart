@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/word_entry.dart';
-import '../services/tts_service.dart';
+import '../services/tts/tts_service.dart';
 import 'vocabulary/shared/word_utils.dart';
 
 class WordCard extends StatelessWidget {

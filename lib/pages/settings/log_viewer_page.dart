@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/log_service.dart';
+import '../../services/system/log_service.dart';
 
 /// 日志查看页面
 class LogViewerPage extends StatefulWidget {

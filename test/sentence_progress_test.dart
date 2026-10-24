@@ -1,5 +1,5 @@
-import 'package:aquamarina/services/ai_sentence_service.dart';
-import 'package:aquamarina/services/database_service.dart';
+import 'package:aquamarina/services/ai/ai_sentence_service.dart';
+import 'package:aquamarina/services/data/database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 

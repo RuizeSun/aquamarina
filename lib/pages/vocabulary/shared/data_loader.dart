@@ -1,6 +1,6 @@
 import '../../../models/word_entry.dart';
-import '../../../services/dictionary_service.dart';
-import '../../../services/learning_service.dart';
+import '../../../services/data/dictionary_service.dart';
+import '../../../services/data/learning_service.dart';
 
 /// 批量加载单词释义，只执行一次 IN 查询。
 /// 返回 Map，key 为单词在 words 列表中的索引，value 为释义；

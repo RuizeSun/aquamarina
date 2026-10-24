@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/study_timer_service.dart';
+import '../../services/data/study_timer_service.dart';
 import 'shared/word_session_base.dart';
 import 'shared/word_utils.dart';
 

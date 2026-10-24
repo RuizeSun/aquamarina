@@ -2,8 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../models/ai_profile.dart';
-import '../services/ai_profile_service.dart';
-import '../services/ai_usage_service.dart';
+import '../services/ai/ai_profile_service.dart';
+import '../services/ai/ai_usage_service.dart';
 
 /// AI 配置文件编辑页
 class AiProfileEditPage extends StatefulWidget {

@@ -1,7 +1,7 @@
 import 'package:aquamarina/models/ai_sentence.dart';
 import 'package:aquamarina/pages/settings/sections/sentence_cache_section.dart';
-import 'package:aquamarina/services/database_service.dart';
-import 'package:aquamarina/services/sentence_eval_cache_service.dart';
+import 'package:aquamarina/services/data/database_service.dart';
+import 'package:aquamarina/services/data/sentence_eval_cache_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

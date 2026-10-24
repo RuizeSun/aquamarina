@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../models/word_book.dart';
-import '../../services/online_assets_service.dart';
-import '../../services/word_book_service.dart';
-import '../../services/dictionary_service.dart';
+import '../../services/system/online_assets_service.dart';
+import '../../services/data/word_book_service.dart';
+import '../../services/data/dictionary_service.dart';
 
 class OnlineWordbookListPage extends StatefulWidget {
   const OnlineWordbookListPage({super.key});

@@ -1,7 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import '../../services/learning_service.dart';
-import '../../services/dictionary_service.dart';
+import '../../services/data/learning_service.dart';
+import '../../services/data/dictionary_service.dart';
 import '../word_detail_page.dart';
 
 /// 单词总览页：按状态（等待学习/已学习/已掌握）查看所有单词，

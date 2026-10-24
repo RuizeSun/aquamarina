@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../services/word_book_service.dart';
-import '../../services/dictionary_service.dart';
+import '../../services/data/word_book_service.dart';
+import '../../services/data/dictionary_service.dart';
 
 /// 每个缺失词的操作选项
 enum MissingWordAction { keep, discard, replace }

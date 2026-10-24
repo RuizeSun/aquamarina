@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:aquamarina/models/ai_profile.dart';
 import 'package:aquamarina/models/sentence_difficulty.dart';
-import 'package:aquamarina/services/ai_profile_service.dart';
-import 'package:aquamarina/services/ai_sentence_generate_service.dart';
-import 'package:aquamarina/services/ai_token_estimator.dart';
-import 'package:aquamarina/services/ai_usage_service.dart';
+import 'package:aquamarina/services/ai/ai_profile_service.dart';
+import 'package:aquamarina/services/ai/ai_sentence_generate_service.dart';
+import 'package:aquamarina/services/ai/ai_token_estimator.dart';
+import 'package:aquamarina/services/ai/ai_usage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 用可注入的假配置服务替代真实实现，避免在单测里触碰安全存储与网络。

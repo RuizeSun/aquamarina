@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:aquamarina/pages/settings/sections/tts_section.dart';
-import 'package:aquamarina/services/mimo_tts_engine.dart';
-import 'package:aquamarina/services/tts_service.dart';
-import 'package:aquamarina/services/tts_settings.dart';
+import 'package:aquamarina/services/tts/mimo_tts_engine.dart';
+import 'package:aquamarina/services/tts/tts_service.dart';
+import 'package:aquamarina/services/tts/tts_settings.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

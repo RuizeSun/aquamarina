@@ -4,12 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import '../models/ai_sentence_set.dart';
 import '../models/ai_sentence.dart';
-import '../services/ai_sentence_set_service.dart';
-import '../services/ai_sentence_service.dart';
-import '../services/ai_service.dart';
-import '../services/cloud_sync_activity_sync_service.dart';
-import '../services/log_service.dart';
-import '../services/study_timer_service.dart';
+import '../services/ai/ai_sentence_set_service.dart';
+import '../services/ai/ai_sentence_service.dart';
+import '../services/ai/ai_service.dart';
+import '../services/cloud/cloud_sync_activity_sync_service.dart';
+import '../services/system/log_service.dart';
+import '../services/data/study_timer_service.dart';
 import '../widgets/sentence_note_bar.dart';
 
 /// 练习阶段

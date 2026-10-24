@@ -2,8 +2,8 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:aquamarina/models/cloud_sync_manifest.dart';
-import 'package:aquamarina/services/cloud_sync_settings.dart';
-import 'package:aquamarina/services/s3_storage_service.dart';
+import 'package:aquamarina/services/cloud/cloud_sync_settings.dart';
+import 'package:aquamarina/services/cloud/s3_storage_service.dart';
 
 /// 内存对象存储，供同步引擎 / 服务测试使用。
 class FakeS3Storage extends S3StorageService {
