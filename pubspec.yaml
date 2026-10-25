@@ -1,7 +1,7 @@
 name: aquamarina
 description: "Aquamarina"
 publish_to: "none"
-version: 1.4.3+26
+version: 1.4.4+27
 
 environment:
     sdk: ^3.11.5
