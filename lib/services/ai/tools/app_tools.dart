@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../../models/word_book.dart';
 import '../../data/database_service.dart';
 import '../../data/dictionary_service.dart';
 import '../../data/learning_service.dart';
@@ -112,6 +114,16 @@ class AppTools {
     },
   );
 
+  /// 把一本书渲染成一行纯文本。
+  ///
+  /// 单独抽出来便于测试：这里曾写成 `$b.title`，Dart 会解析成
+  /// `${b}.title`，于是模型看到的是 `Instance of 'WordBook'.title`。
+  @visibleForTesting
+  static String describeBookLine(WordBook book) {
+    final tag = book.isBuiltin ? '（内置）' : '';
+    return '- id=${book.id} ${book.title}$tag：${book.wordCount} 个单词';
+  }
+
   static AiToolDescriptor _listWordBooks() => AiToolDescriptor(
     name: 'list_word_books',
     description: '列出用户本地的全部词书（id、标题、单词数量、是否内置）。',
@@ -122,10 +134,7 @@ class AppTools {
       if (books.isEmpty) {
         return AiToolResult.success('本机还没有任何词书。', data: {'books': []});
       }
-      final rows = books.map((b) {
-        final tag = b.isBuiltin ? '（内置）' : '';
-        return '- id=${b.id} $b.title$tag：${b.wordCount} 个单词';
-      }).toList();
+      final rows = books.map(describeBookLine).toList();
       return AiToolResult.success(
         '共 ${books.length} 本词书：\n${rows.join('\n')}',
         data: {
