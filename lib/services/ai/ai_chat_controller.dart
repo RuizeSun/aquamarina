@@ -588,6 +588,21 @@ class AiChatController extends ChangeNotifier {
     return result;
   }
 
+  /// 某条 user 消息在请求时冻结的上下文（用于 UI 展示）。
+  ///
+  /// 返回 null 表示这条消息没有注入过上下文。
+  String? contextNoteFor(String messageId) => _contextNotes[messageId];
+
+  /// 从上下文文本里解析出注入分块的名字（runtime-context / time-context）。
+  static List<String> contextTagsOf(String note) {
+    final tags = <String>[];
+    for (final match in RegExp(r'<([a-z-]+-context)>').allMatches(note)) {
+      final tag = match.group(1)!;
+      if (!tags.contains(tag)) tags.add(tag);
+    }
+    return tags;
+  }
+
   /// 把上下文包成一条自我说明的消息体。
   String _wrapContext(String extra) {
     return [

@@ -584,6 +584,26 @@ void main() {
     });
   });
 
+  group('上下文注入标签解析', () {
+    test('解析出注入的分块名', () {
+      const note = '<context-note>\n<runtime-context>\nA\n</runtime-context>\n'
+          '<time-context>\nB\n</time-context>\n</context-note>';
+      expect(
+        AiChatController.contextTagsOf(note),
+        ['runtime-context', 'time-context'],
+      );
+    });
+
+    test('只注入时间时只返回 time-context', () {
+      const note = '<context-note>\n<time-context>\nB\n</time-context>\n</context-note>';
+      expect(AiChatController.contextTagsOf(note), ['time-context']);
+    });
+
+    test('没有分块时返回空列表', () {
+      expect(AiChatController.contextTagsOf('纯文本'), isEmpty);
+    });
+  });
+
   group('多模态', () {
     AiChatAttachment attachment() => AiChatAttachment(
       id: 'a1',

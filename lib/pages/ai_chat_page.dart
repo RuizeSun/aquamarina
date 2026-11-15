@@ -19,6 +19,7 @@ import '../services/ai/tools/ai_tool_registry.dart';
 import '../services/ai/tools/app_tools.dart';
 import '../services/ai/tools/tool_approval.dart';
 import '../widgets/chat/attachment_image.dart';
+import '../widgets/chat/context_note_card.dart';
 import '../widgets/chat/tool_approval_sheet.dart';
 import '../widgets/chat/tool_call_card.dart';
 import 'settings/settings_page.dart';
@@ -573,7 +574,22 @@ class AiChatPageState extends State<AiChatPage> {
                     if (index >= messages.length) {
                       return _buildStreamingBubble();
                     }
-                    return _buildMessageBubble(messages[index]);
+                    final message = messages[index];
+                    final note = _controller.contextNoteFor(message.id);
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildMessageBubble(message),
+                        if (note != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: ContextNoteCard(
+                              note: note,
+                              tags: AiChatController.contextTagsOf(note),
+                            ),
+                          ),
+                      ],
+                    );
                   },
                 ),
         ),
