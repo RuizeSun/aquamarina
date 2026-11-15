@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'sections/about_section.dart';
 import 'sections/appearance_section.dart';
+import 'sections/ai_chat_section.dart';
 import 'sections/ai_profile_section.dart';
 import 'sections/ai_sentence_section.dart';
 import 'sections/ai_usage_stats_section.dart';
@@ -109,6 +110,19 @@ class _SettingsPageState extends State<SettingsPage> {
             const SettingsSectionHeader(title: '练习缓存'),
             const SentenceCacheSection(),
             const SizedBox(height: 8),
+          ],
+        );
+      },
+    ),
+    SettingsCategory(
+      title: 'AI 对话',
+      icon: Icons.chat_bubble_outline,
+      builder: () {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: const [
+            SettingsSectionHeader(title: 'AI 对话'),
+            AiChatSection(),
           ],
         );
       },

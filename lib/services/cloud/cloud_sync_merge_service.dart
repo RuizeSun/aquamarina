@@ -40,7 +40,11 @@ class CloudSyncMergeService {
   CloudSyncMergeService._();
 
   static const int _chunkSize = 100;
-  static const Set<String> _minTimestampColumns = {'created_at'};
+  /// 这些实体的 created_at 采用 MIN 语义（保留更早的创建时间）。
+  static const Set<String> _minTimestampColumns = {
+    'ai_chat_sessions',
+    'ai_chat_messages',
+  };
 
   /// 从备份 ZIP 合并到本机数据库；临时文件会在结束后删除。
   static Future<CloudSyncMergeResult> mergeBackupFile(
@@ -238,6 +242,24 @@ class CloudSyncMergeService {
     final values = <String, Object?>{
       for (final column in columns) column: remoteRow[column],
     };
+    // 对话消息：父会话不在本机时跳过，避免插入孤儿行。
+    if (spec.entity == 'ai_chat_messages') {
+      final sessionId = values['session_id'];
+      final parents = sessionId == null
+          ? const <Map<String, Object?>>[]
+          : await txn.query(
+              'ai_chat_sessions',
+              columns: ['id'],
+              where: 'id = ?',
+              whereArgs: [sessionId],
+              limit: 1,
+            );
+      if (parents.isEmpty) {
+        result.skipped++;
+        result.notes.add('对话消息缺少父级会话：${sessionId?.toString() ?? ''}');
+        return;
+      }
+    }
     // 自增主键不跨设备复制；本地重新分配。
     if (spec.entity == 'word_books' ||
         spec.entity == 'learning_sessions' ||

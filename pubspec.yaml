@@ -38,6 +38,8 @@ dependencies:
     # 4.11.0+ 的 PNG 解码依赖 archive 4.4+，与工程锁定的 archive 4.0.9 不兼容，故上限锁在 4.10.x
     image: '>=4.3.0 <4.11.0'
     pasteboard: ^0.5.0
+    # AI 对话页的 Markdown 渲染（代码块 / 表格 / 列表 / LaTeX，支持流式增量重绘）
+    gpt_markdown: ^1.1.8
 
 dev_dependencies:
     flutter_test:

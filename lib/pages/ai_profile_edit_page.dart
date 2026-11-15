@@ -48,6 +48,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
 
   late AiProfileType _type;
   late bool _enableThinking;
+  late bool _enableVision;
   late String? _reasoningEffort;
   late double? _temperature;
   late double? _balanceThreshold;
@@ -110,6 +111,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
 
     _type = p?.type ?? AiProfileType.openai;
     _enableThinking = p?.enableThinking ?? false;
+    _enableVision = p?.enableVision ?? false;
     _reasoningEffort = p?.reasoningEffort;
     _temperature = p?.temperature;
     _balanceThreshold = p?.balanceThreshold;
@@ -328,6 +330,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
       maxTokens: int.tryParse(_maxTokensController.text.trim()) ?? 2048,
       temperature: _temperature,
       enableThinking: _enableThinking,
+      enableVision: _enableVision,
       reasoningEffort: _reasoningEffort,
       isDefault: widget.profile?.isDefault ?? false,
       balanceThreshold: _balanceThreshold,
@@ -898,6 +901,18 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                   });
                 },
                 secondary: const Icon(Icons.psychology),
+              ),
+
+              // 多模态（图片输入）开关
+              SwitchListTile(
+                title: const Text('支持图片输入'),
+                subtitle: const Text(
+                  '仅当你使用的模型确实支持视觉输入时开启；'
+                  '关闭后 AI 对话不会把图片发给模型',
+                ),
+                value: _enableVision,
+                onChanged: (v) => setState(() => _enableVision = v),
+                secondary: const Icon(Icons.image_outlined),
               ),
 
               // 思考强度

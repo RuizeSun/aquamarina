@@ -12,6 +12,7 @@
   3. oplog 压缩后的基线。
 - 不做中心服务端：对象存储只承担不可变对象读写。
 - **不参与同步**：API Key、S3 凭据、主题/TTS/更新/隐私等本机设置、`sentence_eval_cache`、`ai_usage_records`、`ai_estimate_samples`。
+- **参与同步的对话数据**：`ai_chat_sessions` / `ai_chat_messages`（v21 新增，文本主键 + LWW）。删除会话会向 `ai_chat_messages` 写子表墓碑，防止迟到的旧消息 op 让已删除的对话在其它设备上复活；消息 op 先于父会话到达时按 `pendingParent` 挂起并在同批末尾重试。
 
 ## 2. 对象布局
 

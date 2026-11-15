@@ -6,6 +6,7 @@ import 'pages/search_page.dart';
 import 'pages/vocabulary_page.dart';
 import 'pages/ai_practice_page.dart'
     show AiPracticePage, AiPracticePageState, routeObserver;
+import 'pages/ai_chat_page.dart';
 import 'pages/profile_page.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -287,6 +288,7 @@ class _MainShellState extends State<MainShell> {
   final GlobalKey<VocabularyPageState> _vocabularyKey = GlobalKey();
   final GlobalKey<AiPracticePageState> _aiPracticeKey =
       GlobalKey<AiPracticePageState>();
+  final GlobalKey<AiChatPageState> _aiChatKey = GlobalKey<AiChatPageState>();
   final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   /// 启动后延迟检查更新的定时器（dispose 时必须取消，避免泄漏与测试报错）
@@ -339,6 +341,8 @@ class _MainShellState extends State<MainShell> {
     } else if (_selectedIndex == 2) {
       _aiPracticeKey.currentState?.refresh();
     } else if (_selectedIndex == 3) {
+      _aiChatKey.currentState?.refresh();
+    } else if (_selectedIndex == 4) {
       _profileKey.currentState?.refresh();
     }
   }
@@ -493,8 +497,12 @@ class _MainShellState extends State<MainShell> {
     if (index == 2) {
       _aiPracticeKey.currentState?.refresh();
     }
-    // 切到个人Tab时立即刷新
+    // 切到 AI 对话Tab时立即刷新会话列表
     if (index == 3) {
+      _aiChatKey.currentState?.refresh();
+    }
+    // 切到个人Tab时立即刷新
+    if (index == 4) {
       _profileKey.currentState?.refresh();
     }
   }
@@ -508,6 +516,7 @@ class _MainShellState extends State<MainShell> {
           const SearchPage(),
           VocabularyPage(key: _vocabularyKey),
           AiPracticePage(key: _aiPracticeKey),
+          AiChatPage(key: _aiChatKey),
           ProfilePage(key: _profileKey),
         ],
       ),
@@ -529,6 +538,11 @@ class _MainShellState extends State<MainShell> {
             icon: Icon(Icons.smart_toy_outlined),
             selectedIcon: Icon(Icons.smart_toy_rounded),
             label: '句型练习',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.chat_bubble_outline),
+            selectedIcon: Icon(Icons.chat_bubble_rounded),
+            label: 'AI 对话',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

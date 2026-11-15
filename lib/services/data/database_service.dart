@@ -11,7 +11,7 @@ import '../cloud/sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 20;
+  static const int schemaVersion = 21;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -49,6 +49,75 @@ class DatabaseService {
             UNIQUE(mode, sentence_english, sentence_chinese, user_answer)
           )
         ''';
+
+  /// AI 对话会话表（v21）。与消息表一起参与云同步（见 SyncSpecs）。
+  static const String aiChatSessionsTableSql = '''
+          CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            profile_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        ''';
+
+  static const String aiChatSessionsIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_ai_chat_sessions_updated_at '
+      'ON ai_chat_sessions(updated_at)';
+
+  /// AI 对话消息表（v21）。
+  ///
+  /// 会话删除时级联删除消息；同步层还会写子表墓碑，防止迟到的旧消息在会话
+  /// 被删除后重新插入。
+  static const String aiChatMessagesTableSql = '''
+          CREATE TABLE IF NOT EXISTS ai_chat_messages (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            reasoning TEXT,
+            tool_calls TEXT,
+            tool_call_id TEXT,
+            tool_name TEXT,
+            status TEXT NOT NULL DEFAULT 'complete',
+            error_message TEXT,
+            attachments TEXT,
+            created_at TEXT NOT NULL,
+            sort_index REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
+          )
+        ''';
+
+  static const String aiChatMessagesIndexSql =
+      'CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_session_sort '
+      'ON ai_chat_messages(session_id, sort_index)';
+
+  /// 幂等创建 AI 对话相关业务表与索引。
+  ///
+  /// 必须在安装同步触发器（[SyncSchema.ensure]）之前调用：触发器直接引用业务
+  /// 表，表不存在会导致安装失败。
+  static Future<void> ensureChatTables(DatabaseExecutor db) async {
+    await db.execute(aiChatSessionsTableSql);
+    await db.execute(aiChatSessionsIndexSql);
+    await db.execute(aiChatMessagesTableSql);
+    await db.execute(aiChatMessagesIndexSql);
+    // 多模态附件列：CREATE TABLE IF NOT EXISTS 不会给已有表补列，这里显式补齐。
+    await _ensureChatColumn(db, 'ai_chat_messages', 'attachments', 'TEXT');
+  }
+
+  /// 幂等补列（[DatabaseExecutor] 版本，供建表阶段复用）。
+  static Future<void> _ensureChatColumn(
+    DatabaseExecutor db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final columns = await db.rawQuery('PRAGMA table_info($table)');
+    final exists = columns.any((c) => c['name'] == column);
+    if (!exists) {
+      await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    }
+  }
 
   /// 缓存表按创建时间的索引（清理「N 天前缓存」时走索引）
   static const String sentenceEvalCacheIndexSql =
@@ -376,6 +445,8 @@ class DatabaseService {
         await db.execute(aiEstimateSamplesTableSql);
         await db.execute(aiEstimateSamplesIndexSql);
 
+        // ── v21：AI 对话业务表（必须在 v13 安装触发器之前建好） ──
+        await ensureChatTables(db);
         // ── v13：同步就绪 schema（uuid / sort_index / oplog / 触发器） ──
         await migrateToV13(db);
         // ── v15：设备 head / state 水位与 GC 所需的列 ──
@@ -392,6 +463,8 @@ class DatabaseService {
         await migrateToV20(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
+        // 老库升级同样要先建表：随后的 migrateToV13 会安装同步触发器。
+        await ensureChatTables(db);
         // 1 → 2：为 daily_activity 表增加 daily_goal 列（记录达标时的目标值）
         if (oldVersion < 2) {
           await _ensureColumn(db, 'daily_activity', 'daily_goal', 'INTEGER');
@@ -560,8 +633,24 @@ class DatabaseService {
         if (oldVersion < 20) {
           await migrateToV20(db);
         }
+        // 20 → 21：AI 对话表与对应同步触发器
+        if (oldVersion < 21) {
+          await migrateToV21(db);
+        }
       },
     );
+  }
+
+  /// v20 → v21：AI 对话（会话 / 消息）业务表与同步触发器。
+  ///
+  /// 表本身由 [ensureChatTables] 幂等创建（onUpgrade 开头也会调用），这里负责
+  /// 补齐同步 schema：oplog 表、索引与三个触发器。
+  static Future<void> migrateToV21(Database db) async {
+    await ensureChatTables(db);
+    // 多模态附件列（幂等：CREATE TABLE IF NOT EXISTS 不会给已有表补列）
+    await _ensureColumn(db, 'ai_chat_messages', 'attachments', 'TEXT');
+    await SyncSchema.ensure(db);
+    logInfo('DatabaseService', 'v21 AI 对话 schema 迁移完成');
   }
 
   /// v9 → v10 迁移：错题本支持「同一句子只保留一条记录」。
@@ -951,6 +1040,7 @@ class DatabaseService {
       options: OpenDatabaseOptions(
         version: schemaVersion,
         onUpgrade: (db, oldVersion, newVersion) async {
+          await ensureChatTables(db);
           if (oldVersion < 13) await migrateToV13(db);
           if (oldVersion < 14) await migrateToV14(db);
           if (oldVersion < 15) await migrateToV15(db);
@@ -959,6 +1049,7 @@ class DatabaseService {
           if (oldVersion < 18) await migrateToV18(db);
           if (oldVersion < 19) await migrateToV19(db);
           if (oldVersion < 20) await migrateToV20(db);
+          if (oldVersion < 21) await migrateToV21(db);
         },
       ),
     );

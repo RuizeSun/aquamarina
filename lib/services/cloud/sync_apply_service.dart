@@ -42,6 +42,8 @@ class SyncApplyService {
     'word_books': {'created_at'},
     'sentences': {'created_at'},
     'wrong_sentences': {'created_at'},
+    'ai_chat_sessions': {'created_at'},
+    'ai_chat_messages': {'created_at'},
   };
 
   static Future<Database> _db(Database? db) async =>
@@ -633,6 +635,34 @@ class SyncApplyService {
         );
         ctx.queueDelete(spec, op.key);
         return;
+      case 'ai_chat_sessions':
+        final sessionId = op.key['id'];
+        // 先给级联删除的消息写墓碑，再删除；否则乱序到达的旧消息 op 会让
+        // 已删除会话的消息在新设备上「复活」。
+        final messageRows = await txn.query(
+          'ai_chat_messages',
+          columns: ['id'],
+          where: 'session_id = ?',
+          whereArgs: [sessionId],
+        );
+        for (final row in messageRows) {
+          _recordChildTombstone(ctx, 'ai_chat_messages', {
+            'id': row['id'],
+          }, op);
+        }
+        ctx.removeWritesWhere(
+          (write) =>
+              write.spec.entity == 'ai_chat_messages' &&
+              write.key['session_id'] == sessionId,
+        );
+        ctx.removeRowsWhere('ai_chat_messages', 'session_id', sessionId);
+        await txn.delete(
+          'ai_chat_messages',
+          where: 'session_id = ?',
+          whereArgs: [sessionId],
+        );
+        ctx.queueDelete(spec, op.key);
+        return;
       default:
         ctx.queueDelete(spec, op.key);
     }
@@ -677,6 +707,44 @@ class SyncApplyService {
             limit: 1,
           );
           if (parentRows.isEmpty) return _UpsertOutcome.skipped;
+        }
+      }
+    }
+
+    // 对话消息：父会话缺失时挂起到本批末尾重试，父会话已删除则直接丢弃。
+    //
+    // 同一 HLC 下 _compareOps 按实体名字典序排序，ai_chat_messages 会排在
+    // ai_chat_sessions 之前，因此这里不能假设父会话已经落地。
+    if (spec.entity == 'ai_chat_messages') {
+      final sessionId = op.data['session_id'] ?? op.key['session_id'];
+      if (sessionId is! String || sessionId.isEmpty) {
+        result.conflictDetails.add(
+          'ai_chat_messages 缺少 session_id：${op.keyFingerprint}',
+        );
+        return _UpsertOutcome.skipped;
+      }
+      final parentTombstone =
+          ctx.tombstones['ai_chat_sessions\u0000${_keyFingerprint({'id': sessionId})}'];
+      if (parentTombstone != null && parentTombstone.compareTo(op.hlc) >= 0) {
+        return _UpsertOutcome.skipped;
+      }
+      // 父会话可能仍在同一事务的待写队列里（本批写入在末尾统一 flush），
+      // 因此除了查库还要看 pending 写入，否则同批到达的消息会被误挂起。
+      final sessionSpec = SyncSpecs.byEntity['ai_chat_sessions'];
+      final queuedParent = sessionSpec != null &&
+          ctx.rowFor(sessionSpec, {'id': sessionId}) != null;
+      if (!queuedParent) {
+        final sessions = await txn.query(
+          'ai_chat_sessions',
+          columns: ['id'],
+          where: 'id = ?',
+          whereArgs: [sessionId],
+          limit: 1,
+        );
+        if (sessions.isEmpty) {
+          return parentTombstone != null
+              ? _UpsertOutcome.skipped
+              : _UpsertOutcome.pendingParent;
         }
       }
     }

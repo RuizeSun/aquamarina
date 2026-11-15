@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:dio/dio.dart';
+import '../../models/ai_chat.dart';
 import '../../models/ai_profile.dart';
 import 'ai_usage_service.dart';
 import '../system/log_service.dart';
@@ -41,17 +42,50 @@ class AiService {
     required List<Map<String, String>> messages,
     required bool stream,
   }) {
+    return buildChatBody(
+      profile: profile,
+      messages: messages,
+      stream: stream,
+    );
+  }
+
+  /// 构建 OpenAI 兼容的 chat completions 请求体。
+  ///
+  /// 与 [chat] / [chatStream] 共用同一套参数分支（DeepSeek 思考模式、
+  /// temperature 语义、流式 usage 开关），额外支持工具调用协议。
+  /// Aquamarina 官方端点只提供句型批改，不支持通用对话，因此直接拒绝。
+  Map<String, dynamic> buildChatBody({
+    required AiProfile profile,
+    required List<Map<String, dynamic>> messages,
+    required bool stream,
+    List<Map<String, dynamic>>? tools,
+    String? toolChoice,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+  }) {
+    if (profile.isAquamarina) {
+      throw AiServiceException('Aquamarina 官方配置不支持通用对话，请切换到 OpenAI 兼容或 DeepSeek 配置');
+    }
+
     final body = <String, dynamic>{
       'model': profile.model,
       'messages': messages,
-      'max_tokens': profile.maxTokens,
+      'max_tokens': maxTokensOverride ?? profile.maxTokens,
       'stream': stream,
     };
 
+    final temperature = temperatureOverride ?? profile.temperature;
+
     // 流式请求显式要求服务端在最后一个分块返回 usage：
     // OpenAI 默认不返回，缺少 usage 就无法记录用量 / 学习预估偏差。
-    if (stream && !profile.isAquamarina) {
+    if (stream) {
       body['stream_options'] = {'include_usage': true};
+    }
+
+    // 工具调用协议（仅 OpenAI 兼容 / DeepSeek 支持）。
+    if (tools != null && tools.isNotEmpty) {
+      body['tools'] = tools;
+      body['tool_choice'] = toolChoice ?? 'auto';
     }
 
     // DeepSeek 思考模式：不支持 temperature、top_p 等参数
@@ -63,11 +97,11 @@ class AiService {
     } else if (profile.isDeepSeek && !profile.enableThinking) {
       // 显式关闭思考模式，避免服务端默认启用
       body['thinking'] = {'type': 'disabled'};
-      if (profile.temperature != null) {
-        body['temperature'] = profile.temperature;
+      if (temperature != null) {
+        body['temperature'] = temperature;
       }
-    } else if (profile.temperature != null) {
-      body['temperature'] = profile.temperature;
+    } else if (temperature != null) {
+      body['temperature'] = temperature;
     }
 
     return body;
@@ -299,6 +333,249 @@ class AiService {
     return controller.stream;
   }
 
+  /// 非流式对话（关闭流式输出时使用），不支持工具调用。
+  Future<String> chatOnce({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+  }) async {
+    final cfg = profile ?? _currentProfile;
+    if (cfg == null || cfg.apiKey.isEmpty) {
+      throw AiServiceException('请先在设置中配置 AI 服务与 API Key');
+    }
+    final (headers, url) = _buildRequest(cfg);
+    final body = buildChatBody(
+      profile: cfg,
+      messages: messages,
+      stream: false,
+      temperatureOverride: temperatureOverride,
+      maxTokensOverride: maxTokensOverride,
+    );
+
+    try {
+      final response = await _dio.post(
+        url,
+        options: Options(headers: headers),
+        data: body,
+        cancelToken: cancelToken,
+      );
+      final data = response.data as Map<String, dynamic>;
+      _recordUsage(cfg, AiUsageRequestMode.chat, data['usage']);
+      final choices = data['choices'] as List<dynamic>?;
+      if (choices == null || choices.isEmpty) return '';
+      final message = choices.first['message'] as Map<String, dynamic>?;
+      return (message?['content'] as String?) ?? '';
+    } on DioException catch (e) {
+      throw _mapError(e.response?.statusCode, e.response?.data);
+    }
+  }
+
+  /// 流式对话（带工具调用协议），用于 AI 对话页。
+  ///
+  /// 与 [chatStream] 的区别：
+  /// - 支持 `tools` / `tool_choice`；
+  /// - 解析 `delta.tool_calls` 增量分片并按 index 累加，结束后一次性交付；
+  /// - 以结构化事件输出正文、思维链、工具调用与结束原因。
+  ///
+  /// 请求参数错误（如官方配置、缺少 Key）以 [ChatError] 事件交付，不抛出。
+  Stream<AiChatEvent> chatStreamEvents({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    List<Map<String, dynamic>>? tools,
+    String? toolChoice,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+    void Function(AiUsageSnapshot usage)? onUsage,
+  }) {
+    final cfg = profile ?? _currentProfile;
+    final controller = StreamController<AiChatEvent>();
+
+    Map<String, dynamic> body;
+    try {
+      if (cfg == null || cfg.apiKey.isEmpty) {
+        throw AiServiceException('请先在设置中配置 AI 服务与 API Key');
+      }
+      body = buildChatBody(
+        profile: cfg,
+        messages: messages,
+        stream: true,
+        tools: tools,
+        toolChoice: toolChoice,
+        temperatureOverride: temperatureOverride,
+        maxTokensOverride: maxTokensOverride,
+      );
+    } on AiServiceException catch (e) {
+      controller.add(ChatError(e));
+      controller.close();
+      return controller.stream;
+    }
+
+    final (headers, url) = _buildRequest(cfg);
+    logInfo('AiService', '发起对话流式请求 model=${cfg.model}');
+
+    // 工具调用的增量累加器：index -> {id, name, arguments}
+    final toolBuffers = <int, _ToolCallBuffer>{};
+    var finishReason = 'stop';
+
+    _dio
+        .post(
+          url,
+          options: Options(headers: headers, responseType: ResponseType.stream),
+          data: body,
+          cancelToken: cancelToken,
+        )
+        .then((response) async {
+          final responseStream = response.data as ResponseBody;
+          String buffer = '';
+          dynamic usageMap;
+
+          await for (final chunk in utf8.decoder.bind(responseStream.stream)) {
+            buffer += chunk;
+            while (buffer.contains('\n')) {
+              final lineEnd = buffer.indexOf('\n');
+              final line = buffer.substring(0, lineEnd).trim();
+              buffer = buffer.substring(lineEnd + 1);
+
+              if (line.isEmpty || line.startsWith(':')) continue;
+
+              if (line == 'data: [DONE]') {
+                _emitToolCalls(controller, toolBuffers, finishReason);
+                _recordUsage(
+                  cfg,
+                  AiUsageRequestMode.stream,
+                  usageMap,
+                  onUsage: onUsage,
+                );
+                if (!controller.isClosed) {
+                  controller.add(ChatDone(finishReason));
+                  await controller.close();
+                }
+                return;
+              }
+
+              if (!line.startsWith('data: ')) continue;
+
+              Map<String, dynamic> data;
+              try {
+                data = jsonDecode(line.substring(6)) as Map<String, dynamic>;
+              } catch (_) {
+                // 忽略解析错误，继续处理下一行
+                continue;
+              }
+
+              if (data['usage'] is Map) {
+                usageMap = data['usage'];
+              }
+
+              final choices = data['choices'] as List<dynamic>?;
+              if (choices == null || choices.isEmpty) continue;
+
+              final choice = choices.first;
+              final reason = choice['finish_reason'] as String?;
+              if (reason != null && reason.isNotEmpty) {
+                finishReason = reason;
+              }
+
+              final delta = choice['delta'] as Map<String, dynamic>?;
+              if (delta == null) continue;
+
+              final content = delta['content'] as String?;
+              if (content != null && content.isNotEmpty) {
+                controller.add(ChatTextDelta(content));
+              }
+
+              final reasoning = delta['reasoning_content'] as String?;
+              if (reasoning != null && reasoning.isNotEmpty) {
+                controller.add(ChatReasoningDelta(reasoning));
+              }
+
+              final rawCalls = delta['tool_calls'] as List<dynamic>?;
+              if (rawCalls != null) {
+                for (final raw in rawCalls) {
+                  if (raw is! Map) continue;
+                  final index = (raw['index'] as num?)?.toInt() ?? 0;
+                  final acc = toolBuffers.putIfAbsent(
+                    index,
+                    () => _ToolCallBuffer(),
+                  );
+                  final id = raw['id'];
+                  if (id is String && id.isNotEmpty) {
+                    acc.id = id;
+                  }
+                  final fn = raw['function'];
+                  if (fn is Map) {
+                    final name = fn['name'];
+                    if (name is String && name.isNotEmpty) {
+                      acc.name = name;
+                    }
+                    final args = fn['arguments'];
+                    if (args is String) {
+                      acc.arguments.write(args);
+                    } else if (args is Map) {
+                      acc.arguments.write(jsonEncode(args));
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // 流结束（服务端未发送 [DONE] 时的兜底）
+          _emitToolCalls(controller, toolBuffers, finishReason);
+          _recordUsage(
+            cfg,
+            AiUsageRequestMode.stream,
+            usageMap,
+            onUsage: onUsage,
+          );
+          if (!controller.isClosed) {
+            controller.add(ChatDone(finishReason));
+            await controller.close();
+          }
+        })
+        .catchError((error) {
+          if (controller.isClosed) return;
+          logError('AiService', '对话流式请求异常: $error');
+          if (error is DioException) {
+            controller.add(
+              ChatError(_mapError(error.response?.statusCode, error.response?.data)),
+            );
+          } else {
+            controller.add(ChatError(AiServiceException('请求失败：$error')));
+          }
+          controller.close();
+        });
+
+    return controller.stream;
+  }
+
+  /// 把累加中的工具调用一次性交付给上层（仅当本轮流真的产生了工具调用）。
+  void _emitToolCalls(
+    StreamController<AiChatEvent> controller,
+    Map<int, _ToolCallBuffer> buffers,
+    String finishReason,
+  ) {
+    if (buffers.isEmpty || controller.isClosed) return;
+    final indexes = buffers.keys.toList()..sort();
+    final calls = <AiToolCall>[];
+    for (final index in indexes) {
+      final buffer = buffers[index]!;
+      if (buffer.name.isEmpty) continue;
+      calls.add(
+        AiToolCall.parse(
+          id: buffer.id.isEmpty ? 'call_${index}_${calls.length}' : buffer.id,
+          name: buffer.name,
+          rawArguments: buffer.arguments.toString(),
+        ),
+      );
+    }
+    if (calls.isEmpty) return;
+    controller.add(ChatToolCallsCompleted(calls, finishReason));
+  }
+
   AiProfile? _currentProfile;
 
   /// 设置当前使用的配置文件
@@ -427,6 +704,49 @@ class AiService {
         return AiServiceException(message ?? '请求失败（HTTP $statusCode）');
     }
   }
+}
+
+/// 对话流式请求的结构化事件。
+sealed class AiChatEvent {
+  const AiChatEvent();
+}
+
+/// 正文增量。
+class ChatTextDelta extends AiChatEvent {
+  final String text;
+  const ChatTextDelta(this.text);
+}
+
+/// 思维链（DeepSeek reasoning_content）增量。
+class ChatReasoningDelta extends AiChatEvent {
+  final String text;
+  const ChatReasoningDelta(this.text);
+}
+
+/// 本轮流式结束后交付的完整工具调用列表。
+class ChatToolCallsCompleted extends AiChatEvent {
+  final List<AiToolCall> calls;
+  final String finishReason;
+  const ChatToolCallsCompleted(this.calls, this.finishReason);
+}
+
+/// 流式结束（[finishReason] 为 stop / tool_calls / length 等）。
+class ChatDone extends AiChatEvent {
+  final String finishReason;
+  const ChatDone(this.finishReason);
+}
+
+/// 请求失败，[error] 携带可直接展示的文案。
+class ChatError extends AiChatEvent {
+  final AiServiceException error;
+  const ChatError(this.error);
+}
+
+/// 单次工具调用的增量累加缓冲。
+class _ToolCallBuffer {
+  String id = '';
+  String name = '';
+  final StringBuffer arguments = StringBuffer();
 }
 
 class AiServiceException implements Exception {

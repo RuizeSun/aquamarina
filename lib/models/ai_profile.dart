@@ -234,6 +234,11 @@ class AiProfile {
   /// AI 调用的计费与货币设置（仅 OpenAI 兼容 / DeepSeek 可用），为 null 时不启用计费
   final AiUsagePricing? pricing;
 
+  /// 该配置的模型是否支持图片输入（多模态）。
+  ///
+  /// 关闭时对话页不会把图片发给模型，界面会提示切换配置或改开关。
+  final bool enableVision;
+
   const AiProfile({
     required this.id,
     required this.name,
@@ -248,6 +253,7 @@ class AiProfile {
     this.isDefault = false,
     this.balanceThreshold,
     this.pricing,
+    this.enableVision = false,
   });
 
   AiProfile copyWith({
@@ -264,6 +270,7 @@ class AiProfile {
     bool? isDefault,
     double? balanceThreshold,
     AiUsagePricing? pricing,
+    bool? enableVision,
     bool clearApiKey = false,
     bool clearBalanceThreshold = false,
     bool clearPricing = false,
@@ -284,6 +291,7 @@ class AiProfile {
           ? null
           : (balanceThreshold ?? this.balanceThreshold),
       pricing: clearPricing ? null : (pricing ?? this.pricing),
+      enableVision: enableVision ?? this.enableVision,
     );
   }
 
@@ -310,6 +318,7 @@ class AiProfile {
     'is_default': isDefault,
     if (balanceThreshold != null) 'balance_threshold': balanceThreshold,
     if (pricing != null) 'pricing': pricing!.toJson(),
+    'enable_vision': enableVision,
   };
 
   /// 从 JSON 反序列化
@@ -335,6 +344,7 @@ class AiProfile {
               json['pricing'] as Map<String, dynamic>,
             )
           : null,
+      enableVision: json['enable_vision'] as bool? ?? false,
     );
   }
 }

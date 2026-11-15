@@ -317,6 +317,42 @@ class SyncSpecs {
         'book_title': 'TEXT',
       },
     ),
+    // ── AI 对话（父 → 子顺序：快照合并按本列表顺序插入） ──
+    //
+    // 消息内容一经写入不再变更（流式期间只在内存，结束后一次性落库），
+    // 因此用 created_at 做 LWW 门禁；sort_index 由创建方分配，跨设备不重排。
+    SyncTableSpec(
+      entity: 'ai_chat_sessions',
+      table: 'ai_chat_sessions',
+      keyColumns: {'id': 'TEXT'},
+      dataColumns: {
+        'title': 'TEXT',
+        'profile_id': 'TEXT',
+        'created_at': 'TEXT',
+        'updated_at': 'TEXT',
+      },
+      lwwColumn: 'updated_at',
+    ),
+    SyncTableSpec(
+      entity: 'ai_chat_messages',
+      table: 'ai_chat_messages',
+      keyColumns: {'id': 'TEXT'},
+      dataColumns: {
+        'session_id': 'TEXT',
+        'role': 'TEXT',
+        'content': 'TEXT',
+        'reasoning': 'TEXT',
+        'tool_calls': 'TEXT',
+        'tool_call_id': 'TEXT',
+        'tool_name': 'TEXT',
+        'status': 'TEXT',
+        'error_message': 'TEXT',
+        'attachments': 'TEXT',
+        'created_at': 'TEXT',
+        'sort_index': 'REAL',
+      },
+      lwwColumn: 'created_at',
+    ),
   ];
 
   static final Map<String, SyncTableSpec> byEntity = {
