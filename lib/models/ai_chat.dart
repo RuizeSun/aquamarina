@@ -436,14 +436,18 @@ class AiChatMessage {
 
   /// 移除仅用于本地诊断的字段。
   static Map<String, dynamic> stripDiagnostics(Map<String, dynamic> message) {
-    final content = message['content'];
-    if (content is! List) return message;
+    final cleanedMessage = {
+      for (final e in message.entries)
+        if (e.key != '_message_id' && e.key != 'image_size') e.key: e.value,
+    };
+    final content = cleanedMessage['content'];
+    if (content is! List) return cleanedMessage;
     final cleaned = <Map<String, dynamic>>[];
     for (final part in content) {
       if (part is! Map<String, dynamic>) continue;
       cleaned.add({for (final e in part.entries) if (e.key != 'image_size') e.key: e.value});
     }
-    return {...message, 'content': cleaned};
+    return {...cleanedMessage, 'content': cleaned};
   }
 
   /// 转为 OpenAI Chat Completions 的 message 对象。
@@ -468,11 +472,12 @@ class AiChatMessage {
         return {'role': 'system', 'content': content};
       case AiChatRole.user:
         if (attachments.isEmpty) {
-          return {'role': 'user', 'content': content};
+          return {'role': 'user', 'content': content, '_message_id': id};
         }
         // 多模态：content 改为分段数组，文本段始终存在（OpenAI 允许空串）
         return {
           'role': 'user',
+          '_message_id': id,
           'content': [
             if (content.isNotEmpty) {'type': 'text', 'text': content},
             for (final attachment in attachments)

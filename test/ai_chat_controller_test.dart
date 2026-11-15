@@ -425,7 +425,7 @@ void main() {
   });
 
   group('上下文自动注入', () {
-    test('系统提示词里带上 runtime 与 time 上下文', () async {
+    test('上下文追加到最后一条 user 消息，且不改动 system 提示词', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final captured = <List<Map<String, dynamic>>>[];
       final controller = AiChatController(
@@ -449,15 +449,109 @@ void main() {
       await controller.createSession();
       await controller.send('现在几点？');
 
-      final system = captured.first.firstWhere((m) => m['role'] == 'system');
-      final content = system['content'] as String;
-      expect(content, contains('<runtime-context>'));
-      expect(content, contains('1.4.5+28'));
-      expect(content, contains('<time-context>'));
-      expect(content, contains('2026-11-15 20:50'));
+      final sent = captured.first;
+
+      // system 提示词必须逐字等于基础提示词：不能混入每轮变化的上下文
+      final system = sent.firstWhere((m) => m['role'] == 'system');
+      final systemText = system['content'] as String;
+      expect(systemText, AiChatSettings.defaultSystemPrompt);
+      expect(systemText, isNot(contains('<runtime-context>')));
+
+      // 上下文是紧跟其后的**独立消息**，不改写用户内容
+      expect(sent[1]['role'], 'user');
+      expect(sent[1]['content'], '现在几点？');
+      expect(sent[2]['role'], 'user');
+
+      final note = sent[2]['content'] as String;
+      expect(note, contains('<context-note>'));
+      expect(note, contains('不是用户输入的内容'));
+      expect(note, contains('1.4.5+28'));
+      expect(note, contains('2026-11-15 20:50'));
+      // 上下文里不含用户原话以外的内容改动
+      expect(note, contains('</context-note>'));
     });
 
-    test('关闭注入时系统提示词不含上下文标签', () async {
+    test('历史轮次前缀逐字不变，保证缓存命中', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      var now = DateTime(2026, 11, 15, 20, 50);
+      final controller = AiChatController(
+        chatService: chatService,
+        aiService: _CapturingAiService(captured),
+        profileService: _FakeProfileService(_profile()),
+        settings: AiChatSettings(),
+        toolRegistry: AiToolRegistry(const []),
+        contextBuilder: AiContextBuilder(
+          packageInfoLoader: () async => PackageInfo(
+            appName: 'Aquamarina',
+            packageName: 'app.aquamarina',
+            version: '1.4.5',
+            buildNumber: '28',
+          ),
+          schemaVersionLoader: () => 21,
+          clock: () => now,
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.createSession();
+      await controller.send('第一问');
+      now = DateTime(2026, 11, 15, 21, 30);
+      await controller.send('第二问');
+
+      final first = captured[0];
+      final second = captured[1];
+
+      // 第一轮：system, user(第一问), user(上下文)
+      // 第二轮：system, user(第一问), user(旧上下文), assistant, user(第二问), user(新上下文)
+      expect(first, hasLength(3));
+      expect(second.length, greaterThan(first.length));
+
+      // 关键：第二轮的前 3 条必须与第一轮逐字相同 → 前缀缓存可命中
+      for (var i = 0; i < first.length; i++) {
+        expect(second[i]['role'], first[i]['role']);
+        expect(second[i]['content'], first[i]['content']);
+      }
+
+      // 历史上下文冻结在 20:50，最新的才用 21:30
+      expect(first[2]['content'] as String, contains('20:50'));
+      expect(second[2]['content'] as String, contains('20:50'));
+      expect(second.last['content'] as String, contains('21:30'));
+    });
+
+    test('上下文作为独立消息紧随用户消息', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      final controller = AiChatController(
+        chatService: chatService,
+        aiService: _CapturingAiService(captured),
+        profileService: _FakeProfileService(_profile()),
+        settings: AiChatSettings(),
+        toolRegistry: AiToolRegistry(const []),
+        contextBuilder: AiContextBuilder(
+          packageInfoLoader: () async => PackageInfo(
+            appName: 'Aquamarina',
+            packageName: 'app.aquamarina',
+            version: '1.4.5',
+            buildNumber: '28',
+          ),
+          schemaVersionLoader: () => 21,
+          clock: () => DateTime(2026, 11, 15, 20, 50),
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.createSession();
+      await controller.send('现在几点？');
+
+      final sent = captured.first;
+      expect(sent[1]['content'], '现在几点？');
+      final note = sent[2]['content'] as String;
+      expect(note, contains('<runtime-context>'));
+      expect(note, contains('1.4.5+28'));
+      expect(note, contains('<time-context>'));
+      expect(note, contains('2026-11-15 20:50'));
+    });
+
+    test('关闭注入时既不注入上下文，也不改动 system 提示词', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         AiChatSettings.injectRuntimeContextKey: false,
         AiChatSettings.injectTimeContextKey: false,
@@ -474,11 +568,19 @@ void main() {
       await controller.createSession();
       await controller.send('你好');
 
-      final system = captured.first.firstWhere((m) => m['role'] == 'system');
-      final content = system['content'] as String;
-      // 默认提示词本身就提到这两个标签，因此要断言「实际注入的内容」没出现
-      expect(content, isNot(contains('App: Aquamarina')));
-      expect(content, isNot(contains('数据库 schema:')));
+      final sent = captured.first;
+      // 只有 system + user
+      expect(sent, hasLength(2));
+      expect(sent[1]['content'], '你好');
+      // 默认提示词本身提到 <context-note>，这里只看非 system 消息
+      expect(
+        sent.where(
+          (m) =>
+              m['role'] != 'system' &&
+              '${m['content']}'.contains('<context-note>'),
+        ),
+        isEmpty,
+      );
     });
   });
 

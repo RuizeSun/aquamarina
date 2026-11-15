@@ -116,6 +116,39 @@ void main() {
     expect(img.decodePng(base64Decode(base64Part)), isNotNull);
   });
 
+  test('内部字段 _message_id 不会出现在 HTTP 请求体里', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.invalid'));
+    Map<String, dynamic>? capturedBody;
+    dio.httpClientAdapter = _CapturingAdapter((options) {
+      final data = options.data;
+      if (data is Map) {
+        capturedBody = Map<String, dynamic>.from(data);
+      } else if (data is String) {
+        capturedBody = jsonDecode(data) as Map<String, dynamic>;
+      }
+    });
+
+    final message = AiChatMessage.create(
+      sessionId: 's1',
+      role: AiChatRole.user,
+      content: '你好',
+    );
+    final payload = message.toOpenAiMessage();
+    expect(payload['_message_id'], isNotEmpty);
+
+    await AiService(dio: dio)
+        .chatStreamEvents(
+          messages: [payload],
+          profile: _visionProfile(),
+        )
+        .toList();
+
+    final messages = capturedBody!['messages'] as List<dynamic>;
+    for (final m in messages) {
+      expect((m as Map).containsKey('_message_id'), isFalse);
+    }
+  });
+
   test('诊断字段 image_size 不会出现在 HTTP 请求体里', () async {
     final dio = Dio(BaseOptions(baseUrl: 'https://example.invalid'));
     Map<String, dynamic>? capturedBody;

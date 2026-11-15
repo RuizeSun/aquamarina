@@ -105,6 +105,11 @@ class AiChatController extends ChangeNotifier {
   /// 本会话内「总是允许」的工具名（内存，不落库）。
   final Set<String> _sessionApprovedTools = {};
 
+  /// 每条 user 消息对应的上下文快照（messageId → 注入文本）。
+  ///
+  /// 冻结在首次注入时刻，保证同一会话里历史前缀逐字不变 → 缓存可命中。
+  final Map<String, String> _contextNotes = {};
+
   CancelToken? _cancelToken;
 
   // ── 会话切换 ──────────────────────────────────────
@@ -260,12 +265,10 @@ class AiChatController extends ChangeNotifier {
 
     final injectRuntime = await settings.getInjectRuntimeContext();
     final injectTime = await settings.getInjectTimeContext();
-    final refreshSteps = await settings.getContextRefreshSteps();
-    final systemPrompt = await _composeSystemPrompt(
-      baseSystemPrompt,
-      injectRuntime: injectRuntime,
-      injectTime: injectTime,
-    );
+
+    // system 提示词必须稳定：任何每轮变化的内容都不能塞进来，
+    // 否则整个前缀缓存失效（DeepSeek 上下文缓存按前缀命中）。
+    final systemPrompt = baseSystemPrompt;
 
     // 关闭流式输出时走一次性请求，且不启用工具调用
     if (!streamEnabled) {
@@ -275,28 +278,25 @@ class AiChatController extends ChangeNotifier {
         systemPrompt: systemPrompt,
         temperatureOverride: temperature,
         maxTokensOverride: maxTokens,
+        injectRuntime: injectRuntime,
+        injectTime: injectTime,
       );
       return;
     }
 
     var round = 0;
-    var roundSystemPrompt = systemPrompt;
     while (true) {
-      // 长会话里时间会走偏：每 refreshSteps 轮重算一次系统提示词
-      if (round > 0 && round % refreshSteps == 0) {
-        roundSystemPrompt = await _composeSystemPrompt(
-          baseSystemPrompt,
-          injectRuntime: injectRuntime,
-          injectTime: injectTime,
-        );
-      }
-      final requestMessages = trimContext(
-        await _withImagePayload(
-          _messages,
-          visionEnabled: profile.enableVision,
+      final requestMessages = await injectContext(
+        trimContext(
+          await _withImagePayload(
+            _messages,
+            visionEnabled: profile.enableVision,
+          ),
+          maxMessages,
+          system: systemPrompt,
         ),
-        maxMessages,
-        system: roundSystemPrompt,
+        injectRuntime: injectRuntime,
+        injectTime: injectTime,
       );
       _logImagePayload(requestMessages);
       final result = await _streamOnce(
@@ -399,6 +399,8 @@ class AiChatController extends ChangeNotifier {
     required String systemPrompt,
     required double? temperatureOverride,
     required int? maxTokensOverride,
+    required bool injectRuntime,
+    required bool injectTime,
   }) async {
     final session = _session;
     if (session == null) return;
@@ -410,13 +412,17 @@ class AiChatController extends ChangeNotifier {
     _cancelToken = token;
     try {
       final content = await _aiService.chatOnce(
-        messages: trimContext(
-          await _withImagePayload(
-            _messages,
-            visionEnabled: profile.enableVision,
+        messages: await injectContext(
+          trimContext(
+            await _withImagePayload(
+              _messages,
+              visionEnabled: profile.enableVision,
+            ),
+            maxMessages,
+            system: systemPrompt,
           ),
-          maxMessages,
-          system: systemPrompt,
+          injectRuntime: injectRuntime,
+          injectTime: injectTime,
         ),
         profile: profile,
         temperatureOverride: temperatureOverride,
@@ -511,29 +517,93 @@ class AiChatController extends ChangeNotifier {
     return result;
   }
 
-  /// 把稳定事实拼进系统提示词，省掉「先问一次工具才知道版本」的往返。
+  /// 把上下文**附加到最后一条 user 消息尾部**，而不是改 system 提示词。
   ///
-  /// 参照 DeepSeek Harness 的做法：运行环境这类几乎不变的信息每轮直接注入；
-  /// 时间每轮重新取，保证「今天」「现在」类问题不会用到过期时间。
-  Future<String> _composeSystemPrompt(
-    String base, {
+  /// 两个原因：
+  /// 1. system 提示词必须逐字稳定。改动它会让整段前缀缓存失效
+  ///    （DeepSeek 的上下文缓存按前缀命中）；
+  /// 2. 若把注入内容混进历史轮次的 system 里，模型回头看自己早先的回答
+  ///    会发现「当时的系统提示词」和现在不同，容易开始自我质疑、质量下降。
+  ///
+  /// 放在最后一条 user 消息里，历史前缀逐字不变，且明确标注这不是用户说的话。
+  @visibleForTesting
+  Future<List<Map<String, dynamic>>> injectContext(
+    List<Map<String, dynamic>> messages, {
     required bool injectRuntime,
     required bool injectTime,
   }) async {
-    if (!injectRuntime && !injectTime) return base;
-    try {
-      final extra = await _contextBuilder.build(
-        includeTime: injectTime,
-        includeRuntime: injectRuntime,
-      );
-      if (extra.trim().isEmpty) return base;
-      return '$base\n\n$extra';
-    } catch (e, stackTrace) {
-      // 上下文构造失败绝不能阻断对话
-      logWarning('AiChatController', '构造上下文失败，已跳过注入: $e');
-      logWarning('AiChatController', stackTrace.toString());
-      return base;
+    if (!injectRuntime && !injectTime) return messages;
+    if (messages.isEmpty) return messages;
+
+    final extra = await _contextBuilder.build(
+      includeRuntime: injectRuntime,
+      includeTime: injectTime,
+    );
+    if (extra.trim().isEmpty) return messages;
+
+    // 只在最后一条 user 消息上追加；没有 user 消息就原样返回
+    var index = -1;
+    for (var i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]['role'] == 'user') {
+        index = i;
+        break;
+      }
     }
+    if (index < 0) return messages;
+
+    // 每轮重新算一份「当前」上下文
+    final fresh = _wrapContext(extra);
+
+    // 关键：历史轮次的上下文必须逐字冻结，否则前缀缓存每轮都会失效。
+    // 这里按「紧随其后的那条 user 消息」配对，已记录的沿用它，
+    // 只有最新的那条 user 消息才拿新算出来的内容。
+    final lastUserId = _messageIdOf(messages[index]);
+
+    final result = <Map<String, dynamic>>[];
+    for (var i = 0; i < messages.length; i++) {
+      final message = messages[i];
+      result.add(message);
+
+      // 只给 user 消息挂上下文；assistant/tool 后面不插
+      if (message['role'] != 'user') continue;
+
+      final id = _messageIdOf(message);
+      String? note;
+      if (i == index) {
+        note = fresh;
+        if (id != null) _contextNotes[id] = fresh;
+      } else if (id != null) {
+        note = _contextNotes[id];
+      }
+      if (note == null) continue;
+
+      // 独立成一条消息：绝不改写用户内容，也不改 system 提示词
+      result.add({'role': 'user', 'content': note});
+    }
+
+    // 没有任何 user 消息时把上下文放在最后，避免丢失
+    if (result.length == messages.length && lastUserId == null) {
+      result.add({'role': 'user', 'content': fresh});
+    }
+    return result;
+  }
+
+  /// 把上下文包成一条自我说明的消息体。
+  String _wrapContext(String extra) {
+    return [
+      '<context-note>',
+      '以下是系统自动注入的上下文，**不是用户输入的内容，也不是对上一个问题的追问**。',
+      '它每轮可能更新，请不要据此推断用户改变过话题，也不要因此质疑你之前的回答。',
+      '',
+      extra,
+      '</context-note>',
+    ].join('\n');
+  }
+
+  /// 取消息的稳定 id（用于冻结上下文）。
+  String? _messageIdOf(Map<String, dynamic> message) {
+    final id = message['_message_id'];
+    return id is String && id.isNotEmpty ? id : null;
   }
 
   /// 记录本轮请求携带的图片张数与**实际像素尺寸**。

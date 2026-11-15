@@ -27,7 +27,6 @@ class AiChatSettings {
   static const String imageThumbnailSizeKey = 'ai_chat_image_thumbnail_size';
   static const String injectRuntimeContextKey = 'ai_chat_inject_runtime_context';
   static const String injectTimeContextKey = 'ai_chat_inject_time_context';
-  static const String contextRefreshStepsKey = 'ai_chat_context_refresh_steps';
 
   // ── 取值范围 ──────────────────────────────────────
   static const int minContextMessages = 2;
@@ -41,9 +40,6 @@ class AiChatSettings {
   static const int maxToolRounds = 10;
   static const int defaultToolRounds = 5;
 
-  static const int minRefreshSteps = 1;
-  static const int maxRefreshSteps = 50;
-  static const int defaultRefreshSteps = 5;
 
   /// 默认系统提示词：说明身份、可用能力，以及「写操作需要用户批准」。
   static const String defaultSystemPrompt =
@@ -51,10 +47,11 @@ class AiChatSettings {
       '词典、词书、学习统计与句式集等信息。任何会修改用户数据的操作都必须经用户'
       '批准后才执行；被拒绝时请尊重用户的选择，不要反复请求。回答用简体中文，'
       '必要时补充英文例句。\n\n'
-      '系统会主动注入 <runtime-context>（App 版本、数据库 schema、平台）与'
-      '<time-context>（当前时间）。这些信息已经是最新的，**不要为了确认版本或'
-      '当前时间而调用工具**；只有当用户明确要求重新核对、或你怀疑注入内容与实际'
-      '不符时，才调用 get_app_info 等工具复查。';
+      '用户消息末尾可能出现 <context-note> 区块，那是系统自动注入的上下文'
+      '（App 版本、数据库 schema、当前时间等），**不是用户输入的内容**。'
+      '这些信息已经是最新的，不要为了确认版本或时间而调用工具，也不要因为它'
+      '出现在末尾就以为用户改变了话题。只有当用户明确要求重新核对、或你发现'
+      '注入内容与实际不符时，才调用 get_app_info 等工具复查。';
 
   Future<SharedPreferences> get _prefs async =>
       _injected ?? await SharedPreferences.getInstance();
@@ -166,21 +163,6 @@ class AiChatSettings {
   Future<void> setInjectTimeContext(bool value) async {
     final prefs = await _prefs;
     await prefs.setBool(injectTimeContextKey, value);
-  }
-
-  /// 长会话每 N 步重新注入一次上下文（工具轮次计入）。
-  Future<int> getContextRefreshSteps() async {
-    final prefs = await _prefs;
-    final value = prefs.getInt(contextRefreshStepsKey) ?? defaultRefreshSteps;
-    return value.clamp(minRefreshSteps, maxRefreshSteps);
-  }
-
-  Future<void> setContextRefreshSteps(int value) async {
-    final prefs = await _prefs;
-    await prefs.setInt(
-      contextRefreshStepsKey,
-      value.clamp(minRefreshSteps, maxRefreshSteps),
-    );
   }
 
   Future<void> setContextMessages(int value) async {
