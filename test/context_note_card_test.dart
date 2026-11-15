@@ -29,7 +29,7 @@ void main() {
       ),
     );
 
-    expect(find.text('上下文注入 · runtime-context + time-context'), findsOneWidget);
+    expect(find.text('上下文注入 · 运行环境 + 当前时间'), findsOneWidget);
     // 折叠状态下看不到注入正文
     expect(find.textContaining('Aquamarina（英语学习助手）'), findsNothing);
   });
@@ -43,7 +43,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('上下文注入 · runtime-context'));
+    await tester.tap(find.text('上下文注入 · 运行环境'));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('版本: 1.4.5+28'), findsOneWidget);
@@ -51,10 +51,23 @@ void main() {
     expect(find.textContaining('</context-note>'), findsNothing);
   });
 
+  testWidgets('未知分块名回退为原名', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ContextNoteCard(note: _note, tags: const ['unknown-context']),
+        ),
+      ),
+    );
+    expect(find.text('上下文注入 · unknown-context'), findsOneWidget);
+  });
+
   testWidgets('没有标签时退化为通用标题', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: ContextNoteCard(note: _note, tags: const [])),
+        home: Scaffold(
+          body: ContextNoteCard(note: _note, tags: const []),
+        ),
       ),
     );
     expect(find.text('上下文注入'), findsOneWidget);

@@ -9,6 +9,7 @@ import '../../../services/ai/ai_profile_service.dart';
 import '../../../services/ai/tools/ai_tool.dart';
 import '../../../services/ai/tools/ai_tool_registry.dart';
 import '../../../services/ai/tools/app_tools.dart';
+import '../../../widgets/chat/chat_labels.dart';
 import '../settings_section_header.dart';
 
 /// 「AI 对话」设置分区：配置选择、上下文、工具调用与对话数据。
@@ -172,7 +173,10 @@ class _AiChatSectionState extends State<AiChatSection> {
           onTap: _editSystemPrompt,
         ),
         SwitchListTile(
-          secondary: Icon(Icons.thermostat_outlined, color: colorScheme.primary),
+          secondary: Icon(
+            Icons.thermostat_outlined,
+            color: colorScheme.primary,
+          ),
           title: const Text('覆盖 Temperature'),
           subtitle: Text(
             _temperatureOverride == null
@@ -202,9 +206,7 @@ class _AiChatSectionState extends State<AiChatSection> {
           secondary: Icon(Icons.data_usage, color: colorScheme.primary),
           title: const Text('覆盖 Max Tokens'),
           subtitle: Text(
-            _maxTokensOverride == null
-                ? '使用配置自带的值'
-                : '当前 $_maxTokensOverride',
+            _maxTokensOverride == null ? '使用配置自带的值' : '当前 $_maxTokensOverride',
           ),
           value: _maxTokensOverride != null,
           onChanged: (enabled) async {
@@ -263,9 +265,7 @@ class _AiChatSectionState extends State<AiChatSection> {
         ),
         SwitchListTile(
           title: const Text('注入当前时间'),
-          subtitle: const Text(
-            '每轮请求重新取时间；历史轮次冻结不变，保证缓存可命中',
-          ),
+          subtitle: const Text('每轮请求重新取时间；历史轮次冻结不变，保证缓存可命中'),
           value: _injectTime,
           onChanged: (v) async {
             await _settings.setInjectTimeContext(v);
@@ -278,14 +278,20 @@ class _AiChatSectionState extends State<AiChatSection> {
         // ── 图片（多模态）──
         const SettingsSectionHeader(title: '图片与多模态'),
         ListTile(
-          leading: Icon(Icons.photo_library_outlined, color: colorScheme.primary),
+          leading: Icon(
+            Icons.photo_library_outlined,
+            color: colorScheme.primary,
+          ),
           title: const Text('发送给模型的图片形态'),
           subtitle: Text(_describeSendMode(_imageSendMode)),
           trailing: const Icon(Icons.chevron_right),
           onTap: _pickImageSendMode,
         ),
         ListTile(
-          leading: Icon(Icons.photo_size_select_small, color: colorScheme.primary),
+          leading: Icon(
+            Icons.photo_size_select_small,
+            color: colorScheme.primary,
+          ),
           title: const Text('同步用缩略图尺寸'),
           subtitle: Text(
             '$_imageThumbnailSize×$_imageThumbnailSize 像素 · 原图仅保存在本机',
@@ -318,7 +324,10 @@ class _AiChatSectionState extends State<AiChatSection> {
           },
         ),
         SwitchListTile(
-          secondary: Icon(Icons.verified_user_outlined, color: colorScheme.primary),
+          secondary: Icon(
+            Icons.verified_user_outlined,
+            color: colorScheme.primary,
+          ),
           title: const Text('自动批准只读工具'),
           subtitle: const Text('查词、统计等只读操作不再询问；写操作始终需要批准'),
           value: _autoApproveReadOnly,
@@ -356,7 +365,7 @@ class _AiChatSectionState extends State<AiChatSection> {
               tool.isMutating ? Icons.edit_outlined : Icons.search,
               color: tool.isMutating ? colorScheme.error : colorScheme.primary,
             ),
-            title: Text(tool.name),
+            title: Text(ChatLabels.tool(tool.name)),
             subtitle: Text(
               tool.isMutating
                   ? '写操作 · 每次执行前都需要你批准'
@@ -424,18 +433,13 @@ class _AiChatSectionState extends State<AiChatSection> {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  '选择对话使用的配置',
-                  style: theme.textTheme.titleMedium,
-                ),
+                child: Text('选择对话使用的配置', style: theme.textTheme.titleMedium),
               ),
               for (final profile in profiles)
                 ListTile(
                   enabled: !profile.isAquamarina,
                   leading: Icon(
-                    profile.isDeepSeek
-                        ? Icons.psychology
-                        : Icons.auto_awesome,
+                    profile.isDeepSeek ? Icons.psychology : Icons.auto_awesome,
                   ),
                   title: Text(profile.name),
                   subtitle: Text(
@@ -500,9 +504,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       controller.dispose();
       return;
     }
-    final value = result.isEmpty
-        ? AiChatSettings.defaultSystemPrompt
-        : result;
+    final value = result.isEmpty ? AiChatSettings.defaultSystemPrompt : result;
     controller.dispose();
     await _settings.setSystemPrompt(value);
     setState(() => _systemPrompt = value);
@@ -687,7 +689,9 @@ class _AiChatSectionState extends State<AiChatSection> {
                   AiImageSendMode.thumbnail => '只发送缩略图',
                 }),
                 subtitle: Text(_describeSendMode(mode)),
-                trailing: mode == _imageSendMode ? const Icon(Icons.check) : null,
+                trailing: mode == _imageSendMode
+                    ? const Icon(Icons.check)
+                    : null,
                 onTap: () => Navigator.of(sheetContext).pop(mode),
               ),
           ],
@@ -741,9 +745,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('清空全部对话'),
-        content: const Text(
-          '将删除本机所有 AI 对话记录，并同步删除其它已同步设备上的对话。此操作不可撤销。',
-        ),
+        content: const Text('将删除本机所有 AI 对话记录，并同步删除其它已同步设备上的对话。此操作不可撤销。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),

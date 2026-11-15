@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../models/ai_chat.dart';
 import '../../services/ai/tools/ai_tool.dart';
 import '../../services/ai/tools/tool_approval.dart';
+import 'chat_labels.dart';
 
 /// 工具批准面板：写操作执行前必须由用户显式确认。
 ///
@@ -55,7 +56,7 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'AI 请求使用工具',
+                          'AI 请求使用「${ChatLabels.tool(call.name)}」',
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),
@@ -64,6 +65,7 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
                           call.name,
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: colorScheme.onSurfaceVariant,
+                            fontFamily: 'monospace',
                           ),
                         ),
                       ],

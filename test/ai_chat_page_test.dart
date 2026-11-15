@@ -66,7 +66,10 @@ void main() {
   });
 
   /// sqflite ffi 的真实 I/O 需要跑在 runAsync 里，否则 fake-async 区域会一直挂起。
-  Future<void> pumpPage(WidgetTester tester, AiChatController controller) async {
+  Future<void> pumpPage(
+    WidgetTester tester,
+    AiChatController controller,
+  ) async {
     await tester.runAsync(() async {
       await tester.pumpWidget(
         MaterialApp(
@@ -133,6 +136,73 @@ void main() {
     expect(find.text('你好呀'), findsOneWidget);
     expect(find.textContaining('有什么可以帮你'), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('一次问答只渲染一个 AI 气泡，工具结果收进思考过程', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final controller = AiChatController(chatService: service);
+    addTearDown(controller.dispose);
+
+    await tester.runAsync(() async {
+      final session = await service.createSession(title: '工具会话');
+      await service.appendMessage(
+        AiChatMessage.create(
+          sessionId: session.id,
+          role: AiChatRole.user,
+          content: '查一下 ephemeral',
+        ),
+      );
+      await service.appendMessage(
+        AiChatMessage.create(
+          sessionId: session.id,
+          role: AiChatRole.assistant,
+          reasoning: '先查词典',
+          content: '',
+          toolCalls: [
+            AiToolCall.parse(
+              id: 'c1',
+              name: 'search_dictionary',
+              rawArguments: '{"word":"ephemeral"}',
+            ),
+          ],
+        ),
+      );
+      await service.appendMessage(
+        AiChatMessage.create(
+          sessionId: session.id,
+          role: AiChatRole.tool,
+          content: '【英文词条】ephemeral /ɪˈfemərəl/',
+          toolCallId: 'c1',
+          toolName: 'search_dictionary',
+        ),
+      );
+      await service.appendMessage(
+        AiChatMessage.create(
+          sessionId: session.id,
+          role: AiChatRole.assistant,
+          content: 'ephemeral 意为短暂的。',
+        ),
+      );
+    });
+
+    await pumpPage(tester, controller);
+
+    // 正式回答直接可见
+    expect(find.textContaining('意为短暂的'), findsWidgets);
+    // 折叠行本地化，不暴露协议里的工具名
+    expect(find.textContaining('思考过程 · 查词典'), findsOneWidget);
+    expect(find.textContaining('search_dictionary'), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    // 展开后工具卡片与参数可见，工具结果不再单独占一行灰条
+    await tester.tap(find.textContaining('思考过程 · 查词典'));
+    await tester.pumpAndSettle();
+    expect(find.text('查词典'), findsWidgets);
+    expect(find.textContaining('工具 search_dictionary：'), findsNothing);
   });
 
   testWidgets('窄屏隐藏侧栏并使用抽屉入口', (tester) async {

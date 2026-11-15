@@ -19,7 +19,9 @@ import '../services/ai/tools/ai_tool_registry.dart';
 import '../services/ai/tools/app_tools.dart';
 import '../services/ai/tools/tool_approval.dart';
 import '../widgets/chat/attachment_image.dart';
+import '../widgets/chat/chat_labels.dart';
 import '../widgets/chat/context_note_card.dart';
+import '../widgets/chat/thinking_section.dart';
 import '../widgets/chat/tool_approval_sheet.dart';
 import '../widgets/chat/tool_call_card.dart';
 import 'settings/settings_page.dart';
@@ -334,7 +336,8 @@ class AiChatPageState extends State<AiChatPage> {
     final size = await _settings.getImageThumbnailSize();
     var skipped = 0;
     for (final file in files) {
-      if (_pendingAttachments.length >= AiImageService.maxAttachmentsPerMessage) {
+      if (_pendingAttachments.length >=
+          AiImageService.maxAttachmentsPerMessage) {
         skipped += 1;
         continue;
       }
@@ -560,6 +563,7 @@ class AiChatPageState extends State<AiChatPage> {
 
   Widget _buildConversationPane() {
     final messages = _controller.messages;
+    final turns = _groupIntoTurns(messages);
     return Column(
       children: [
         if (_setupHint != null) _buildSetupBanner(_setupHint!),
@@ -569,31 +573,95 @@ class AiChatPageState extends State<AiChatPage> {
               : ListView.builder(
                   controller: _scrollController,
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  itemCount: messages.length + (_controller.isBusy ? 1 : 0),
+                  itemCount: turns.length + (_controller.isBusy ? 1 : 0),
                   itemBuilder: (context, index) {
-                    if (index >= messages.length) {
+                    if (index >= turns.length) {
                       return _buildStreamingBubble();
                     }
-                    final message = messages[index];
-                    final note = _controller.contextNoteFor(message.id);
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _buildMessageBubble(message),
-                        if (note != null)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: ContextNoteCard(
-                              note: note,
-                              tags: AiChatController.contextTagsOf(note),
-                            ),
-                          ),
-                      ],
-                    );
+                    return _buildTurn(turns[index]);
                   },
                 ),
         ),
         _buildInputBar(),
+      ],
+    );
+  }
+
+  /// 把扁平的消息流折叠成「提问 → 回答」。
+  ///
+  /// 一次提问可能触发多轮「工具调用 → 继续生成」，但界面上只应该是一个回答
+  /// 气泡：中间轮次的思维链与工具调用全部收进「思考过程」手风琴，正文按轮次
+  /// 顺序拼接，工具结果也不再单独占一行灰条。
+  List<_ChatTurn> _groupIntoTurns(List<AiChatMessage> messages) {
+    final turns = <_ChatTurn>[];
+    _ChatTurn? current;
+
+    for (final message in messages) {
+      switch (message.role) {
+        case AiChatRole.user:
+          current = _ChatTurn(
+            user: message,
+            contextNote: _controller.contextNoteFor(message.id),
+          );
+          turns.add(current);
+        case AiChatRole.assistant:
+          if (current == null) {
+            current = _ChatTurn();
+            turns.add(current);
+          }
+          current.rounds.add(message);
+          for (final call in message.toolCalls) {
+            current.tools.add(
+              AiToolCallRecord(
+                call: call,
+                toolDescription: '',
+                isMutating: false,
+                state: AiToolCallState.pending,
+              ),
+            );
+          }
+        case AiChatRole.tool:
+          final owner = current;
+          if (owner == null || owner.rounds.isEmpty) {
+            // 没有归属的工具消息（如轮数上限提示）单独成一条系统说明
+            turns.add(_ChatTurn(notice: message));
+            current = null;
+            continue;
+          }
+          final index = owner.tools.indexWhere(
+            (record) => record.call.id == message.toolCallId,
+          );
+          final record = index >= 0
+              ? owner.tools[index]
+              : (owner.tools.isEmpty ? null : owner.tools.last);
+          if (record == null) {
+            turns.add(_ChatTurn(notice: message));
+            current = null;
+            continue;
+          }
+          final failed = message.status == AiChatMessageStatus.error;
+          record.state = failed
+              ? (message.errorMessage == 'denied_by_user'
+                    ? AiToolCallState.denied
+                    : AiToolCallState.failed)
+              : AiToolCallState.done;
+          record.resultPreview = message.content;
+          record.errorCode = failed ? message.errorMessage : null;
+        case AiChatRole.system:
+          break;
+      }
+    }
+    return turns;
+  }
+
+  Widget _buildTurn(_ChatTurn turn) {
+    final notice = turn.notice;
+    if (notice != null) return _buildSystemNotice(notice);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (turn.user != null) _buildUserBubble(turn.user!),
+        if (turn.rounds.isNotEmpty) _buildAnswerBubble(turn),
       ],
     );
   }
@@ -608,9 +676,7 @@ class AiChatPageState extends State<AiChatPage> {
           children: [
             Icon(Icons.info_outline, size: 18, color: theme.colorScheme.error),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text(hint, style: theme.textTheme.bodySmall),
-            ),
+            Expanded(child: Text(hint, style: theme.textTheme.bodySmall)),
             TextButton(onPressed: _openSettings, child: const Text('去设置')),
           ],
         ),
@@ -664,59 +730,22 @@ class AiChatPageState extends State<AiChatPage> {
     );
   }
 
-  Widget _buildMessageBubble(AiChatMessage message) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
-    if (message.role == AiChatRole.tool) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 3),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: colorScheme.outlineVariant),
-          ),
-          child: Text(
-            '工具 ${message.toolName ?? ''}：${_shorten(message.content, 200)}',
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontFamily: 'monospace',
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      );
-    }
-
-    final isUser = message.role == AiChatRole.user;
+  /// 用户提问气泡（右侧）。
+  Widget _buildUserBubble(AiChatMessage message) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: Container(
         constraints: const BoxConstraints(maxWidth: 720),
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: isUser
-              ? colorScheme.primaryContainer
-              : colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          color: colorScheme.primaryContainer,
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (message.reasoning != null &&
-                message.reasoning!.trim().isNotEmpty)
-              _buildReasoning(message.reasoning!),
-            if (message.toolCalls.isNotEmpty)
-              for (final call in message.toolCalls)
-                ToolCallCard(
-                  record: AiToolCallRecord(
-                    call: call,
-                    state: AiToolCallState.done,
-                  ),
-                ),
             if (message.hasAttachments)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
@@ -729,26 +758,75 @@ class AiChatPageState extends State<AiChatPage> {
                   ],
                 ),
               ),
-            if (message.content.isNotEmpty)
-              isUser
-                  ? SelectableText(message.content)
-                  : SelectionArea(
-                      child: GptMarkdown(
-                        message.content,
-                        style: theme.textTheme.bodyMedium,
-                        onLinkTap: (url, _) => _openLink(url),
-                      ),
+            if (message.content.isNotEmpty) SelectableText(message.content),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// AI 回答气泡（左侧）：思考过程折叠在上，正式回答直接铺开。
+  Widget _buildAnswerBubble(_ChatTurn turn) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final content = turn.content;
+    final reasoning = turn.reasoning;
+    final note = turn.contextNote;
+    final status = turn.status;
+
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 720),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (reasoning.trim().isNotEmpty ||
+                turn.tools.isNotEmpty ||
+                note != null)
+              ThinkingSection(
+                reasoning: reasoning,
+                summary: _thinkingSummary(turn),
+                statusText: status == AiChatMessageStatus.cancelled
+                    ? '已停止'
+                    : '',
+                children: [
+                  if (note != null)
+                    ContextNoteCard(
+                      note: note,
+                      tags: AiChatController.contextTagsOf(note),
                     ),
-            if (message.status == AiChatMessageStatus.error)
+                  for (final record in turn.tools) ToolCallCard(record: record),
+                ],
+              ),
+            if (content.isNotEmpty)
+              SelectionArea(
+                child: GptMarkdown(
+                  content,
+                  style: theme.textTheme.bodyMedium,
+                  onLinkTap: (url, _) => _openLink(url),
+                ),
+              ),
+            if (status == AiChatMessageStatus.error)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Row(
                   children: [
-                    Icon(Icons.error_outline, size: 16, color: colorScheme.error),
+                    Icon(
+                      Icons.error_outline,
+                      size: 16,
+                      color: colorScheme.error,
+                    ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        message.errorMessage ?? '生成失败',
+                        turn.errorMessage ?? '生成失败',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.error,
                         ),
@@ -761,7 +839,7 @@ class AiChatPageState extends State<AiChatPage> {
                   ],
                 ),
               ),
-            if (message.status == AiChatMessageStatus.cancelled)
+            if (status == AiChatMessageStatus.cancelled)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
@@ -775,6 +853,55 @@ class AiChatPageState extends State<AiChatPage> {
         ),
       ),
     );
+  }
+
+  /// 没有归属的系统说明（轮数上限、未知工具等）。
+  Widget _buildSystemNotice(AiChatMessage message) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final name = message.toolName ?? '';
+    final prefix = name.isEmpty || name == 'system'
+        ? ''
+        : '${ChatLabels.tool(name)}：';
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 3),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Text(
+          '$prefix${_shorten(message.content, 200)}',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 折叠行摘要：用了哪些工具、最后一步的状态。
+  String _thinkingSummary(_ChatTurn turn) {
+    if (turn.tools.isEmpty) return '';
+    final names = <String>[];
+    for (final record in turn.tools) {
+      final label = ChatLabels.tool(record.call.name);
+      if (!names.contains(label)) names.add(label);
+    }
+    final joined = names.length <= 2
+        ? names.join(' · ')
+        : '${names.take(2).join(' · ')} 等 ${names.length} 项';
+    final state = switch (turn.tools.last.state) {
+      AiToolCallState.pending => '等待批准',
+      AiToolCallState.approved => '执行中',
+      AiToolCallState.denied => '已被拒绝',
+      AiToolCallState.done => '已执行',
+      AiToolCallState.failed => '执行失败',
+    };
+    return '$joined · $state';
   }
 
   /// 消息中的图片：本机有原图时显示原图，跨设备只显示同步过来的缩略图。
@@ -809,43 +936,18 @@ class AiChatPageState extends State<AiChatPage> {
     );
   }
 
-  Widget _buildReasoning(String reasoning) {
-    final theme = Theme.of(context);
-    return Theme(
-      data: theme.copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: 8),
-        leading: Icon(
-          Icons.psychology_outlined,
-          size: 18,
-          color: theme.colorScheme.onSurfaceVariant,
-        ),
-        title: Text(
-          '思考过程',
-          style: theme.textTheme.labelSmall?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
-        ),
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SelectableText(
-              reasoning,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildStreamingBubble() {
     final theme = Theme.of(context);
     final text = _controller.streamingText;
     final reasoning = _controller.streamingReasoning;
+    final active = _controller.activeToolCalls;
+
+    final statusText = switch (_controller.state) {
+      AiChatStreamState.awaitingApproval => '等待你批准',
+      AiChatStreamState.waitingTool => '正在执行工具',
+      _ => '',
+    };
+
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -861,21 +963,32 @@ class AiChatPageState extends State<AiChatPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_controller.state == AiChatStreamState.awaitingApproval)
-              Text(
-                '等待你批准工具调用…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.primary,
-                ),
-              )
-            else if (_controller.state == AiChatStreamState.waitingTool)
-              Text(
-                '正在执行工具…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.primary,
+            if (reasoning.isNotEmpty || active.isNotEmpty)
+              ThinkingSection(
+                reasoning: reasoning,
+                summary: active.isEmpty
+                    ? ''
+                    : ChatLabels.tool(active.last.call.name),
+                statusText: statusText,
+                initiallyExpanded:
+                    _controller.state == AiChatStreamState.awaitingApproval ||
+                    _controller.state == AiChatStreamState.waitingTool,
+                children: [
+                  for (final record in active) ToolCallCard(record: record),
+                ],
+              ),
+            if (statusText.isNotEmpty && active.isEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  _controller.state == AiChatStreamState.awaitingApproval
+                      ? '等待你批准工具调用…'
+                      : '正在执行工具…',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  ),
                 ),
               ),
-            if (reasoning.isNotEmpty) _buildReasoning(reasoning),
             if (text.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -927,72 +1040,78 @@ class AiChatPageState extends State<AiChatPage> {
                     scrollDirection: Axis.horizontal,
                     itemCount: _pendingAttachments.length,
                     separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) =>
-                        _buildPendingThumbnail(_pendingAttachments[index], index),
+                    itemBuilder: (context, index) => _buildPendingThumbnail(
+                      _pendingAttachments[index],
+                      index,
+                    ),
                   ),
                 ),
               ),
             Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            IconButton(
-              tooltip: _visionEnabled ? '添加图片' : '当前 AI 配置未开启图片输入',
-              onPressed: busy || !_visionEnabled ? null : _pickImages,
-              icon: const Icon(Icons.add_photo_alternate_outlined),
-            ),
-            IconButton(
-              tooltip: _visionEnabled ? '粘贴图片（Ctrl+Shift+V）' : '当前 AI 配置未开启图片输入',
-              onPressed: busy || !_visionEnabled ? null : _pasteImage,
-              icon: const Icon(Icons.content_paste_go),
-            ),
-            Expanded(
-              child: CallbackShortcuts(
-                bindings: {
-                  const SingleActivator(LogicalKeyboardKey.enter): _send,
-                  const SingleActivator(LogicalKeyboardKey.enter, control: true):
-                      () {},
-                  const SingleActivator(
-                    LogicalKeyboardKey.keyV,
-                    control: true,
-                    shift: true,
-                  ): _pasteImage,
-                },
-                child: TextField(
-                  controller: _inputController,
-                  focusNode: _inputFocus,
-                  minLines: 1,
-                  maxLines: 6,
-                  textInputAction: TextInputAction.newline,
-                  decoration: InputDecoration(
-                    hintText: '和你配置的 AI 聊天…',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                  ),
-                  onSubmitted: (_) {
-                    if (!busy) _send();
-                  },
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  tooltip: _visionEnabled ? '添加图片' : '当前 AI 配置未开启图片输入',
+                  onPressed: busy || !_visionEnabled ? null : _pickImages,
+                  icon: const Icon(Icons.add_photo_alternate_outlined),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            busy
-                ? IconButton.filled(
-                    tooltip: '停止生成',
-                    onPressed: _controller.cancel,
-                    icon: const Icon(Icons.stop),
-                  )
-                : IconButton.filled(
-                    tooltip: '发送',
-                    onPressed: _send,
-                    icon: const Icon(Icons.send),
+                IconButton(
+                  tooltip: _visionEnabled
+                      ? '粘贴图片（Ctrl+Shift+V）'
+                      : '当前 AI 配置未开启图片输入',
+                  onPressed: busy || !_visionEnabled ? null : _pasteImage,
+                  icon: const Icon(Icons.content_paste_go),
+                ),
+                Expanded(
+                  child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.enter): _send,
+                      const SingleActivator(
+                        LogicalKeyboardKey.enter,
+                        control: true,
+                      ): () {},
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        control: true,
+                        shift: true,
+                      ): _pasteImage,
+                    },
+                    child: TextField(
+                      controller: _inputController,
+                      focusNode: _inputFocus,
+                      minLines: 1,
+                      maxLines: 6,
+                      textInputAction: TextInputAction.newline,
+                      decoration: InputDecoration(
+                        hintText: '和你配置的 AI 聊天…',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                      ),
+                      onSubmitted: (_) {
+                        if (!busy) _send();
+                      },
+                    ),
                   ),
-          ],
-        ),
+                ),
+                const SizedBox(width: 8),
+                busy
+                    ? IconButton.filled(
+                        tooltip: '停止生成',
+                        onPressed: _controller.cancel,
+                        icon: const Icon(Icons.stop),
+                      )
+                    : IconButton.filled(
+                        tooltip: '发送',
+                        onPressed: _send,
+                        icon: const Icon(Icons.send),
+                      ),
+              ],
+            ),
           ],
         ),
       ),
@@ -1015,7 +1134,11 @@ class AiChatPageState extends State<AiChatPage> {
           clipBehavior: Clip.antiAlias,
           child: provider == null
               ? Icon(Icons.image, color: theme.colorScheme.onSurfaceVariant)
-              : Image(image: provider, fit: BoxFit.cover, gaplessPlayback: true),
+              : Image(
+                  image: provider,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                ),
         ),
         Positioned(
           top: 2,
@@ -1049,10 +1172,7 @@ class AiChatPageState extends State<AiChatPage> {
         content: Text(warning),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 6),
-        action: SnackBarAction(
-          label: '重新添加',
-          onPressed: () => _pickImages(),
-        ),
+        action: SnackBarAction(label: '重新添加', onPressed: () => _pickImages()),
       ),
     );
   }
@@ -1087,4 +1207,45 @@ class AiChatPageState extends State<AiChatPage> {
     if (oneLine.length <= max) return oneLine;
     return '${oneLine.substring(0, max)}…';
   }
+}
+
+/// UI 层的一轮问答：一次提问 + 它触发的全部模型轮次与工具调用。
+///
+/// 控制器仍然逐条落库（assistant / tool 分成多条消息，回灌协议需要），
+/// 这里只负责把它们重新折成一个气泡。
+class _ChatTurn {
+  _ChatTurn({this.user, this.contextNote, this.notice});
+
+  /// 提问消息；没有提问的多轮续写时为 null。
+  final AiChatMessage? user;
+
+  /// 该提问冻结的上下文注入（若有）。
+  final String? contextNote;
+
+  /// 没有归属的系统说明消息。
+  final AiChatMessage? notice;
+
+  /// 该轮里模型产出的所有 assistant 消息，按发生顺序。
+  final List<AiChatMessage> rounds = [];
+
+  /// 该轮发起的工具调用记录，与 [rounds] 里的 tool_calls 一一对应。
+  final List<AiToolCallRecord> tools = [];
+
+  /// 各轮正文拼接后的正式回答。
+  String get content => rounds
+      .map((m) => m.content.trim())
+      .where((t) => t.isNotEmpty)
+      .join('\n\n');
+
+  /// 各轮思维链拼接。
+  String get reasoning => rounds
+      .map((m) => m.reasoning?.trim() ?? '')
+      .where((t) => t.isNotEmpty)
+      .join('\n\n');
+
+  /// 以最后一条为准的状态与错误信息。
+  AiChatMessageStatus get status =>
+      rounds.isEmpty ? AiChatMessageStatus.complete : rounds.last.status;
+
+  String? get errorMessage => rounds.isEmpty ? null : rounds.last.errorMessage;
 }
