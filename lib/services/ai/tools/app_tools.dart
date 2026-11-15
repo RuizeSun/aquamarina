@@ -332,7 +332,10 @@ class AppTools {
     int Function() loadSchemaVersion,
   ) => AiToolDescriptor(
     name: 'get_app_info',
-    description: '获取 App 版本、数据库 schema 版本等基础信息，用于排查问题或回答产品相关问题。',
+    description:
+        '重新确认 App 版本与数据库 schema。注意：这些信息通常已随系统提示词自动注入，'
+        '无需为了回答版本类问题而调用本工具；仅在用户明确要求核对、或怀疑注入信息'
+        '与实际不符时使用。',
     risk: AiToolRisk.readOnly,
     parameters: {'type': 'object', 'properties': {}},
     execute: (args) async {

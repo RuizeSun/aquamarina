@@ -8,6 +8,7 @@ import '../../models/ai_profile.dart';
 import '../system/log_service.dart';
 import 'ai_chat_service.dart';
 import 'ai_chat_settings.dart';
+import 'ai_context_builder.dart';
 import 'ai_image_service.dart';
 import 'ai_profile_service.dart';
 import 'ai_service.dart';
@@ -46,7 +47,9 @@ class AiChatController extends ChangeNotifier {
     AiToolRegistry? toolRegistry,
     AiToolApprovalHandler? approvalHandler,
     AiImageService? imageService,
+    AiContextBuilder? contextBuilder,
   }) : _chatService = chatService ?? AiChatService.instance,
+       _contextBuilder = contextBuilder ?? AiContextBuilder(),
        _imageService = imageService ?? AiImageService.instance,
        _aiService = aiService ?? AiService(),
        _profileService = profileService ?? AiProfileService(),
@@ -60,6 +63,7 @@ class AiChatController extends ChangeNotifier {
   final AiChatSettings _settings;
   final AiToolRegistry _registry;
   final AiImageService _imageService;
+  final AiContextBuilder _contextBuilder;
 
   /// 页面注入的批准回调；页面销毁后置空 → 所有写操作自动拒绝。
   AiToolApprovalHandler? _approvalHandler;
@@ -229,7 +233,7 @@ class AiChatController extends ChangeNotifier {
     final autoApprove = await settings.getAutoApproveReadOnly();
     final maxRounds = await settings.getMaxToolRounds();
     final maxMessages = await settings.getContextMessages();
-    final systemPrompt = await settings.getSystemPrompt();
+    final baseSystemPrompt = await settings.getSystemPrompt();
     final temperature = await settings.getTemperatureOverride();
     final maxTokens = await settings.getMaxTokensOverride();
 
@@ -254,6 +258,15 @@ class AiChatController extends ChangeNotifier {
       alwaysAllowed: _sessionApprovedTools,
     );
 
+    final injectRuntime = await settings.getInjectRuntimeContext();
+    final injectTime = await settings.getInjectTimeContext();
+    final refreshSteps = await settings.getContextRefreshSteps();
+    final systemPrompt = await _composeSystemPrompt(
+      baseSystemPrompt,
+      injectRuntime: injectRuntime,
+      injectTime: injectTime,
+    );
+
     // 关闭流式输出时走一次性请求，且不启用工具调用
     if (!streamEnabled) {
       await _runSingleShot(
@@ -267,14 +280,23 @@ class AiChatController extends ChangeNotifier {
     }
 
     var round = 0;
+    var roundSystemPrompt = systemPrompt;
     while (true) {
+      // 长会话里时间会走偏：每 refreshSteps 轮重算一次系统提示词
+      if (round > 0 && round % refreshSteps == 0) {
+        roundSystemPrompt = await _composeSystemPrompt(
+          baseSystemPrompt,
+          injectRuntime: injectRuntime,
+          injectTime: injectTime,
+        );
+      }
       final requestMessages = trimContext(
         await _withImagePayload(
           _messages,
           visionEnabled: profile.enableVision,
         ),
         maxMessages,
-        system: systemPrompt,
+        system: roundSystemPrompt,
       );
       _logImagePayload(requestMessages);
       final result = await _streamOnce(
@@ -487,6 +509,31 @@ class AiChatController extends ChangeNotifier {
       result.add(message.copyWith(attachments: prepared.attachments));
     }
     return result;
+  }
+
+  /// 把稳定事实拼进系统提示词，省掉「先问一次工具才知道版本」的往返。
+  ///
+  /// 参照 DeepSeek Harness 的做法：运行环境这类几乎不变的信息每轮直接注入；
+  /// 时间每轮重新取，保证「今天」「现在」类问题不会用到过期时间。
+  Future<String> _composeSystemPrompt(
+    String base, {
+    required bool injectRuntime,
+    required bool injectTime,
+  }) async {
+    if (!injectRuntime && !injectTime) return base;
+    try {
+      final extra = await _contextBuilder.build(
+        includeTime: injectTime,
+        includeRuntime: injectRuntime,
+      );
+      if (extra.trim().isEmpty) return base;
+      return '$base\n\n$extra';
+    } catch (e, stackTrace) {
+      // 上下文构造失败绝不能阻断对话
+      logWarning('AiChatController', '构造上下文失败，已跳过注入: $e');
+      logWarning('AiChatController', stackTrace.toString());
+      return base;
+    }
   }
 
   /// 记录本轮请求携带的图片张数与**实际像素尺寸**。

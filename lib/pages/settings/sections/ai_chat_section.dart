@@ -42,6 +42,9 @@ class _AiChatSectionState extends State<AiChatSection> {
   int _maxToolRounds = AiChatSettings.defaultToolRounds;
   bool _streamEnabled = true;
   Set<String> _disabledTools = {};
+  bool _injectRuntime = true;
+  bool _injectTime = true;
+  int _refreshSteps = AiChatSettings.defaultRefreshSteps;
   AiImageSendMode _imageSendMode = AiImageSendMode.compressed;
   int _imageThumbnailSize = AiChatAttachment.thumbSizeLarge;
   int _sessionCount = 0;
@@ -81,6 +84,9 @@ class _AiChatSectionState extends State<AiChatSection> {
       _chatService.countMessages(),
       _settings.getImageSendMode(),
       _settings.getImageThumbnailSize(),
+      _settings.getInjectRuntimeContext(),
+      _settings.getInjectTimeContext(),
+      _settings.getContextRefreshSteps(),
     ]);
     if (!mounted) return;
     setState(() {
@@ -98,6 +104,9 @@ class _AiChatSectionState extends State<AiChatSection> {
       _messageCount = results[11] as int;
       _imageSendMode = results[12] as AiImageSendMode;
       _imageThumbnailSize = results[13] as int;
+      _injectRuntime = results[14] as bool;
+      _injectTime = results[15] as bool;
+      _refreshSteps = results[16] as int;
       _loading = false;
     });
   }
@@ -242,6 +251,36 @@ class _AiChatSectionState extends State<AiChatSection> {
             setState(() => _streamEnabled = value);
           },
         ),
+        const Divider(),
+
+        // ── 上下文注入 ──
+        const SettingsSectionHeader(title: '上下文自动注入'),
+        SwitchListTile(
+          title: const Text('注入运行环境'),
+          subtitle: const Text('App 版本、数据库 schema、平台；模型无需再调用工具确认'),
+          value: _injectRuntime,
+          onChanged: (v) async {
+            await _settings.setInjectRuntimeContext(v);
+            setState(() => _injectRuntime = v);
+          },
+        ),
+        SwitchListTile(
+          title: const Text('注入当前时间'),
+          subtitle: const Text('每轮请求重新取时间，回答「今天」「现在」不会用过期值'),
+          value: _injectTime,
+          onChanged: (v) async {
+            await _settings.setInjectTimeContext(v);
+            setState(() => _injectTime = v);
+          },
+        ),
+        ListTile(
+          leading: Icon(Icons.refresh, color: colorScheme.primary),
+          title: const Text('长会话刷新间隔'),
+          subtitle: Text('每 $_refreshSteps 步重新注入一次上下文'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _pickRefreshSteps,
+        ),
+
         const Divider(),
 
         // ── 图片（多模态）──
@@ -703,6 +742,37 @@ class _AiChatSectionState extends State<AiChatSection> {
     if (result == null) return;
     await _settings.setImageThumbnailSize(result);
     setState(() => _imageThumbnailSize = result);
+  }
+
+  Future<void> _pickRefreshSteps() async {
+    final options = [1, 3, 5, 10, 20];
+    final result = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (final step in options)
+              ListTile(
+                title: Text('每 $step 步'),
+                subtitle: Text(switch (step) {
+                  1 => '每轮都刷新，最准但更费 token',
+                  3 => '较频繁刷新',
+                  5 => '默认，平衡',
+                  10 => '较长会话才刷新',
+                  _ => '最省 token',
+                }),
+                trailing: _refreshSteps == step ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.of(sheetContext).pop(step),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+    await _settings.setContextRefreshSteps(result);
+    setState(() => _refreshSteps = result);
   }
 
   Future<void> _clearAll() async {

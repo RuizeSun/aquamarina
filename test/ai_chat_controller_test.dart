@@ -5,6 +5,7 @@ import 'package:aquamarina/models/ai_profile.dart';
 import 'package:aquamarina/services/ai/ai_chat_controller.dart';
 import 'package:aquamarina/services/ai/ai_chat_service.dart';
 import 'package:aquamarina/services/ai/ai_chat_settings.dart';
+import 'package:aquamarina/services/ai/ai_context_builder.dart';
 import 'package:aquamarina/services/ai/ai_image_service.dart';
 import 'package:aquamarina/services/ai/ai_profile_service.dart';
 import 'package:aquamarina/services/ai/ai_service.dart';
@@ -15,6 +16,7 @@ import 'package:aquamarina/services/ai/tools/ai_tool_registry.dart';
 import 'package:aquamarina/services/ai/tools/tool_approval.dart';
 import 'package:aquamarina/services/data/database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -419,6 +421,64 @@ void main() {
           .toList();
       expect(notices, hasLength(1));
       expect(notices.single.content, contains('上限'));
+    });
+  });
+
+  group('上下文自动注入', () {
+    test('系统提示词里带上 runtime 与 time 上下文', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      final controller = AiChatController(
+        chatService: chatService,
+        aiService: _CapturingAiService(captured),
+        profileService: _FakeProfileService(_profile()),
+        settings: AiChatSettings(),
+        toolRegistry: AiToolRegistry(const []),
+        contextBuilder: AiContextBuilder(
+          packageInfoLoader: () async => PackageInfo(
+            appName: 'Aquamarina',
+            packageName: 'app.aquamarina',
+            version: '1.4.5',
+            buildNumber: '28',
+          ),
+          schemaVersionLoader: () => 21,
+          clock: () => DateTime(2026, 11, 15, 20, 50),
+        ),
+      );
+      addTearDown(controller.dispose);
+      await controller.createSession();
+      await controller.send('现在几点？');
+
+      final system = captured.first.firstWhere((m) => m['role'] == 'system');
+      final content = system['content'] as String;
+      expect(content, contains('<runtime-context>'));
+      expect(content, contains('1.4.5+28'));
+      expect(content, contains('<time-context>'));
+      expect(content, contains('2026-11-15 20:50'));
+    });
+
+    test('关闭注入时系统提示词不含上下文标签', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        AiChatSettings.injectRuntimeContextKey: false,
+        AiChatSettings.injectTimeContextKey: false,
+      });
+      final captured = <List<Map<String, dynamic>>>[];
+      final controller = AiChatController(
+        chatService: chatService,
+        aiService: _CapturingAiService(captured),
+        profileService: _FakeProfileService(_profile()),
+        settings: AiChatSettings(),
+        toolRegistry: AiToolRegistry(const []),
+      );
+      addTearDown(controller.dispose);
+      await controller.createSession();
+      await controller.send('你好');
+
+      final system = captured.first.firstWhere((m) => m['role'] == 'system');
+      final content = system['content'] as String;
+      // 默认提示词本身就提到这两个标签，因此要断言「实际注入的内容」没出现
+      expect(content, isNot(contains('App: Aquamarina')));
+      expect(content, isNot(contains('数据库 schema:')));
     });
   });
 
