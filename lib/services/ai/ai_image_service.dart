@@ -72,6 +72,26 @@ class AiImageService {
   /// 最近一次失败原因（供 UI 提示，落盘/构造 payload 失败时设置）。
   String? lastError;
 
+  /// 本次运行内刚添加过的图片字节。
+  ///
+  /// 磁盘文件可能因为清理、权限或路径变化而读不到；只要进程还活着，
+  /// 就优先用这份内存副本，避免「刚粘贴的图」被降级成 32px 缩略图。
+  final Map<String, Uint8List> _memoryBytes = {};
+
+  /// 内存副本上限（按附件数），防止内存无限增长。
+  static const int _memoryCacheLimit = 8;
+
+  void _rememberBytes(String id, Uint8List bytes) {
+    _memoryBytes.remove(id);
+    _memoryBytes[id] = bytes;
+    while (_memoryBytes.length > _memoryCacheLimit) {
+      _memoryBytes.remove(_memoryBytes.keys.first);
+    }
+  }
+
+  /// 清理某个附件的内存副本。
+  void forgetBytes(String id) => _memoryBytes.remove(id);
+
   /// 发给模型时长边上限（压缩模式）。
   ///
   /// 1024 对截图里的正文太小：模型会看不清文字。1536 是多数视觉模型
@@ -100,12 +120,14 @@ class AiImageService {
         return null;
       }
       final bytes = await file.readAsBytes();
-      return prepareFromBytes(
+      final attachment = prepareFromBytes(
         bytes,
         fileName: p.basename(file.path),
         localPath: file.path,
         thumbnailSize: thumbnailSize,
       );
+      if (attachment != null) _rememberBytes(attachment.id, bytes);
+      return attachment;
     } catch (e, stackTrace) {
       logError('AiImageService', '读取图片失败: $e', stackTrace);
       return null;
@@ -122,19 +144,28 @@ class AiImageService {
     int thumbnailSize = AiChatAttachment.thumbSizeLarge,
   }) async {
     try {
+      // 先把字节解码再统一重编码为 PNG：剪贴板常给 BMP/DIB，
+      // 直接原样落盘会出现「扩展名 .png 但内容是 BMP」的错配。
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) {
+        logWarning('AiImageService', '无法解码图片: $fileName');
+        return null;
+      }
+      final normalized = _normalizeOrientation(decoded);
+      final png = Uint8List.fromList(img.encodePng(normalized, level: 6));
+
       final dir = await _attachmentDir();
       await dir.create(recursive: true);
       final id = const Uuid().v4();
-      final ext = p.extension(fileName).toLowerCase();
-      final safeExt = ext.isEmpty ? '.png' : ext;
-      final target = File(p.join(dir.path, '$id$safeExt'));
-      await target.writeAsBytes(bytes, flush: true);
+      final target = File(p.join(dir.path, '$id.png'));
+      await target.writeAsBytes(png, flush: true);
       final attachment = prepareFromBytes(
-        bytes,
-        fileName: fileName,
+        png,
+        fileName: '$id.png',
         localPath: target.path,
         thumbnailSize: thumbnailSize,
       );
+      if (attachment != null) _rememberBytes(attachment.id, png);
       if (attachment == null) {
         // 解析失败时不要留下孤儿文件
         try {
@@ -211,9 +242,13 @@ class AiImageService {
           if (attachment.thumbnailBase64.isEmpty) return null;
           return 'data:image/png;base64,${attachment.thumbnailBase64}';
         case AiImageSendMode.original:
-          final bytes = await _readLocalBytes(attachment);
+          final bytes = await _readLocalBytes(
+            attachment,
+            enforceSizeLimit: true,
+          );
           if (bytes == null) return null;
-          return 'data:${_mimeOf(attachment.fileName)};base64,${base64Encode(bytes)}';
+          // MIME 按真实字节判定：剪贴板来的 BMP 存成 .png 也不会被错误声明
+          return 'data:${_mimeOfBytes(bytes)};base64,${base64Encode(bytes)}';
         case AiImageSendMode.compressed:
           final bytes = await _readLocalBytes(attachment);
           if (bytes == null) return null;
@@ -259,22 +294,28 @@ class AiImageService {
       }
 
       if (mode != AiImageSendMode.thumbnail) {
-        // 原图/压缩拿不到：说明本机文件缺失（已被清理或跨设备同步而来）
         missingLocalFile += 1;
-        final thumbUrl = await buildDataUrl(
-          attachment,
-          AiImageSendMode.thumbnail,
-        );
-        if (thumbUrl != null) {
+
+        // 有序回退：原图 → 压缩图 → 缩略图。
+        // 直接跳到缩略图会让「原图读不到但压缩图做得出」的情况白白损失清晰度。
+        final chain = mode == AiImageSendMode.original
+            ? const [AiImageSendMode.compressed, AiImageSendMode.thumbnail]
+            : const [AiImageSendMode.thumbnail];
+
+        for (final fallback in chain) {
+          final fallbackUrl = await buildDataUrl(attachment, fallback);
+          if (fallbackUrl == null) continue;
+          final size = _sentDimensions(attachment, fallback, fallbackUrl);
           sent.add(
             attachment.copyWith(
-              dataUrl: thumbUrl,
-              detail: 'low',
-              sentWidth: attachment.thumbnailSize,
-              sentHeight: attachment.thumbnailSize,
+              dataUrl: fallbackUrl,
+              detail: fallback == AiImageSendMode.thumbnail ? 'low' : 'high',
+              sentWidth: size.width,
+              sentHeight: size.height,
             ),
           );
           degraded.add(attachment.fileName);
+          break;
         }
         continue;
       }
@@ -365,14 +406,31 @@ class AiImageService {
     return Directory(p.join(base.path, 'ai_chat_images'));
   }
 
-  Future<Uint8List?> _readLocalBytes(AiChatAttachment attachment) async {
+  /// 读取本机图片字节。
+  ///
+  /// [enforceSizeLimit] 只对「原图直发」生效：原样发送会把超大 base64 塞进请求体。
+  /// 压缩模式必须无上限读取——先读进来再缩放，否则一张 13MB 的截图会
+  /// 直接从「清晰原图」掉到 32px 缩略图。
+  Future<Uint8List?> _readLocalBytes(
+    AiChatAttachment attachment, {
+    bool enforceSizeLimit = false,
+  }) async {
     final path = attachment.localPath;
-    if (path == null || path.isEmpty) return null;
+    final cached = _memoryBytes[attachment.id];
+    if (path == null || path.isEmpty) {
+      if (cached != null) return cached;
+      return null;
+    }
     final file = File(path);
-    if (!await file.exists()) return null;
-    // 原图也做一次体积保护，避免把巨大的 base64 塞进请求体
-    final size = await file.length();
-    if (size > AiChatAttachment.maxSourceBytes) return null;
+    if (!await file.exists()) {
+      // 磁盘文件不在了（被清理/移动），退回内存副本
+      if (cached != null) return cached;
+      return null;
+    }
+    if (enforceSizeLimit) {
+      final size = await file.length();
+      if (size > AiChatAttachment.maxSourceBytes) return null;
+    }
     return file.readAsBytes();
   }
 
@@ -430,19 +488,40 @@ class AiImageService {
     }
   }
 
-  String _mimeOf(String fileName) {
-    final ext = p.extension(fileName).toLowerCase();
-    switch (ext) {
-      case '.png':
-        return 'image/png';
-      case '.webp':
-        return 'image/webp';
-      case '.gif':
-        return 'image/gif';
-      case '.bmp':
-        return 'image/bmp';
-      default:
-        return 'image/jpeg';
+  /// 按**文件真实字节**判定 MIME，而不是按扩展名。
+  ///
+  /// 剪贴板常见返回 BMP 位图，若按 `.png` 扩展名声明成 `image/png`，
+  /// 服务端会因为「声明与实际不符」而拒收或识别失败，模型看到的就是糊图/黑图。
+  String _mimeOfBytes(Uint8List bytes) {
+    if (bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47) {
+      return 'image/png';
     }
+    if (bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF) {
+      return 'image/jpeg';
+    }
+    if (bytes.length >= 6 &&
+        bytes[0] == 0x47 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46) {
+      return 'image/gif';
+    }
+    if (bytes.length >= 12 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x45 &&
+        bytes[10] == 0x42 &&
+        bytes[11] == 0x50) {
+      return 'image/webp';
+    }
+    if (bytes.length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4D) {
+      return 'image/bmp';
+    }
+    return 'image/jpeg';
   }
 }

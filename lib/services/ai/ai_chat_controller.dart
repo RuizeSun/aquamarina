@@ -468,12 +468,21 @@ class AiChatController extends ChangeNotifier {
         mode,
       );
       if (prepared.hasDegradation) {
-        // 用户要的是原图却只能发缩略图：必须让他知道，否则会误以为模型「看不清」
-        _imageWarning = prepared.requestedMode == AiImageSendMode.original
-            ? '本机原图已不可用，${prepared.degradedFileNames.length} 张图片已按 32px 缩略图发送，'
-                  '模型很可能看不清内容。请重新添加图片后再发送。'
-            : '本机原图已不可用，${prepared.degradedFileNames.length} 张图片已降级为 32px 缩略图发送。';
-        logWarning('AiChatController', _imageWarning!);
+        // 只有真的一路退到缩略图才需要警告；压缩图仍然清晰，不必打扰用户
+        final actual = prepared.attachments.firstWhere(
+          (a) => a.sentWidth > 0,
+          orElse: () => prepared.attachments.first,
+        );
+        final onlyThumbnail =
+            actual.sentWidth <= AiChatAttachment.thumbSizeLarge &&
+            actual.sentHeight <= AiChatAttachment.thumbSizeLarge;
+        if (onlyThumbnail) {
+          _imageWarning =
+              '本机原图已不可用，${prepared.degradedFileNames.length} 张图片只能按 '
+              '${actual.sentWidth}px 缩略图发送，模型很可能看不清内容。'
+              '请重新添加图片后再发送。';
+          logWarning('AiChatController', _imageWarning!);
+        }
       }
       result.add(message.copyWith(attachments: prepared.attachments));
     }

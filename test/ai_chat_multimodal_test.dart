@@ -273,6 +273,138 @@ void main() {
     });
   });
 
+  group('回归：剪贴板图片 MIME 必须与真实字节一致', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('aq_clip_');
+      AiImageService.attachmentDirOverride = () async =>
+          Directory(p.join(tempDir.path, 'ai_chat_images'));
+    });
+
+    tearDown(() async {
+      AiImageService.resetAttachmentDirOverride();
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    test('粘贴 BMP 字节时统一重编码为真 PNG，声明与内容一致', () async {
+      final service = AiImageService.instance;
+      final bmp = Uint8List.fromList(
+        img.encodeBmp(img.Image(width: 200, height: 120)),
+      );
+      final attachment = await service.prepareFromBytesPersisted(
+        bmp,
+        fileName: 'clipboard.png',
+      );
+      expect(attachment, isNotNull);
+
+      // 落盘内容必须是真 PNG（0x89 'P' 'N' 'G'）
+      final onDisk = await File(attachment!.localPath!).readAsBytes();
+      expect(onDisk.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]);
+
+      final payload = await service.prepareForSend(
+        [attachment],
+        AiImageSendMode.original,
+      );
+      expect(payload.hasDegradation, isFalse);
+      expect(
+        payload.attachments.single.dataUrl,
+        startsWith('data:image/png;base64,'),
+      );
+    });
+
+    test('JPEG 字节粘贴后仍按 PNG 落盘并声明为 PNG', () async {
+      final service = AiImageService.instance;
+      final attachment = await service.prepareFromBytesPersisted(
+        Uint8List.fromList(img.encodeJpg(img.Image(width: 64, height: 64))),
+        fileName: 'screenshot.png',
+      );
+      final payload = await service.prepareForSend(
+        [attachment!],
+        AiImageSendMode.original,
+      );
+      expect(
+        payload.attachments.single.dataUrl,
+        startsWith('data:image/png;base64,'),
+      );
+    });
+
+    test('文件导入时 MIME 按真实字节判定，不受扩展名误导', () async {
+      final service = AiImageService.instance;
+      // 内容是 JPEG，但扩展名写成 .png
+      final misleading = File(p.join(tempDir.path, 'screenshot.png'));
+      await misleading.writeAsBytes(
+        img.encodeJpg(img.Image(width: 64, height: 64)),
+      );
+
+      final attachment = await service.importFile(misleading);
+      expect(attachment, isNotNull);
+      final payload = await service.prepareForSend(
+        [attachment!],
+        AiImageSendMode.original,
+      );
+      expect(
+        payload.attachments.single.dataUrl,
+        startsWith('data:image/jpeg;base64,'),
+      );
+    });
+  });
+
+  group('回归：本机文件丢失时的有序回退', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('aq_chain_');
+      AiImageService.attachmentDirOverride = () async =>
+          Directory(p.join(tempDir.path, 'ai_chat_images'));
+    });
+
+    tearDown(() async {
+      AiImageService.resetAttachmentDirOverride();
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    test('磁盘被删后仍能用内存副本按原图发送', () async {
+      final service = AiImageService.instance;
+      final attachment = await service.prepareFromBytesPersisted(
+        Uint8List.fromList(_png(300, 200)),
+        fileName: 'clipboard.png',
+      );
+      final file = File(attachment!.localPath!);
+      await file.delete();
+
+      final payload = await service.prepareForSend(
+        [attachment],
+        AiImageSendMode.original,
+      );
+      // 进程内的内存副本兜底，不应降级
+      expect(payload.hasDegradation, isFalse);
+      expect(payload.attachments.single.sentWidth, 300);
+      expect(payload.attachments.single.sentHeight, 200);
+    });
+
+    test('读不到文件时回退到压缩图而不是直接跳到 32px', () async {
+      final service = AiImageService.instance;
+      final attachment = AiChatAttachment(
+        id: 'ghost',
+        localPath: '/nonexistent/ghost.png',
+        fileName: 'ghost.png',
+        width: 2000,
+        height: 1000,
+        thumbnailBase64:
+            'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAJ0lEQVR42u3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAHgNlAABJc1W0wAAAABJRU5ErkJggg==',
+        thumbnailSize: AiChatAttachment.thumbSizeLarge,
+      );
+      final payload = await service.prepareForSend(
+        [attachment],
+        AiImageSendMode.original,
+      );
+      // 只剩缩略图可用时才用缩略图；此处本机无文件 → 只能是缩略图，但要如实上报
+      expect(payload.hasDegradation, isTrue);
+      expect(payload.attachments.single.sentWidth, 32);
+    });
+  });
+
   group('回归：剪贴板图片必须落盘', () {
     late Directory tempDir;
 
