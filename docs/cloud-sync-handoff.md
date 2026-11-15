@@ -82,7 +82,12 @@ flutter test test/cloud_sync_s3_integration_test.dart
    - 「立即上传备份」：把本机数据库 + 设置打包为 ZIP，更新云端统一快照；
    - 自动检查点：每 7 天或累计 5000 条变更更新一份统一快照；
    - 「从云端数据恢复」：用统一快照覆盖本机，恢复前自动保留本机数据库快照。
-5. **安全与隐私**
+5. **二维码分享 / 扫码导入**
+   - 已配置设备在「二维码分享」页生成二维码，默认包含 AK/SK，可关闭只分享非敏感配置；
+   - 另一台设备扫码（移动端相机）或从图片 / 剪贴板导入（桌面端）后自动写入配置；
+   - 导入后复用既有的「首次接入」流程，不新增同步协议；
+   - 静态二维码不可撤销，泄露只能更换 AK/SK —— 页面与文档均明确提示。
+6. **安全与隐私**
    - AK/SK 只存本机 Secure Storage，不进入备份、不上传云端；
    - 快照默认不包含 AI API Key，上传时可显式勾选；
    - 云同步配置（`cloud_sync_*`）是设备本地设置，备份导出/恢复都会跳过。
@@ -148,7 +153,12 @@ SyncApplyService（单事务、幂等、HLC/行版本/墓碑）
 | `lib/models/cloud_sync_manifest.dart` | 快照清单/快照元信息、格式版本、SHA-256、对象键工具 |
 | `lib/models/cloud_sync_device_state.dart` | `head.json` / `state.json` 模型、JSON 编解码与水位合并 |
 | `lib/pages/settings/sections/cloud_sync_section.dart` | 设置页云同步分区与同步结果 UI |
-| `lib/pages/settings/cloud_sync_config_page.dart` | 对象存储配置表单、连接测试、自动同步间隔、设备标识管理 |
+| `lib/pages/settings/cloud_sync_config_page.dart` | 对象存储配置表单、连接测试、自动同步间隔、设备标识管理、二维码入口 |
+| `lib/models/cloud_sync_share_payload.dart` | 二维码分享载荷：短键 JSON + `aquamarina://cloud-sync/v1/` 编码、版本与字段校验、掩码摘要 |
+| `lib/services/cloud/cloud_sync_share_service.dart` | 生成/解析分享载荷、zxing2 图片解码、导入落地（凭据保留与清除规则） |
+| `lib/pages/settings/cloud_sync_share_page.dart` | 二维码分享页：含/不含密钥开关、二维码、复制文本、导出图片 |
+| `lib/pages/settings/cloud_sync_scan_page.dart` | 扫码导入页：相机扫码、图片文件、剪贴板图片/文本、导入确认与连接自检 |
+| `lib/pages/settings/cloud_sync_bootstrap_prompt.dart` | 配置页与扫码页共用的「发现云端数据」引导 |
 | `lib/services/data/backup_service.dart` | ZIP 备份/恢复；保护 `cloud_sync_*` Prefs；恢复后重置同步运行时并写基线 |
 
 ### 2.4 云端对象布局

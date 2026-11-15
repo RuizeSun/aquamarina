@@ -3,14 +3,15 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 
 import '../../models/cloud_sync_manifest.dart';
-import '../../services/cloud/cloud_sync_bootstrap_service.dart';
-import '../../services/cloud/cloud_sync_introduction_service.dart';
 import '../../services/cloud/cloud_sync_service.dart';
 import '../../services/cloud/cloud_sync_settings.dart';
 import '../../services/cloud/cloud_sync_foreground_sync_service.dart';
 import '../../services/cloud/cloud_sync_run_lock.dart';
 import '../../services/cloud/sync_capture_service.dart';
+import 'cloud_sync_bootstrap_prompt.dart';
 import 'cloud_sync_progress.dart';
+import 'cloud_sync_scan_page.dart';
+import 'cloud_sync_share_page.dart';
 
 /// 对象存储配置页。
 ///
@@ -166,51 +167,13 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
   }
 
   /// 新设备首次配置：本机没有业务数据且云端有快照时，询问是否引导。
-  Future<void> _maybeBootstrap() async {
-    try {
-      if (await CloudSyncBootstrapService.hasLocalData()) return;
-      final candidate = await CloudSyncBootstrapService.findLatestSnapshot();
-      if (candidate == null || !mounted) return;
-      final summary = candidate.summary;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('发现云端数据'),
-          content: Text(
-            '本机还没有学习数据，云端已有一份统一数据'
-            '（${summary.latest!.createdAt.toLocal()}）。\n\n'
-            '是否立即用云端数据初始化本机？当前空库不会丢失任何学习记录。',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('稍后手动恢复'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('立即引导'),
-            ),
-          ],
-        ),
-      );
-      if (confirmed != true || !mounted) return;
-      await runWithProgressDialog<CloudRestoreOutcome>(
-        context,
-        title: '从云端引导',
-        task: (update) async {
-          update('正在下载并校验云端数据…');
-          return candidate.service.restoreSnapshot(summary);
-        },
-      );
-      await CloudSyncSettings.saveIntroDecision(
-        summary.manifest.deviceId,
-        CloudSyncIntroAction.useCloud.storageValue,
-      );
-      if (mounted) _showSnack('已从云端引导，建议重启应用');
-    } catch (e) {
-      if (mounted) _showSnack('自动引导失败：$e', isError: true);
-    }
-  }
+  ///
+  /// 与扫码导入共用 `maybeBootstrapFromCloud`，保证两条入口提示完全一致。
+  Future<void> _maybeBootstrap() => maybeBootstrapFromCloud(
+    context,
+    showMessage: (message, {bool isError = false}) =>
+        _showSnack(message, isError: isError),
+  );
 
   Future<void> _save() async {
     if (_saving) return;
@@ -373,6 +336,22 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
   Future<void> _copyDeviceId() async {
     await Clipboard.setData(ClipboardData(text: _deviceId));
     _showSnack('设备标识已复制');
+  }
+
+  /// 打开二维码分享页；返回后重新读取配置，避免表单与已保存配置不一致。
+  Future<void> _openShareQr() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (context) => const CloudSyncQrSharePage()),
+    );
+    if (mounted) await _load();
+  }
+
+  /// 打开扫码导入页；导入成功后表单需要刷新为云端带来的配置。
+  Future<void> _openScanQr() async {
+    final imported = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (context) => const CloudSyncQrScanPage()),
+    );
+    if (imported == true && mounted) await _load();
   }
 
   Widget _sectionTitle(String text) {
@@ -698,6 +677,27 @@ class _CloudSyncConfigPageState extends State<CloudSyncConfigPage> {
                         foregroundColor: colorScheme.error,
                       ),
                     ),
+                  ),
+
+                  _sectionTitle('二维码分享'),
+                  Text(
+                    '在一台设备上生成二维码，其它设备扫码即可自动填好这份配置，'
+                    '不需要手抄 Access Key / Secret Key。',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _openShareQr,
+                    icon: const Icon(Icons.qr_code_2),
+                    label: const Text('生成分享二维码'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _saving ? null : _openScanQr,
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text('扫描二维码导入'),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton.icon(

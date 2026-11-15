@@ -55,6 +55,9 @@ Aquamarina 是一款基于 Flutter 的英语学习应用，内置离线英汉双
 ### 💾 数据管理
 
 - ZIP 格式备份导出与导入，支持选择是否包含 AI API Key
+- **云同步**：S3 兼容对象存储（Rain / MinIO / R2 / AWS）多设备增量同步，冲突可逐条处理
+- **二维码分享**：已配置设备生成二维码，其它设备扫码即可自动填好对象存储配置，
+  无需手抄 Access Key / Secret Key（可选是否包含密钥）
 - 清除本地数据
 
 ### 🔄 应用更新
@@ -96,6 +99,8 @@ flutter run
 - **url_launcher**：外部链接跳转
 - **package_info_plus**：应用版本信息
 - **uuid**：唯一标识生成
+- **qr_flutter / mobile_scanner / zxing2 / pasteboard**：云同步配置二维码的生成、
+  相机扫码、图片解码与剪贴板导入
 
 ## 📄 许可证
 

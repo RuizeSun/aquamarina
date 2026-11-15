@@ -16,6 +16,8 @@ import '../cloud_sync_config_page.dart';
 import '../cloud_sync_conflict_page.dart';
 import '../cloud_sync_devices_page.dart';
 import '../cloud_sync_progress.dart';
+import '../cloud_sync_scan_page.dart';
+import '../cloud_sync_share_page.dart';
 import '../settings_section_header.dart';
 
 /// 云同步分区（阶段 2：设备隔离快照上传 / 恢复）。
@@ -133,6 +135,22 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
     if (changed == true) {
       await _load();
     }
+  }
+
+  /// 展开二维码分享页；返回后刷新，因为分享页也能完成扫码导入。
+  Future<void> _openShareQr() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (context) => const CloudSyncQrSharePage()),
+    );
+    if (changed == true && mounted) await _load();
+  }
+
+  /// 扫码导入：成功后配置已变化，必须重新读取分区状态。
+  Future<void> _openScanQr() async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (context) => const CloudSyncQrScanPage()),
+    );
+    if (changed == true && mounted) await _load();
   }
 
   /// 从云端最新检查点引导（不限首次配置，可随时灾备恢复）。
@@ -902,6 +920,24 @@ class _CloudSyncSectionState extends State<CloudSyncSection> {
           trailing: const Icon(Icons.chevron_right),
           onTap: _busy ? null : _openConfig,
         ),
+        if (_configured)
+          ListTile(
+            leading: Icon(Icons.qr_code_2, color: colorScheme.primary),
+            title: const Text('二维码分享'),
+            subtitle: const Text('扫码即可在其它设备上自动配置对象存储'),
+            trailing: const Icon(Icons.chevron_right),
+            enabled: !_busy,
+            onTap: _busy ? null : _openShareQr,
+          )
+        else
+          ListTile(
+            leading: Icon(Icons.qr_code_scanner, color: colorScheme.primary),
+            title: const Text('扫描二维码快速配置'),
+            subtitle: const Text('从其它设备分享的二维码一键填入端点与密钥'),
+            trailing: const Icon(Icons.chevron_right),
+            enabled: !_busy,
+            onTap: _busy ? null : _openScanQr,
+          ),
         if (_configured && !_captureEnabled)
           ListTile(
             leading: Icon(

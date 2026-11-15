@@ -36,6 +36,8 @@ void main() {
     expect(find.text('尚未完成配置'), findsOneWidget);
     expect(find.text('同步'), findsOneWidget);
     expect(find.text('高级 / 灾备'), findsOneWidget);
+    // 未配置时的二维码扫码入口
+    expect(find.text('扫描二维码快速配置'), findsOneWidget);
 
     await tester.tap(find.text('对象存储配置'));
     await tester.pumpAndSettle();
