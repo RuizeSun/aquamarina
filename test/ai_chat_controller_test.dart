@@ -584,6 +584,90 @@ void main() {
     });
   });
 
+  group('上下文按变化注入', () {
+    AiChatController build(
+      List<List<Map<String, dynamic>>> captured,
+      DateTime Function() clock,
+    ) {
+      return AiChatController(
+        chatService: chatService,
+        aiService: _CapturingAiService(captured),
+        profileService: _FakeProfileService(_profile()),
+        settings: AiChatSettings(),
+        toolRegistry: AiToolRegistry(const []),
+        contextBuilder: AiContextBuilder(
+          packageInfoLoader: () async => PackageInfo(
+            appName: 'Aquamarina',
+            packageName: 'app.aquamarina',
+            version: '1.4.5',
+            buildNumber: '28',
+          ),
+          schemaVersionLoader: () => 21,
+          clock: clock,
+        ),
+      );
+    }
+
+    test('同一分钟内第二轮不再重复注入', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      final controller = build(captured, () => DateTime(2026, 11, 15, 20, 50, 10));
+      addTearDown(controller.dispose);
+
+      await controller.createSession();
+      await controller.send('第一问');
+      await controller.send('第二问');
+
+      // 第一轮：system, user, context
+      expect(captured[0], hasLength(3));
+      // 第二轮：上下文无变化 → 不再新增注入消息
+      final notes = captured[1]
+          .where((m) => m['role'] != 'system')
+          .where((m) => '${m['content']}'.contains('<context-note>'))
+          .toList();
+      expect(notes, hasLength(1), reason: '只有第一轮那份，历史原样重发');
+    });
+
+    test('时间跨分钟后会补一条新的注入', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      var now = DateTime(2026, 11, 15, 20, 50, 10);
+      final controller = build(captured, () => now);
+      addTearDown(controller.dispose);
+
+      await controller.createSession();
+      await controller.send('第一问');
+      now = DateTime(2026, 11, 15, 21, 30, 0);
+      await controller.send('第二问');
+
+      final notes = captured[1]
+          .where((m) => m['role'] != 'system')
+          .where((m) => '${m['content']}'.contains('<context-note>'))
+          .toList();
+      expect(notes, hasLength(2), reason: '历史一份 + 本轮新增一份');
+      expect(notes.first['content'] as String, contains('20:50'));
+      expect(notes.last['content'] as String, contains('21:30'));
+    });
+
+    test('runtime 恒定则只在首轮出现一次', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final captured = <List<Map<String, dynamic>>>[];
+      var now = DateTime(2026, 11, 15, 20, 50, 0);
+      final controller = build(captured, () => now);
+      addTearDown(controller.dispose);
+
+      await controller.createSession();
+      await controller.send('一');
+      now = DateTime(2026, 11, 15, 22, 0, 0);
+      await controller.send('二');
+
+      final runtimeNotes = captured[1]
+          .where((m) => m['role'] != 'system')
+          .where((m) => '${m['content']}'.contains('<runtime-context>'));
+      expect(runtimeNotes, hasLength(1), reason: 'runtime 未变化，不重复注入');
+    });
+  });
+
   group('上下文注入标签解析', () {
     test('解析出注入的分块名', () {
       const note = '<context-note>\n<runtime-context>\nA\n</runtime-context>\n'

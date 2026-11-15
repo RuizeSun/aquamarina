@@ -110,6 +110,13 @@ class AiChatController extends ChangeNotifier {
   /// 冻结在首次注入时刻，保证同一会话里历史前缀逐字不变 → 缓存可命中。
   final Map<String, String> _contextNotes = {};
 
+  /// 上一次已注入过的运行环境 / 时间原值。
+  ///
+  /// 只有内容真的变化时才重新注入：runtime 在会话内基本恒定，
+  /// 每轮重发纯属浪费 token；时间按分钟粒度比较，同一分钟内不重复。
+  String? _lastRuntimeSnapshot;
+  String? _lastTimeSnapshot;
+
   CancelToken? _cancelToken;
 
   // ── 会话切换 ──────────────────────────────────────
@@ -517,7 +524,15 @@ class AiChatController extends ChangeNotifier {
     return result;
   }
 
-  /// 把上下文**附加到最后一条 user 消息尾部**，而不是改 system 提示词。
+  /// 按需注入上下文：**只在内容发生变化时**才追加，且不改动 system 提示词。
+
+  /// 两个原因：
+  /// 1. system 提示词必须逐字稳定。改动它会让整段前缀缓存失效
+  ///    （DeepSeek 的上下文缓存按前缀命中）；
+  /// 2. 若把注入内容混进历史轮次的 system 里，模型回头看自己早先的回答
+  ///    会发现「当时的系统提示词」和现在不同，容易开始自我质疑、质量下降。
+
+  /// 放在最后一条 user 消息里，历史前缀逐字不变，且明确标注这不是用户说的话。
   ///
   /// 两个原因：
   /// 1. system 提示词必须逐字稳定。改动它会让整段前缀缓存失效
@@ -535,11 +550,26 @@ class AiChatController extends ChangeNotifier {
     if (!injectRuntime && !injectTime) return messages;
     if (messages.isEmpty) return messages;
 
-    final extra = await _contextBuilder.build(
-      includeRuntime: injectRuntime,
-      includeTime: injectTime,
-    );
-    if (extra.trim().isEmpty) return messages;
+    // 只拼「发生了变化」的块：runtime 恒定就不重复占位，
+    // 时间同一分钟内也不重复。
+    final blocks = <String>[];
+    if (injectRuntime) {
+      final runtime = await _contextBuilder.buildRuntimeContext();
+      if (runtime.trim().isNotEmpty && runtime != _lastRuntimeSnapshot) {
+        _lastRuntimeSnapshot = runtime;
+        blocks.add(AiContextBuilder.wrapBlock('runtime-context', runtime));
+      }
+    }
+    if (injectTime) {
+      final time = _contextBuilder.buildTimeContext();
+      if (time != _lastTimeSnapshot) {
+        _lastTimeSnapshot = time;
+        blocks.add(AiContextBuilder.wrapBlock('time-context', time));
+      }
+    }
+    final extra = blocks.join('\n\n');
+    // 本轮没有变化：不追加任何内容（历史快照仍然随请求重发）
+    final hasFresh = extra.trim().isNotEmpty;
 
     // 只在最后一条 user 消息上追加；没有 user 消息就原样返回
     var index = -1;
@@ -551,12 +581,12 @@ class AiChatController extends ChangeNotifier {
     }
     if (index < 0) return messages;
 
-    // 每轮重新算一份「当前」上下文
-    final fresh = _wrapContext(extra);
+    // 本轮有变化才生成新快照；否则最新这条 user 消息不挂上下文
+    final fresh = hasFresh ? _wrapContext(extra) : null;
 
     // 关键：历史轮次的上下文必须逐字冻结，否则前缀缓存每轮都会失效。
     // 这里按「紧随其后的那条 user 消息」配对，已记录的沿用它，
-    // 只有最新的那条 user 消息才拿新算出来的内容。
+    // 只有最新的那条 user 消息才可能拿到新算出来的内容。
     final lastUserId = _messageIdOf(messages[index]);
 
     final result = <Map<String, dynamic>>[];
@@ -571,7 +601,7 @@ class AiChatController extends ChangeNotifier {
       String? note;
       if (i == index) {
         note = fresh;
-        if (id != null) _contextNotes[id] = fresh;
+        if (id != null && fresh != null) _contextNotes[id] = fresh;
       } else if (id != null) {
         note = _contextNotes[id];
       }
@@ -582,7 +612,7 @@ class AiChatController extends ChangeNotifier {
     }
 
     // 没有任何 user 消息时把上下文放在最后，避免丢失
-    if (result.length == messages.length && lastUserId == null) {
+    if (result.length == messages.length && lastUserId == null && fresh != null) {
       result.add({'role': 'user', 'content': fresh});
     }
     return result;

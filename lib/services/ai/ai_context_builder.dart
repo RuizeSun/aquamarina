@@ -94,6 +94,9 @@ class AiContextBuilder {
     return blocks.join('\n\n');
   }
 
-  static String _wrap(String tag, String body) =>
+  /// 把一段内容包成带标签的块（供控制器按需拼装）。
+  static String wrapBlock(String tag, String body) =>
       '<$tag>\n${body.trim()}\n</$tag>';
+
+  static String _wrap(String tag, String body) => wrapBlock(tag, body);
 }
