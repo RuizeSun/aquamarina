@@ -403,6 +403,7 @@ class AiChatPageState extends State<AiChatPage> {
     await _controller.send(text, attachments: attachments);
     _reloadSessions();
     _inputFocus.requestFocus();
+    _showImageWarningIfAny();
   }
 
   // ── 构建 ──────────────────────────────────────────
@@ -1020,6 +1021,23 @@ class AiChatPageState extends State<AiChatPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 图片降级时给出明确提示，避免用户误以为模型「看不清」是模型能力问题。
+  void _showImageWarningIfAny() {
+    final warning = _controller.imageWarning;
+    if (warning == null || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(warning),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(
+          label: '重新添加',
+          onPressed: () => _pickImages(),
+        ),
+      ),
     );
   }
 

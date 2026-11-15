@@ -187,6 +187,55 @@ void main() {
       expect(url, startsWith('data:image/png;base64,'));
     });
 
+    test('回归：降级必须如实上报，不能假装是原图', () async {
+      final service = AiImageService.instance;
+      final attachment = AiChatAttachment(
+        id: 'a1',
+        localPath: '/nonexistent/gone.png',
+        fileName: 'gone.png',
+        width: 2344,
+        height: 1343,
+        thumbnailBase64:
+            'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAJ0lEQVR42u3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAHgNlAABJc1W0wAAAABJRU5ErkJggg==',
+        thumbnailSize: AiChatAttachment.thumbSizeLarge,
+      );
+
+      // 用户要的是原图 → 必须报告降级，且尺寸如实记为 32x32
+      final payload = await service.prepareForSend(
+        [attachment],
+        AiImageSendMode.original,
+      );
+      expect(payload.hasDegradation, isTrue);
+      expect(payload.degradedFileNames, ['gone.png']);
+      expect(payload.missingLocalFileCount, 1);
+      expect(payload.attachments, hasLength(1));
+      expect(payload.attachments.single.sentWidth, 32);
+      expect(payload.attachments.single.sentHeight, 32);
+      expect(payload.attachments.single.detail, 'low');
+    });
+
+    test('回归：正常原图不会被误报降级且尺寸正确', () async {
+      final service = AiImageService.instance;
+      final payload = await service.prepareForSend(
+        [
+          AiChatAttachment(
+            id: 'a2',
+            localPath: null,
+            fileName: 'nope.png',
+            width: 100,
+            height: 50,
+            thumbnailBase64:
+                'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAJ0lEQVR42u3BAQ0AAADCoPdPbQ43oAAAAAAAAAAAAAAAAAAAAHgNlAABJc1W0wAAAABJRU5ErkJggg==',
+            thumbnailSize: AiChatAttachment.thumbSizeLarge,
+          ),
+        ],
+        AiImageSendMode.thumbnail,
+      );
+      // 主动选缩略图不算降级
+      expect(payload.hasDegradation, isFalse);
+      expect(payload.attachments.single.sentWidth, 32);
+    });
+
     test('回归：无本机原图时压缩/原图形态降级为缩略图，而不是丢图', () async {
       final service = AiImageService.instance;
       final attachment = AiChatAttachment(

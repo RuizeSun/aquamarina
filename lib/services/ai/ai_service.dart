@@ -67,9 +67,14 @@ class AiService {
       throw AiServiceException('Aquamarina 官方配置不支持通用对话，请切换到 OpenAI 兼容或 DeepSeek 配置');
     }
 
+    // 清掉仅用于本地诊断的字段（image_size），避免污染服务端请求体
+    final cleanMessages = messages
+        .map(AiChatMessage.stripDiagnostics)
+        .toList(growable: false);
+
     final body = <String, dynamic>{
       'model': profile.model,
-      'messages': messages,
+      'messages': cleanMessages,
       'max_tokens': maxTokensOverride ?? profile.maxTokens,
       'stream': stream,
     };

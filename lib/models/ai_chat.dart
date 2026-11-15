@@ -143,6 +143,10 @@ class AiChatAttachment {
   /// OpenAI 的图片精度提示（low / high / auto）。
   final String? detail;
 
+  /// 实际发送出去的图片像素尺寸（诊断用，不落库、不进请求体）。
+  final int sentWidth;
+  final int sentHeight;
+
   const AiChatAttachment({
     required this.id,
     required this.localPath,
@@ -153,6 +157,8 @@ class AiChatAttachment {
     required this.thumbnailSize,
     this.dataUrl,
     this.detail,
+    this.sentWidth = 0,
+    this.sentHeight = 0,
   });
 
   bool get hasLocalFile => localPath != null && localPath!.isNotEmpty;
@@ -187,6 +193,8 @@ class AiChatAttachment {
     bool clearLocalPath = false,
     String? dataUrl,
     String? detail,
+    int? sentWidth,
+    int? sentHeight,
   }) {
     return AiChatAttachment(
       id: id,
@@ -198,6 +206,8 @@ class AiChatAttachment {
       thumbnailSize: thumbnailSize,
       dataUrl: dataUrl ?? this.dataUrl,
       detail: detail ?? this.detail,
+      sentWidth: sentWidth ?? this.sentWidth,
+      sentHeight: sentHeight ?? this.sentHeight,
     );
   }
 }
@@ -409,6 +419,33 @@ class AiChatMessage {
     );
   }
 
+  /// 构造一个 image_url 分段。
+  ///
+  /// 附带的 `image_size` 只用于本地诊断日志，发送前会被 [stripDiagnostics] 移除，
+  /// 不会污染请求体。
+  static Map<String, dynamic> _imagePart(AiChatAttachment attachment) {
+    return {
+      'type': 'image_url',
+      'image_url': {
+        'url': attachment.dataUrl,
+        if (attachment.detail != null) 'detail': attachment.detail,
+      },
+      'image_size': {'w': attachment.sentWidth, 'h': attachment.sentHeight},
+    };
+  }
+
+  /// 移除仅用于本地诊断的字段。
+  static Map<String, dynamic> stripDiagnostics(Map<String, dynamic> message) {
+    final content = message['content'];
+    if (content is! List) return message;
+    final cleaned = <Map<String, dynamic>>[];
+    for (final part in content) {
+      if (part is! Map<String, dynamic>) continue;
+      cleaned.add({for (final e in part.entries) if (e.key != 'image_size') e.key: e.value});
+    }
+    return {...message, 'content': cleaned};
+  }
+
   /// 转为 OpenAI Chat Completions 的 message 对象。
   Map<String, dynamic> toOpenAiMessage() {
     switch (role) {
@@ -440,13 +477,7 @@ class AiChatMessage {
             if (content.isNotEmpty) {'type': 'text', 'text': content},
             for (final attachment in attachments)
               if (attachment.dataUrl != null && attachment.dataUrl!.isNotEmpty)
-                {
-                  'type': 'image_url',
-                  'image_url': {
-                    'url': attachment.dataUrl,
-                    if (attachment.detail != null) 'detail': attachment.detail,
-                  },
-                },
+                _imagePart(attachment),
           ],
         };
     }

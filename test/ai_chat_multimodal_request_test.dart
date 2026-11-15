@@ -116,6 +116,55 @@ void main() {
     expect(img.decodePng(base64Decode(base64Part)), isNotNull);
   });
 
+  test('诊断字段 image_size 不会出现在 HTTP 请求体里', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://example.invalid'));
+    Map<String, dynamic>? capturedBody;
+    dio.httpClientAdapter = _CapturingAdapter((options) {
+      final data = options.data;
+      if (data is Map) {
+        capturedBody = Map<String, dynamic>.from(data);
+      } else if (data is String) {
+        capturedBody = jsonDecode(data) as Map<String, dynamic>;
+      }
+    });
+
+    final service = AiImageService.instance;
+    final attachment = service.prepareFromBytes(
+      _png(32, 32),
+      fileName: 'diag.png',
+    )!;
+    final payload = await service.prepareForSend(
+      [attachment],
+      AiImageSendMode.thumbnail,
+    );
+    final message = AiChatMessage.create(
+      sessionId: 's1',
+      role: AiChatRole.user,
+      content: '测试',
+      attachments: payload.attachments,
+    );
+
+    // 客户端对象上确实带诊断字段
+    final rawParts = message.toOpenAiMessage()['content'] as List<dynamic>;
+    expect(
+      rawParts.any((p) => p is Map && p.containsKey('image_size')),
+      isTrue,
+    );
+
+    await AiService(dio: dio)
+        .chatStreamEvents(
+          messages: [message.toOpenAiMessage()],
+          profile: _visionProfile(),
+        )
+        .toList();
+
+    final messages = capturedBody!['messages'] as List<dynamic>;
+    final content = (messages.last as Map<String, dynamic>)['content'];
+    for (final part in content as List<dynamic>) {
+      expect((part as Map).containsKey('image_size'), isFalse);
+    }
+  });
+
   test('配置未开启视觉时不发送图片段', () async {
     final message = AiChatMessage.create(
       sessionId: 's1',

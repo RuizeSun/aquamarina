@@ -92,6 +92,10 @@ class AiChatController extends ChangeNotifier {
   String? _error;
   String? get error => _error;
 
+  /// 图片降级提示（原图不可用、实际只发了缩略图）。
+  String? _imageWarning;
+  String? get imageWarning => _imageWarning;
+
   bool get isBusy => _state != AiChatStreamState.idle;
 
   /// 本会话内「总是允许」的工具名（内存，不落库）。
@@ -161,6 +165,7 @@ class AiChatController extends ChangeNotifier {
 
     final session = _session ?? await createSession();
     _error = null;
+    _imageWarning = null;
 
     final userMessage = await _persist(
       AiChatMessage.create(
@@ -458,36 +463,48 @@ class AiChatController extends ChangeNotifier {
         result.add(message);
         continue;
       }
-      final prepared = await _imageService.withSendPayload(
+      final prepared = await _imageService.prepareForSend(
         message.attachments,
         mode,
       );
-      result.add(message.copyWith(attachments: prepared));
+      if (prepared.hasDegradation) {
+        // 用户要的是原图却只能发缩略图：必须让他知道，否则会误以为模型「看不清」
+        _imageWarning = prepared.requestedMode == AiImageSendMode.original
+            ? '本机原图已不可用，${prepared.degradedFileNames.length} 张图片已按 32px 缩略图发送，'
+                  '模型很可能看不清内容。请重新添加图片后再发送。'
+            : '本机原图已不可用，${prepared.degradedFileNames.length} 张图片已降级为 32px 缩略图发送。';
+        logWarning('AiChatController', _imageWarning!);
+      }
+      result.add(message.copyWith(attachments: prepared.attachments));
     }
     return result;
   }
 
-  /// 记录本轮请求携带的图片数量，便于在「日志设置」里排查图片是否真的发出。
+  /// 记录本轮请求携带的图片张数与**实际像素尺寸**。
+  ///
+  /// 排查「截图很清晰但模型说看不清」时，这条日志是唯一可靠的依据：
+  /// 若显示 32x32，说明发的是缩略图而不是原图。
   void _logImagePayload(List<Map<String, dynamic>> messages) {
+    if (messages.isEmpty) return;
     var images = 0;
-    String? preview;
+    final details = <String>[];
     for (final message in messages) {
       final content = message['content'];
-      if (content is List) {
-        for (final part in content) {
-          if (part is Map && part['type'] == 'image_url') {
-            images += 1;
-            final url = ((part['image_url'] as Map?)?['url'])?.toString();
-            preview ??= url == null
-                ? null
-                : '${url.substring(0, url.length > 32 ? 32 : url.length)}…';
-          }
-        }
+      if (content is! List) continue;
+      for (final part in content) {
+        if (part is! Map || part['type'] != 'image_url') continue;
+        images += 1;
+        final extra = part['image_size'];
+        details.add(extra is Map ? '${extra['w']}x${extra['h']}' : '未知尺寸');
       }
+    }
+    if (images == 0) {
+      logInfo('AiChatController', '本轮请求未携带图片');
+      return;
     }
     logInfo(
       'AiChatController',
-      '本轮请求携带图片 $images 张${preview == null ? '' : '（首张: $preview）'}',
+      '本轮请求携带图片 $images 张，实际尺寸: ${details.join(', ')}',
     );
   }
 

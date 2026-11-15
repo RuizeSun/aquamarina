@@ -11,6 +11,28 @@ import 'package:uuid/uuid.dart';
 import '../../models/ai_chat.dart';
 import '../system/log_service.dart';
 
+/// 一次图片发送准备的完整结果。
+///
+/// [degradedFileNames] 非空表示用户要的是原图/压缩图，但本机文件读不到了，
+/// 实际只发出了缩略图——上层必须把这件事告诉用户，而不是让它静默发生。
+class AiImagePayload {
+  final List<AiChatAttachment> attachments;
+  final List<String> degradedFileNames;
+  final AiImageSendMode requestedMode;
+  final int missingLocalFileCount;
+
+  const AiImagePayload({
+    required this.attachments,
+    this.degradedFileNames = const [],
+    this.requestedMode = AiImageSendMode.compressed,
+    this.missingLocalFileCount = 0,
+  });
+
+  bool get hasDegradation => degradedFileNames.isNotEmpty;
+
+  bool get isEmpty => attachments.isEmpty;
+}
+
 /// 送给模型时使用的图片形态。
 enum AiImageSendMode {
   /// 发原图（质量最好，token 消耗最大）
@@ -51,10 +73,15 @@ class AiImageService {
   String? lastError;
 
   /// 发给模型时长边上限（压缩模式）。
-  static const int maxSendDimension = 1024;
+  ///
+  /// 1024 对截图里的正文太小：模型会看不清文字。1536 是多数视觉模型
+  /// 在「可读性 / token 成本」之间比较划算的档位。
+  static const int maxSendDimension = 1536;
 
   /// 发给模型时 JPEG 质量（压缩模式）。
-  static const int sendJpegQuality = 80;
+  ///
+  /// 截图是高频文字，质量 80 会有明显压缩噪点，85 更稳。
+  static const int sendJpegQuality = 85;
 
   /// 单条消息最多附带几张图。
   static const int maxAttachmentsPerMessage = 4;
@@ -200,41 +227,109 @@ class AiImageService {
     }
   }
 
-  /// 为一批附件填充运行期字段（dataUrl / detail）。
+  /// 把附件准备成可发送的形态，并**如实报告**降级情况。
+  ///
+  /// 关键点：请求「原图 / 压缩」却读不到本机文件时，绝不能悄悄换成 32×32 缩略图
+  /// 后当作成功——那正是「截图很清晰、模型却说看不清」的根因。此时按降级处理，
+  /// 并把原因交给上层提示用户。
+  Future<AiImagePayload> prepareForSend(
+    List<AiChatAttachment> attachments,
+    AiImageSendMode mode,
+  ) async {
+    final sent = <AiChatAttachment>[];
+    final degraded = <String>[];
+    var missingLocalFile = 0;
+
+    for (final attachment in attachments) {
+      // 只有缩略图形态才允许在没有本机原图时发送
+      final url = await buildDataUrl(attachment, mode);
+      if (url != null) {
+        final size = _sentDimensions(attachment, mode, url);
+        sent.add(
+          attachment.copyWith(
+            dataUrl: url,
+            // 原图/压缩图按 high 发送：'auto' 在部分服务端会被再次降采样，
+            // 截图里的文字会直接糊掉。
+            detail: mode == AiImageSendMode.thumbnail ? 'low' : 'high',
+            sentWidth: size.width,
+            sentHeight: size.height,
+          ),
+        );
+        continue;
+      }
+
+      if (mode != AiImageSendMode.thumbnail) {
+        // 原图/压缩拿不到：说明本机文件缺失（已被清理或跨设备同步而来）
+        missingLocalFile += 1;
+        final thumbUrl = await buildDataUrl(
+          attachment,
+          AiImageSendMode.thumbnail,
+        );
+        if (thumbUrl != null) {
+          sent.add(
+            attachment.copyWith(
+              dataUrl: thumbUrl,
+              detail: 'low',
+              sentWidth: attachment.thumbnailSize,
+              sentHeight: attachment.thumbnailSize,
+            ),
+          );
+          degraded.add(attachment.fileName);
+        }
+        continue;
+      }
+
+      lastError = '无法构造图片数据: ${attachment.fileName}';
+      logWarning('AiImageService', lastError!);
+    }
+
+    if (degraded.isNotEmpty) {
+      logWarning(
+        'AiImageService',
+        '${degraded.length} 张图片的本机原图不可用，已降级为 32px 缩略图：'
+        '${degraded.join(', ')}',
+      );
+    }
+
+    return AiImagePayload(
+      attachments: sent,
+      degradedFileNames: degraded,
+      requestedMode: mode,
+      missingLocalFileCount: missingLocalFile,
+    );
+  }
+
+  /// 计算本次实际发出的像素尺寸（用于诊断日志）。
+  ({int width, int height}) _sentDimensions(
+    AiChatAttachment attachment,
+    AiImageSendMode mode,
+    String dataUrl,
+  ) {
+    switch (mode) {
+      case AiImageSendMode.thumbnail:
+        return (width: attachment.thumbnailSize, height: attachment.thumbnailSize);
+      case AiImageSendMode.original:
+        return (width: attachment.width, height: attachment.height);
+      case AiImageSendMode.compressed:
+        final longest = math.max(attachment.width, attachment.height);
+        if (longest <= maxSendDimension) {
+          return (width: attachment.width, height: attachment.height);
+        }
+        final scale = maxSendDimension / longest;
+        return (
+          width: (attachment.width * scale).round(),
+          height: (attachment.height * scale).round(),
+        );
+    }
+  }
+
+  /// 兼容旧调用：只取附件列表。
   Future<List<AiChatAttachment>> withSendPayload(
     List<AiChatAttachment> attachments,
     AiImageSendMode mode,
   ) async {
-    final result = <AiChatAttachment>[];
-    for (final attachment in attachments) {
-      var url = await buildDataUrl(attachment, mode);
-      var effectiveMode = mode;
-
-      // 降级：请求的形态拿不到（原图被清理 / 跨设备无原图）时退回缩略图，
-      // 宁可发一张模糊的图，也不要静默丢掉用户上传的图片。
-      if (url == null && mode != AiImageSendMode.thumbnail) {
-        url = await buildDataUrl(attachment, AiImageSendMode.thumbnail);
-        effectiveMode = AiImageSendMode.thumbnail;
-        if (url != null) {
-          logWarning(
-            'AiImageService',
-            '原图不可用，已降级发送缩略图: ${attachment.fileName}',
-          );
-        }
-      }
-      if (url == null) {
-        lastError = '无法构造图片数据: ${attachment.fileName}';
-        logWarning('AiImageService', lastError!);
-        continue;
-      }
-      result.add(
-        attachment.copyWith(
-          dataUrl: url,
-          detail: effectiveMode == AiImageSendMode.thumbnail ? 'low' : 'auto',
-        ),
-      );
-    }
-    return result;
+    final payload = await prepareForSend(attachments, mode);
+    return payload.attachments;
   }
 
   /// 缩略图的本地 ImageProvider 数据（用于气泡内展示）。
