@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -39,6 +39,17 @@ class AiImageService {
 
   static final AiImageService instance = AiImageService._();
 
+  /// 测试专用：覆盖附件目录解析（默认走 path_provider）。
+  @visibleForTesting
+  static Future<Directory> Function()? attachmentDirOverride;
+
+  /// 测试专用：恢复默认目录解析。
+  @visibleForTesting
+  static void resetAttachmentDirOverride() => attachmentDirOverride = null;
+
+  /// 最近一次失败原因（供 UI 提示，落盘/构造 payload 失败时设置）。
+  String? lastError;
+
   /// 发给模型时长边上限（压缩模式）。
   static const int maxSendDimension = 1024;
 
@@ -74,7 +85,43 @@ class AiImageService {
     }
   }
 
-  /// 从内存字节构造附件（也用于剪贴板粘贴）。
+  /// 从内存字节构造附件，并把原始字节写入应用私有目录。
+  ///
+  /// 剪贴板粘贴必须走这里：`prepareFromBytes` 本身不落盘，若不给 [localPath]，
+  /// 「原图 / 压缩」两种发送形态会因为找不到本机文件而静默丢弃图片。
+  Future<AiChatAttachment?> prepareFromBytesPersisted(
+    Uint8List bytes, {
+    required String fileName,
+    int thumbnailSize = AiChatAttachment.thumbSizeLarge,
+  }) async {
+    try {
+      final dir = await _attachmentDir();
+      await dir.create(recursive: true);
+      final id = const Uuid().v4();
+      final ext = p.extension(fileName).toLowerCase();
+      final safeExt = ext.isEmpty ? '.png' : ext;
+      final target = File(p.join(dir.path, '$id$safeExt'));
+      await target.writeAsBytes(bytes, flush: true);
+      final attachment = prepareFromBytes(
+        bytes,
+        fileName: fileName,
+        localPath: target.path,
+        thumbnailSize: thumbnailSize,
+      );
+      if (attachment == null) {
+        // 解析失败时不要留下孤儿文件
+        try {
+          await target.delete();
+        } catch (_) {}
+      }
+      return attachment;
+    } catch (e, stackTrace) {
+      logError('AiImageService', '保存剪贴板图片失败: $e', stackTrace);
+      return null;
+    }
+  }
+
+  /// 从内存字节构造附件（不落盘，供测试与缩略图-only 场景使用）。
   AiChatAttachment? prepareFromBytes(
     Uint8List bytes, {
     required String fileName,
@@ -160,12 +207,30 @@ class AiImageService {
   ) async {
     final result = <AiChatAttachment>[];
     for (final attachment in attachments) {
-      final url = await buildDataUrl(attachment, mode);
-      if (url == null) continue;
+      var url = await buildDataUrl(attachment, mode);
+      var effectiveMode = mode;
+
+      // 降级：请求的形态拿不到（原图被清理 / 跨设备无原图）时退回缩略图，
+      // 宁可发一张模糊的图，也不要静默丢掉用户上传的图片。
+      if (url == null && mode != AiImageSendMode.thumbnail) {
+        url = await buildDataUrl(attachment, AiImageSendMode.thumbnail);
+        effectiveMode = AiImageSendMode.thumbnail;
+        if (url != null) {
+          logWarning(
+            'AiImageService',
+            '原图不可用，已降级发送缩略图: ${attachment.fileName}',
+          );
+        }
+      }
+      if (url == null) {
+        lastError = '无法构造图片数据: ${attachment.fileName}';
+        logWarning('AiImageService', lastError!);
+        continue;
+      }
       result.add(
         attachment.copyWith(
           dataUrl: url,
-          detail: mode == AiImageSendMode.thumbnail ? 'low' : 'auto',
+          detail: effectiveMode == AiImageSendMode.thumbnail ? 'low' : 'auto',
         ),
       );
     }
@@ -199,6 +264,8 @@ class AiImageService {
   // ── 内部 ──────────────────────────────────────────
 
   Future<Directory> _attachmentDir() async {
+    final override = attachmentDirOverride;
+    if (override != null) return override();
     final base = await getApplicationSupportDirectory();
     return Directory(p.join(base.path, 'ai_chat_images'));
   }

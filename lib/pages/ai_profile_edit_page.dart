@@ -903,18 +903,6 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                 secondary: const Icon(Icons.psychology),
               ),
 
-              // 多模态（图片输入）开关
-              SwitchListTile(
-                title: const Text('支持图片输入'),
-                subtitle: const Text(
-                  '仅当你使用的模型确实支持视觉输入时开启；'
-                  '关闭后 AI 对话不会把图片发给模型',
-                ),
-                value: _enableVision,
-                onChanged: (v) => setState(() => _enableVision = v),
-                secondary: const Icon(Icons.image_outlined),
-              ),
-
               // 思考强度
               if (_enableThinking) ...[
                 DropdownButtonFormField<String>(
@@ -961,6 +949,24 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                 },
               ),
               const SizedBox(height: 8),
+            ],
+
+            // ---- 多模态（图片输入） ----
+            // 与配置类型无关：OpenAI 兼容的视觉模型同样需要这个开关。
+            if (!isAquamarina) ...[
+              const Divider(),
+              _SectionHeader(title: '多模态'),
+              SwitchListTile(
+                title: const Text('支持图片输入'),
+                subtitle: const Text(
+                  '仅当你使用的模型确实支持视觉输入时开启；'
+                  '关闭后 AI 对话不会把图片发给模型',
+                ),
+                value: _enableVision,
+                onChanged: (v) => setState(() => _enableVision = v),
+                secondary: const Icon(Icons.image_outlined),
+                contentPadding: EdgeInsets.zero,
+              ),
             ],
 
             // ---- 计费与货币设置（Aquamarina 官方无 usage，不参与计费） ----

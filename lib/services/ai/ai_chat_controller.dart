@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../models/ai_chat.dart';
 import '../../models/ai_profile.dart';
+import '../system/log_service.dart';
 import 'ai_chat_service.dart';
 import 'ai_chat_settings.dart';
 import 'ai_image_service.dart';
@@ -270,6 +271,7 @@ class AiChatController extends ChangeNotifier {
         maxMessages,
         system: systemPrompt,
       );
+      _logImagePayload(requestMessages);
       final result = await _streamOnce(
         profile: profile,
         messages: requestMessages,
@@ -463,6 +465,30 @@ class AiChatController extends ChangeNotifier {
       result.add(message.copyWith(attachments: prepared));
     }
     return result;
+  }
+
+  /// 记录本轮请求携带的图片数量，便于在「日志设置」里排查图片是否真的发出。
+  void _logImagePayload(List<Map<String, dynamic>> messages) {
+    var images = 0;
+    String? preview;
+    for (final message in messages) {
+      final content = message['content'];
+      if (content is List) {
+        for (final part in content) {
+          if (part is Map && part['type'] == 'image_url') {
+            images += 1;
+            final url = ((part['image_url'] as Map?)?['url'])?.toString();
+            preview ??= url == null
+                ? null
+                : '${url.substring(0, url.length > 32 ? 32 : url.length)}…';
+          }
+        }
+      }
+    }
+    logInfo(
+      'AiChatController',
+      '本轮请求携带图片 $images 张${preview == null ? '' : '（首张: $preview）'}',
+    );
   }
 
   /// 单轮流式请求；返回 null 表示本轮失败或已被取消。

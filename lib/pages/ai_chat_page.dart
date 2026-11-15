@@ -376,7 +376,7 @@ class AiChatPageState extends State<AiChatPage> {
       return;
     }
     final size = await _settings.getImageThumbnailSize();
-    final attachment = AiImageService.instance.prepareFromBytes(
+    final attachment = await AiImageService.instance.prepareFromBytesPersisted(
       bytes,
       fileName: 'clipboard.png',
       thumbnailSize: size,

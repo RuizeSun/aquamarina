@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:aquamarina/models/ai_chat.dart';
@@ -6,6 +7,7 @@ import 'package:aquamarina/services/ai/ai_chat_settings.dart';
 import 'package:aquamarina/services/ai/ai_image_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// 生成一张纯色 PNG 测试图。
@@ -185,6 +187,27 @@ void main() {
       expect(url, startsWith('data:image/png;base64,'));
     });
 
+    test('回归：无本机原图时压缩/原图形态降级为缩略图，而不是丢图', () async {
+      final service = AiImageService.instance;
+      final attachment = AiChatAttachment(
+        id: 'a1',
+        localPath: '/nonexistent/gone.png',
+        fileName: 'gone.png',
+        width: 8,
+        height: 8,
+        thumbnailBase64:
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AL+2QAAAABJRU5ErkJggg==',
+        thumbnailSize: AiChatAttachment.thumbSizeLarge,
+      );
+
+      for (final mode in [AiImageSendMode.compressed, AiImageSendMode.original]) {
+        final sent = await service.withSendPayload([attachment], mode);
+        expect(sent, hasLength(1), reason: '模式 $mode 不应丢图');
+        expect(sent.single.dataUrl, startsWith('data:image/png;base64,'));
+        expect(sent.single.detail, 'low', reason: '降级后按缩略图发送');
+      }
+    });
+
     test('原图缺失时原图/压缩形态返回 null', () async {
       final service = AiImageService.instance;
       final attachment = AiChatAttachment(
@@ -198,6 +221,45 @@ void main() {
       );
       expect(await service.buildDataUrl(attachment, AiImageSendMode.original), isNull);
       expect(await service.buildDataUrl(attachment, AiImageSendMode.compressed), isNull);
+    });
+  });
+
+  group('回归：剪贴板图片必须落盘', () {
+    late Directory tempDir;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('aq_chat_img_');
+      AiImageService.attachmentDirOverride = () async =>
+          Directory(p.join(tempDir.path, 'ai_chat_images'));
+    });
+
+    tearDown(() async {
+      AiImageService.resetAttachmentDirOverride();
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('prepareFromBytesPersisted 会写入本地文件', () async {
+      final service = AiImageService.instance;
+      final attachment = await service.prepareFromBytesPersisted(
+        _png(40, 40),
+        fileName: 'clipboard.png',
+      );
+      expect(attachment, isNotNull);
+      expect(attachment!.localPath, isNotNull);
+      final file = File(attachment.localPath!);
+      expect(await file.exists(), isTrue);
+
+      final sent = await service.withSendPayload(
+        [attachment],
+        AiImageSendMode.compressed,
+      );
+      expect(sent, hasLength(1));
+      expect(sent.single.dataUrl, startsWith('data:image/jpeg;base64,'));
+
+      await service.deleteLocalFiles([attachment]);
+      expect(await file.exists(), isFalse);
     });
   });
 
