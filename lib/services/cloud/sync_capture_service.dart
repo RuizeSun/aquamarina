@@ -493,9 +493,11 @@ class SyncCaptureService {
       (row['hlc_counter'] as int?) ?? 0,
     );
     final op = (row['op'] as String?) ?? 'upsert';
-    final key = <String, dynamic>{
+    // 归一化大小写不敏感的键列：否则本机 `Apple` 与远端 `apple` 会被当成
+    // 两个实体，远端插入被 UNIQUE 约束静默忽略且无任何报错。
+    final key = spec.normalizeKey(<String, dynamic>{
       for (final column in spec.keyColumns.keys) column: row[column],
-    };
+    });
     if (op == 'delete') {
       return SyncOp(
         deviceId: deviceId,

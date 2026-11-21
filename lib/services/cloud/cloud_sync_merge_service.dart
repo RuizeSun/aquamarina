@@ -199,7 +199,12 @@ class CloudSyncMergeService {
   }
 
   static String _keyFingerprint(SyncTableSpec spec, Map<String, Object?> row) {
-    return jsonEncode([for (final key in spec.keyColumns.keys) row[key]]);
+    return jsonEncode([
+      for (final key in spec.keyColumns.keys)
+        spec.caseInsensitiveKeyColumns.contains(key) && row[key] is String
+            ? (row[key] as String).toLowerCase()
+            : row[key],
+    ]);
   }
 
   static Future<List<Map<String, Object?>>> _queryLocalByKeys(

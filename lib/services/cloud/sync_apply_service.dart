@@ -46,6 +46,65 @@ class SyncApplyService {
     'ai_chat_messages': {'created_at'},
   };
 
+  /// 按 spec 归一化大小写不敏感的键列。
+  ///
+  /// 业务表用 `COLLATE NOCASE` 定义，`Apple` 与 `apple` 本就是同一行；
+  /// 若同步键保留原始大小写，行版本/墓碑/预载行会各查各的，远端写入
+  /// 最终被 UNIQUE 约束静默忽略，数据丢失且无报错。
+  static SyncOp _normalizeOpKey(SyncOp op) {
+    if (op.isBulk) {
+      var changed = false;
+      final items = <SyncBulkItem>[];
+      for (final item in op.items) {
+        final spec = SyncSpecs.byEntity[item.entity];
+        final key = spec?.normalizeKey(item.key) ?? item.key;
+        if (identical(key, item.key)) {
+          items.add(item);
+          continue;
+        }
+        changed = true;
+        items.add(
+          SyncBulkItem(
+            entity: item.entity,
+            key: key,
+            data: item.data,
+            delta: item.delta,
+          ),
+        );
+      }
+      if (!changed) return op;
+      return SyncOp(
+        version: op.version,
+        deviceId: op.deviceId,
+        seq: op.seq,
+        hlc: op.hlc,
+        entity: op.entity,
+        key: op.key,
+        op: op.op,
+        data: op.data,
+        delta: op.delta,
+        deletedAt: op.deletedAt,
+        items: items,
+      );
+    }
+
+    final spec = SyncSpecs.byEntity[op.entity];
+    final key = spec?.normalizeKey(op.key) ?? op.key;
+    if (identical(key, op.key)) return op;
+    return SyncOp(
+      version: op.version,
+      deviceId: op.deviceId,
+      seq: op.seq,
+      hlc: op.hlc,
+      entity: op.entity,
+      key: key,
+      op: op.op,
+      data: op.data,
+      delta: op.delta,
+      deletedAt: op.deletedAt,
+    );
+  }
+
   static Future<Database> _db(Database? db) async =>
       db ?? await DatabaseService.database;
 
@@ -60,7 +119,12 @@ class SyncApplyService {
     final result = SyncApplyResult();
     if (ops.isEmpty) return result;
 
-    final sorted = [...ops]..sort(_compareOps);
+    // 远端 op 的键可能带不同大小写（另一台设备写入时未归一化）。
+    // 在入口统一归一化，保证 keyFingerprint / 行版本 / 墓碑 / 预载行
+    // 与本地业务表的 COLLATE NOCASE 语义一致。
+    final normalized = [for (final op in ops) _normalizeOpKey(op)];
+
+    final sorted = [...normalized]..sort(_compareOps);
     var pendingParents = <SyncOp>[];
     var index = 0;
     final size = sliceSize < 1 ? 1 : sliceSize;

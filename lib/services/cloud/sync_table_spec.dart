@@ -28,6 +28,14 @@ class SyncTableSpec {
   /// 远端数据的时间戳早于本地时跳过字段覆盖；为 null 时按 HLC 顺序应用。
   final String? lwwColumn;
 
+  /// 大小写不敏感的键列（源表用 `COLLATE NOCASE` 定义）。
+  ///
+  /// 这些列在本机 `Apple` 与 `apple` 是同一行，但同步键指纹默认大小写
+  /// 敏感，会让远端同一实体的 op 被判定为新行 → 插入被 UNIQUE 约束
+  /// 静默忽略（ConflictAlgorithm.ignore），数据永久丢失且无报错。
+  /// 因此键值必须先归一化（统一小写）再生成同步键。
+  final Set<String> caseInsensitiveKeyColumns;
+
   const SyncTableSpec({
     required this.entity,
     required this.table,
@@ -35,7 +43,28 @@ class SyncTableSpec {
     this.dataColumns = const {},
     this.counters = const {},
     this.lwwColumn,
+    this.caseInsensitiveKeyColumns = const {},
   });
+
+  /// 归一化同步键：大小写不敏感的列统一转小写，其余原样保留。
+  ///
+  /// 无变化时返回同一个 Map 实例，便于上层用 [identical] 判断是否需要重建。
+  Map<String, dynamic> normalizeKey(Map<String, dynamic> key) {
+    if (caseInsensitiveKeyColumns.isEmpty) return key;
+    var changed = false;
+    final result = <String, dynamic>{};
+    for (final entry in key.entries) {
+      final value = entry.value;
+      if (caseInsensitiveKeyColumns.contains(entry.key) && value is String) {
+        final lower = value.toLowerCase();
+        if (lower != value) changed = true;
+        result[entry.key] = lower;
+      } else {
+        result[entry.key] = value;
+      }
+    }
+    return changed ? result : key;
+  }
 
   /// 触发器写入的墙钟时间（毫秒），用于在导出时为 op 生成合理 HLC。
   static const String capturedAtSql =
@@ -180,6 +209,7 @@ class SyncSpecs {
       },
       counters: {'review_count'},
       lwwColumn: 'last_reviewed_at',
+      caseInsensitiveKeyColumns: {'word'},
     ),
     SyncTableSpec(
       entity: 'wrong_words',
@@ -190,6 +220,7 @@ class SyncSpecs {
         'retry_count': 'INTEGER',
         'created_at': 'TEXT',
       },
+      caseInsensitiveKeyColumns: {'word'},
     ),
     SyncTableSpec(
       entity: 'word_notes',
@@ -202,6 +233,7 @@ class SyncSpecs {
         'updated_at': 'TEXT',
       },
       lwwColumn: 'updated_at',
+      caseInsensitiveKeyColumns: {'word'},
     ),
     SyncTableSpec(
       entity: 'sentence_notes',
@@ -252,6 +284,7 @@ class SyncSpecs {
       table: 'word_book_entries',
       keyColumns: {'book_uuid': 'TEXT', 'word': 'TEXT'},
       dataColumns: {'added_at': 'TEXT'},
+      caseInsensitiveKeyColumns: {'word'},
     ),
     SyncTableSpec(
       entity: 'sentence_sets',
