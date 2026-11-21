@@ -4,11 +4,14 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../models/ai_chat.dart';
+import '../../models/ai_context.dart';
 import '../../models/ai_profile.dart';
 import '../system/log_service.dart';
 import 'ai_chat_service.dart';
 import 'ai_chat_settings.dart';
 import 'ai_context_builder.dart';
+import 'ai_context_compressor.dart';
+import 'ai_context_window.dart';
 import 'ai_image_service.dart';
 import 'ai_profile_service.dart';
 import 'ai_service.dart';
@@ -31,6 +34,9 @@ enum AiChatStreamState {
 
   /// 正在执行工具
   waitingTool,
+
+  /// 正在把较早的消息压缩成摘要
+  compressing,
 }
 
 /// AI 对话的编排层。
@@ -49,8 +55,10 @@ class AiChatController extends ChangeNotifier {
     AiToolApprovalHandler? approvalHandler,
     AiImageService? imageService,
     AiContextBuilder? contextBuilder,
+    AiContextCompressor? contextCompressor,
   }) : _chatService = chatService ?? AiChatService.instance,
        _contextBuilder = contextBuilder ?? AiContextBuilder(),
+       _contextCompressor = contextCompressor ?? const AiContextCompressor(),
        _imageService = imageService ?? AiImageService.instance,
        _aiService = aiService ?? AiService(),
        _profileService = profileService ?? AiProfileService(),
@@ -65,6 +73,7 @@ class AiChatController extends ChangeNotifier {
   final AiToolRegistry _registry;
   final AiImageService _imageService;
   final AiContextBuilder _contextBuilder;
+  final AiContextCompressor _contextCompressor;
 
   /// 页面注入的批准回调；页面销毁后置空 → 所有写操作自动拒绝。
   AiToolApprovalHandler? _approvalHandler;
@@ -111,6 +120,13 @@ class AiChatController extends ChangeNotifier {
   /// 冻结在首次注入时刻，保证同一会话里历史前缀逐字不变 → 缓存可命中。
   final Map<String, String> _contextNotes = {};
 
+  /// 当前会话缓存的「较早对话摘要」，以及它覆盖的可用消息条数。
+  ///
+  /// 只在内存中保存：重启后会按需重新压缩。这样不会把摘要写进对话记录，
+  /// 也不会让用户看到一条并不存在的系统消息。
+  String? _contextSummary;
+  int _contextSummaryCovered = 0;
+
   /// 上一次已注入过的运行环境 / 时间原值。
   ///
   /// 只有内容真的变化时才重新注入：runtime 在会话内基本恒定，
@@ -128,6 +144,7 @@ class AiChatController extends ChangeNotifier {
     _messages
       ..clear()
       ..addAll(await _chatService.loadMessages(session.id));
+    _resetContextSummary();
     _error = null;
     _resetStreamBuffers();
     notifyListeners();
@@ -154,6 +171,7 @@ class AiChatController extends ChangeNotifier {
     if (_session?.id == id) {
       _session = null;
       _messages.clear();
+      _resetContextSummary();
       notifyListeners();
     }
   }
@@ -165,6 +183,7 @@ class AiChatController extends ChangeNotifier {
     cancel();
     await _chatService.clearSessionMessages(session.id);
     _messages.clear();
+    _resetContextSummary();
     notifyListeners();
   }
 
@@ -245,7 +264,7 @@ class AiChatController extends ChangeNotifier {
     final toolsEnabled = await settings.getToolsEnabled();
     final autoApprove = await settings.getAutoApproveReadOnly();
     final maxRounds = await settings.getMaxToolRounds();
-    final maxMessages = await settings.getContextMessages();
+    final contextPolicy = await settings.getContextPolicy();
     final baseSystemPrompt = await settings.getSystemPrompt();
     final temperature = await settings.getTemperatureOverride();
     final maxTokens = await settings.getMaxTokensOverride();
@@ -282,7 +301,7 @@ class AiChatController extends ChangeNotifier {
     if (!streamEnabled) {
       await _runSingleShot(
         profile: profile,
-        maxMessages: maxMessages,
+        contextPolicy: contextPolicy,
         systemPrompt: systemPrompt,
         temperatureOverride: temperature,
         maxTokensOverride: maxTokens,
@@ -294,18 +313,25 @@ class AiChatController extends ChangeNotifier {
 
     var round = 0;
     while (true) {
-      final requestMessages = await injectContext(
-        trimContext(
-          await _withImagePayload(
-            _messages,
-            visionEnabled: profile.enableVision,
+      List<Map<String, dynamic>> requestMessages;
+      try {
+        requestMessages = await injectContext(
+          await _prepareContext(
+            profile: profile,
+            policy: contextPolicy,
+            systemPrompt: systemPrompt,
+            tools: openAiTools,
           ),
-          maxMessages,
-          system: systemPrompt,
-        ),
-        injectRuntime: injectRuntime,
-        injectTime: injectTime,
-      );
+          injectRuntime: injectRuntime,
+          injectTime: injectTime,
+        );
+      } on AiContextOverflowException catch (e) {
+        await _failWithContext(e.message);
+        return;
+      } catch (e) {
+        await _failWithContext('准备上下文失败：$e');
+        return;
+      }
       _logImagePayload(requestMessages);
       final result = await _streamOnce(
         profile: profile,
@@ -405,7 +431,7 @@ class AiChatController extends ChangeNotifier {
   /// 非流式一次性请求（设置里关闭流式时使用，不启用工具）。
   Future<void> _runSingleShot({
     required AiProfile profile,
-    required int maxMessages,
+    required AiContextPolicy contextPolicy,
     required String systemPrompt,
     required double? temperatureOverride,
     required int? maxTokensOverride,
@@ -421,16 +447,18 @@ class AiChatController extends ChangeNotifier {
     final token = CancelToken();
     _cancelToken = token;
     try {
+      final prepared = await _prepareContext(
+        profile: profile,
+        policy: contextPolicy,
+        systemPrompt: systemPrompt,
+        tools: const [],
+        cancelToken: token,
+      );
+      _state = AiChatStreamState.streaming;
+      _notify();
       final content = await _aiService.chatOnce(
         messages: await injectContext(
-          trimContext(
-            await _withImagePayload(
-              _messages,
-              visionEnabled: profile.enableVision,
-            ),
-            maxMessages,
-            system: systemPrompt,
-          ),
+          prepared,
           injectRuntime: injectRuntime,
           injectTime: injectTime,
         ),
@@ -469,6 +497,65 @@ class AiChatController extends ChangeNotifier {
       _state = AiChatStreamState.idle;
       _notify();
     }
+  }
+
+  /// 按当前策略准备一轮请求上下文（条数裁剪 + 阈值摘要压缩）。
+  ///
+  /// 摘要结果缓存在控制器内存中，下一轮只压缩新加入的旧消息。
+  Future<List<Map<String, dynamic>>> _prepareContext({
+    required AiProfile profile,
+    required AiContextPolicy policy,
+    required String systemPrompt,
+    required List<Map<String, dynamic>> tools,
+    CancelToken? cancelToken,
+  }) async {
+    final messages = await _withImagePayload(
+      _messages,
+      visionEnabled: profile.enableVision,
+    );
+    final previousSummary = _contextSummary;
+    final previousCovered = _contextSummaryCovered;
+
+    var compressionStarted = false;
+    final preparation = await _contextCompressor.prepare(
+      aiService: _aiService,
+      messages: messages,
+      systemPrompt: systemPrompt,
+      tools: tools,
+      profile: profile,
+      policy: policy,
+      summary: previousSummary,
+      summaryCovered: previousCovered,
+      cancelToken: cancelToken,
+      onCompressionStart: () {
+        compressionStarted = true;
+        _state = AiChatStreamState.compressing;
+        _notify();
+      },
+    );
+
+    _contextSummary = preparation.summary;
+    _contextSummaryCovered = preparation.summaryCovered;
+
+    if (compressionStarted) {
+      logInfo(
+        'AiChatController',
+        '上下文已压缩：摘要覆盖前 ${preparation.summaryCovered} 条消息，'
+            '估算 ${preparation.estimatedTokens} tokens'
+            '（阈值 ${preparation.thresholdTokens}，'
+            '上限 ${preparation.hardLimitTokens}）',
+      );
+      if (_state == AiChatStreamState.compressing) {
+        _state = AiChatStreamState.idle;
+        _notify();
+      }
+    }
+    return preparation.messages;
+  }
+
+  void _resetContextSummary() {
+    _contextSummary = null;
+    _contextSummaryCovered = 0;
   }
 
   /// 给需要发送的 user 消息注入图片 data URL（按设置形态）。
@@ -615,7 +702,9 @@ class AiChatController extends ChangeNotifier {
     }
 
     // 没有任何 user 消息时把上下文放在最后，避免丢失
-    if (result.length == messages.length && lastUserId == null && fresh != null) {
+    if (result.length == messages.length &&
+        lastUserId == null &&
+        fresh != null) {
       result.add({'role': 'user', 'content': fresh});
     }
     return result;
@@ -913,6 +1002,27 @@ class AiChatController extends ChangeNotifier {
     _notify();
   }
 
+  /// 上下文压缩 / 超限错误：除顶部状态外，再落一条可见的错误消息，
+  /// 避免用户只看到「正在生成…」消失却不知道请求为什么没有发出。
+  Future<void> _failWithContext(String message) async {
+    _error = message;
+    final session = _session;
+    if (session != null) {
+      final saved = await _persist(
+        AiChatMessage.create(
+          sessionId: session.id,
+          role: AiChatRole.assistant,
+          content: '',
+          status: AiChatMessageStatus.error,
+          errorMessage: message,
+        ),
+      );
+      _messages.add(saved);
+    }
+    _state = AiChatStreamState.idle;
+    _notify();
+  }
+
   Future<AiChatMessage> _persist(AiChatMessage message) async {
     final saved = await _chatService.appendMessage(message);
     return saved ?? message;
@@ -945,47 +1055,21 @@ class AiChatController extends ChangeNotifier {
   /// 规则：
   /// 1. system 提示词总是放在最前面（单独参数传入）；
   /// 2. 保留最近 [maxMessages] 条；
-  /// 3. 若裁剪边界落在某个工具调用组中间，则整体前移到该组之前。
+  /// 3. 若裁剪边界落在某个工具调用组中间，则整体前移到该组之前；
+  /// 4. 可选地合并一段较早对话摘要。
   @visibleForTesting
   static List<Map<String, dynamic>> trimContext(
     List<AiChatMessage> all,
     int maxMessages, {
     String? system,
+    String? summary,
   }) {
-    final result = <Map<String, dynamic>>[];
-    if (system != null && system.trim().isNotEmpty) {
-      result.add({'role': 'system', 'content': system.trim()});
-    }
-
-    // 只保留有内容的、非运行期的消息
-    final usable = all
-        .where((m) => m.role != AiChatRole.system)
-        .where((m) => m.status != AiChatMessageStatus.pending)
-        .toList(growable: false);
-
-    final limit = maxMessages <= 0 ? usable.length : maxMessages;
-    var start = usable.length > limit ? usable.length - limit : 0;
-
-    // 边界落在 tool 消息上时，向前回退到其 assistant(tool_calls) 之前
-    while (start > 0 && usable[start].role == AiChatRole.tool) {
-      start -= 1;
-    }
-    // 边界落在 assistant(tool_calls) 上时，同样回退，避免只带工具声明不带结果
-    while (start > 0 &&
-        usable[start].role == AiChatRole.assistant &&
-        usable[start].hasToolCalls) {
-      start -= 1;
-    }
-
-    // 保留窗口内的消息，再剔除「工具调用组不完整」的片段：
-    // 只要 assistant(tool_calls) 的所有调用没有一一对应的 tool 结果
-    // （例如执行到一半 App 被杀、或整组被裁断），DeepSeek 会直接 400，
-    // 因此这里按组丢弃，而不是把残缺的协议发给服务端。
-    final selected = usable.sublist(start);
-    result.addAll(dropIncompleteToolGroups(selected)
-        .map((message) => message.toOpenAiMessage()));
-
-    return result;
+    return AiContextWindow.trimContext(
+      all,
+      maxMessages,
+      system: system,
+      summary: summary,
+    );
   }
 
   /// 丢弃「工具调用组不完整」的消息。
@@ -997,44 +1081,7 @@ class AiChatController extends ChangeNotifier {
   static List<AiChatMessage> dropIncompleteToolGroups(
     List<AiChatMessage> messages,
   ) {
-    final result = <AiChatMessage>[];
-    var i = 0;
-    while (i < messages.length) {
-      final message = messages[i];
-      if (message.role == AiChatRole.tool) {
-        // 孤立的 tool 结果（父调用被裁掉或已丢弃）：跳过，避免 400
-        i += 1;
-        continue;
-      }
-      if (message.role != AiChatRole.assistant || !message.hasToolCalls) {
-        result.add(message);
-        i += 1;
-        continue;
-      }
-
-      final pending = message.toolCalls.map((c) => c.id).toSet();
-      final replies = <AiChatMessage>[];
-      var j = i + 1;
-      var consistent = true;
-      while (j < messages.length && messages[j].role == AiChatRole.tool) {
-        final id = messages[j].toolCallId;
-        if (id == null || !pending.remove(id)) consistent = false;
-        replies.add(messages[j]);
-        j += 1;
-      }
-
-      if (consistent && pending.isEmpty) {
-        result.add(message);
-        result.addAll(replies);
-      } else {
-        logInfo(
-          'AiChatController',
-          '丢弃不完整的工具调用组：缺 ${pending.length} 条工具结果',
-        );
-      }
-      i = j;
-    }
-    return result;
+    return AiContextWindow.dropIncompleteToolGroups(messages);
   }
 }
 

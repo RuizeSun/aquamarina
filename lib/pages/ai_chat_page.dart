@@ -1250,6 +1250,7 @@ class AiChatPageState extends State<AiChatPage> {
     final statusText = switch (_controller.state) {
       AiChatStreamState.awaitingApproval => '等待你批准',
       AiChatStreamState.waitingTool => '正在执行工具',
+      AiChatStreamState.compressing => '正在压缩上下文',
       _ => '',
     };
 
@@ -1286,9 +1287,11 @@ class AiChatPageState extends State<AiChatPage> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  _controller.state == AiChatStreamState.awaitingApproval
-                      ? '等待你批准工具调用…'
-                      : '正在执行工具…',
+                  switch (_controller.state) {
+                    AiChatStreamState.awaitingApproval => '等待你批准工具调用…',
+                    AiChatStreamState.compressing => '正在压缩上下文…',
+                    _ => '正在执行工具…',
+                  },
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.primary,
                   ),
@@ -1556,6 +1559,7 @@ class _ChatTurn {
 
   /// 该轮里模型产出的所有 assistant 消息，按发生顺序。
   final List<AiChatMessage> rounds = [];
+
   /// 该轮发起的工具调用记录，与 [rounds] 里的 tool_calls 一一对应。
   final List<AiToolCallRecord> tools = [];
 

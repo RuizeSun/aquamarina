@@ -31,6 +31,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
   late TextEditingController _apiKeyController;
   late TextEditingController _modelController;
   late TextEditingController _maxTokensController;
+  late TextEditingController _contextWindowController;
   late TextEditingController _temperatureController;
   late TextEditingController _balanceThresholdController;
 
@@ -78,6 +79,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     _modelController = TextEditingController(text: p?.model ?? 'gpt-4o-mini');
     _maxTokensController = TextEditingController(
       text: '${p?.maxTokens ?? 2048}',
+    );
+    _contextWindowController = TextEditingController(
+      text: (p?.contextWindow ?? 0) > 0 ? '${p!.contextWindow}' : '',
     );
     _temperatureController = TextEditingController(
       text: p?.temperature != null ? '${p!.temperature}' : '0.7',
@@ -144,6 +148,7 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     _apiKeyController.dispose();
     _modelController.dispose();
     _maxTokensController.dispose();
+    _contextWindowController.dispose();
     _temperatureController.dispose();
     _balanceThresholdController.dispose();
     _cacheHitPriceController.dispose();
@@ -315,6 +320,11 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
     }
   }
 
+  int _parseContextWindow() {
+    final parsed = int.tryParse(_contextWindowController.text.trim()) ?? 0;
+    return parsed < 0 ? 0 : parsed;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -328,6 +338,9 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
       apiKey: _apiKeyController.text.trim(),
       model: _modelController.text.trim(),
       maxTokens: int.tryParse(_maxTokensController.text.trim()) ?? 2048,
+      contextWindow: _type == AiProfileType.aquamarina
+          ? 0
+          : _parseContextWindow(),
       temperature: _temperature,
       enableThinking: _enableThinking,
       enableVision: _enableVision,
@@ -849,6 +862,31 @@ class _AiProfileEditPageState extends State<AiProfileEditPage> {
                   if (v == null || v.trim().isEmpty) return '请输入 Max Tokens';
                   final n = int.tryParse(v.trim());
                   if (n == null || n < 1) return '请输入有效的正整数';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+
+              // ---- 上下文窗口 ----
+              TextFormField(
+                controller: _contextWindowController,
+                decoration: const InputDecoration(
+                  labelText: '上下文窗口（tokens）',
+                  hintText: '例如 128000（128K）',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.view_agenda_outlined),
+                  helperText:
+                      '模型支持的最大上下文长度，用于按比例压缩与超限校验；'
+                      '留空表示未配置（此时只能用绝对 token 阈值）',
+                  helperMaxLines: 3,
+                ),
+                keyboardType: TextInputType.number,
+                validator: (v) {
+                  final text = (v ?? '').trim();
+                  if (text.isEmpty) return null;
+                  final n = int.tryParse(text);
+                  if (n == null || n <= 0) return '请输入正整数，或留空';
+                  if (n > 10000000) return '数值过大，请检查是否多输了 0';
                   return null;
                 },
               ),

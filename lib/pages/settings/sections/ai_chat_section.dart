@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../models/ai_chat.dart';
+import '../../../models/ai_context.dart';
 import '../../../models/ai_profile.dart';
 import '../../../services/ai/ai_chat_service.dart';
 import '../../../services/ai/ai_chat_settings.dart';
@@ -37,7 +38,7 @@ class _AiChatSectionState extends State<AiChatSection> {
   String _systemPrompt = AiChatSettings.defaultSystemPrompt;
   double? _temperatureOverride;
   int? _maxTokensOverride;
-  int _contextMessages = AiChatSettings.defaultContextMessages;
+  AiContextPolicy _contextPolicy = AiContextPolicy.defaults;
   bool _toolsEnabled = true;
   bool _autoApproveReadOnly = true;
   int _maxToolRounds = AiChatSettings.defaultToolRounds;
@@ -75,7 +76,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _settings.getSystemPrompt(),
       _settings.getTemperatureOverride(),
       _settings.getMaxTokensOverride(),
-      _settings.getContextMessages(),
+      _settings.getContextPolicy(),
       _settings.getToolsEnabled(),
       _settings.getAutoApproveReadOnly(),
       _settings.getMaxToolRounds(),
@@ -95,7 +96,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _systemPrompt = results[1] as String;
       _temperatureOverride = results[2] as double?;
       _maxTokensOverride = results[3] as int?;
-      _contextMessages = results[4] as int;
+      _contextPolicy = results[4] as AiContextPolicy;
       _toolsEnabled = results[5] as bool;
       _autoApproveReadOnly = results[6] as bool;
       _maxToolRounds = results[7] as int;
@@ -232,16 +233,10 @@ class _AiChatSectionState extends State<AiChatSection> {
           ),
         ListTile(
           leading: Icon(Icons.history, color: colorScheme.primary),
-          title: const Text('上下文消息条数'),
-          subtitle: Text('携带最近 $_contextMessages 条消息（不含系统提示词）'),
-          trailing: Text(
-            '$_contextMessages',
-            style: theme.textTheme.titleMedium?.copyWith(
-              color: colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          onTap: _pickContextMessages,
+          title: const Text('上下文处理'),
+          subtitle: Text(_describeContextPolicy(_contextPolicy)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _editContextPolicy,
         ),
         SwitchListTile(
           secondary: Icon(Icons.flash_on, color: colorScheme.primary),
@@ -593,17 +588,249 @@ class _AiChatSectionState extends State<AiChatSection> {
     setState(() => _maxTokensOverride = result);
   }
 
-  Future<void> _pickContextMessages() async {
-    final result = await _showStepperDialog(
-      title: '上下文消息条数',
-      current: _contextMessages,
-      min: AiChatSettings.minContextMessages,
-      max: AiChatSettings.maxContextMessages,
-      step: 2,
+  Future<void> _editContextPolicy() async {
+    final formKey = GlobalKey<FormState>();
+    final tokensController = TextEditingController(
+      text: '${_contextPolicy.absoluteThreshold}',
     );
+    final ratioController = TextEditingController(
+      text: (_contextPolicy.ratioThreshold * 100).toStringAsFixed(0),
+    );
+
+    var maxMessages = _contextPolicy.maxMessages;
+    var compressionEnabled = _contextPolicy.compressionEnabled;
+    var mode = _contextPolicy.thresholdMode;
+    final window = _effectiveProfile?.contextWindow ?? 0;
+
+    final result = await showDialog<AiContextPolicy>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final theme = Theme.of(context);
+          return AlertDialog(
+            title: const Text('上下文处理'),
+            content: SizedBox(
+              width: 520,
+              child: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '消息条数限制',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.remove_circle_outline),
+                            onPressed:
+                                maxMessages > AiContextPolicy.minMessageCount
+                                ? () => setDialogState(
+                                    () => maxMessages = (maxMessages - 2).clamp(
+                                      AiContextPolicy.minMessageCount,
+                                      AiContextPolicy.maxMessageCount,
+                                    ),
+                                  )
+                                : null,
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Text(
+                              '$maxMessages',
+                              style: theme.textTheme.headlineSmall,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add_circle_outline),
+                            onPressed:
+                                maxMessages < AiContextPolicy.maxMessageCount
+                                ? () => setDialogState(
+                                    () => maxMessages = (maxMessages + 2).clamp(
+                                      AiContextPolicy.minMessageCount,
+                                      AiContextPolicy.maxMessageCount,
+                                    ),
+                                  )
+                                : null,
+                          ),
+                        ],
+                      ),
+                      Text(
+                        '携带最近 $maxMessages 条消息（不含系统提示词）',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const Divider(height: 24),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        secondary: Icon(
+                          Icons.compress,
+                          color: theme.colorScheme.primary,
+                        ),
+                        title: const Text('达阈值时摘要压缩'),
+                        subtitle: const Text('把较早的消息交给模型压缩成摘要，减少上下文占用'),
+                        value: compressionEnabled,
+                        onChanged: (value) =>
+                            setDialogState(() => compressionEnabled = value),
+                      ),
+                      if (compressionEnabled) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          window > 0
+                              ? '当前 AI 配置的上下文窗口：$window tokens'
+                              : '当前 AI 配置未填写上下文窗口；绝对阈值将同时作为上限',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SegmentedButton<AiContextThresholdMode>(
+                          segments: const [
+                            ButtonSegment(
+                              value: AiContextThresholdMode.absolute,
+                              label: Text('绝对 token'),
+                              icon: Icon(Icons.tag),
+                            ),
+                            ButtonSegment(
+                              value: AiContextThresholdMode.ratio,
+                              label: Text('窗口比例'),
+                              icon: Icon(Icons.percent),
+                            ),
+                          ],
+                          selected: {mode},
+                          showSelectedIcon: false,
+                          onSelectionChanged: (selected) =>
+                              setDialogState(() => mode = selected.first),
+                        ),
+                        const SizedBox(height: 12),
+                        if (mode == AiContextThresholdMode.absolute)
+                          TextFormField(
+                            controller: tokensController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: '触发阈值（tokens）',
+                              hintText: '例如 16384（16K）',
+                              border: OutlineInputBorder(),
+                              suffixText: 'tokens',
+                            ),
+                            validator: (value) {
+                              final parsed = int.tryParse((value ?? '').trim());
+                              if (parsed == null ||
+                                  parsed <
+                                      AiContextPolicy.minAbsoluteThreshold) {
+                                return '请输入不小于 ${AiContextPolicy.minAbsoluteThreshold} 的整数';
+                              }
+                              return null;
+                            },
+                          )
+                        else
+                          TextFormField(
+                            controller: ratioController,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: InputDecoration(
+                              labelText: '触发阈值（上下文窗口百分比）',
+                              hintText: '例如 50',
+                              border: const OutlineInputBorder(),
+                              suffixText: '%',
+                              helperText: window > 0
+                                  ? '当前配置窗口 $window tokens，'
+                                        '达到约 ${(window * (double.tryParse(ratioController.text.trim()) ?? 50) / 100).floor()} tokens 时压缩'
+                                  : '当前 AI 配置未填写上下文窗口大小，请先到「AI 配置」中填写',
+                              helperMaxLines: 3,
+                            ),
+                            onChanged: (_) => setDialogState(() {}),
+                            validator: (value) {
+                              final parsed = double.tryParse(
+                                (value ?? '').trim(),
+                              );
+                              if (parsed == null ||
+                                  parsed < AiContextPolicy.minRatio * 100 ||
+                                  parsed > AiContextPolicy.maxRatio * 100) {
+                                return '请输入 5 - 100 之间的百分比';
+                              }
+                              return null;
+                            },
+                          ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  if (!(formKey.currentState?.validate() ?? false)) return;
+                  final absolute = int.tryParse(tokensController.text.trim());
+                  final percent = double.tryParse(ratioController.text.trim());
+                  final policy = AiContextPolicy(
+                    maxMessages: maxMessages,
+                    compressionEnabled: compressionEnabled,
+                    thresholdMode: mode,
+                    absoluteThreshold:
+                        absolute ?? AiContextPolicy.defaultAbsoluteThreshold,
+                    ratioThreshold: percent == null
+                        ? AiContextPolicy.defaultRatio
+                        : percent / 100,
+                  ).normalized();
+                  Navigator.of(dialogContext).pop(policy);
+                },
+                child: const Text('保存'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    tokensController.dispose();
+    ratioController.dispose();
     if (result == null) return;
-    await _settings.setContextMessages(result);
-    setState(() => _contextMessages = result);
+    await _settings.setContextPolicy(result);
+    setState(() => _contextPolicy = result);
+  }
+
+  String _describeContextPolicy(AiContextPolicy policy) {
+    final base = '携带最近 ${policy.maxMessages} 条消息（不含系统提示词）';
+    if (!policy.compressionEnabled) {
+      return '$base · 未启用摘要压缩';
+    }
+    if (policy.thresholdMode == AiContextThresholdMode.ratio) {
+      final percent = (policy.ratioThreshold * 100).toStringAsFixed(0);
+      final window = _effectiveProfile?.contextWindow ?? 0;
+      if (window <= 0) {
+        return '$base · 达窗口 $percent% 时摘要压缩（未填写上下文窗口）';
+      }
+      final tokens = policy.resolveThresholdTokens(window);
+      return '$base · 达窗口 $percent%（约 $tokens tokens）时摘要压缩';
+    }
+    return '$base · 达 ${_formatTokenCount(policy.absoluteThreshold)} tokens 时摘要压缩';
+  }
+
+  String _formatTokenCount(int tokens) {
+    if (tokens % 1024 == 0) {
+      return '${tokens ~/ 1024}K';
+    }
+    if (tokens >= 1000) {
+      final value = tokens / 1000;
+      return '${value.toStringAsFixed(value == value.roundToDouble() ? 0 : 1)}K';
+    }
+    return '$tokens';
   }
 
   Future<void> _pickMaxToolRounds() async {

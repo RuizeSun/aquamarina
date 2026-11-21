@@ -39,7 +39,9 @@ class _FakeAiService extends AiService {
     CancelToken? cancelToken,
     void Function(AiUsageSnapshot usage)? onUsage,
   }) {
-    final events = calls < rounds.length ? rounds[calls] : const <AiChatEvent>[];
+    final events = calls < rounds.length
+        ? rounds[calls]
+        : const <AiChatEvent>[];
     calls += 1;
     final controller = StreamController<AiChatEvent>();
     scheduleMicrotask(() async {
@@ -274,10 +276,36 @@ void main() {
     });
 
     test('空 system 不注入', () {
-      final trimmed = AiChatController.trimContext([
-        msg(AiChatRole.user, 'u'),
-      ], 10, system: '   ');
+      final trimmed = AiChatController.trimContext(
+        [msg(AiChatRole.user, 'u')],
+        10,
+        system: '   ',
+      );
       expect(trimmed, hasLength(1));
+    });
+  });
+
+  group('上下文处理', () {
+    test('压缩后仍超限时落一条可见错误，不发起模型请求', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'ai_chat_context_messages': 20,
+        'ai_chat_context_compression_enabled': true,
+        'ai_chat_context_threshold_mode': 'absolute',
+        'ai_chat_context_threshold_tokens': 500,
+      });
+      final ai = _FakeAiService(const []);
+      final controller = build(
+        ai,
+        AiToolRegistry([]),
+        profile: _profile().copyWith(contextWindow: 500),
+      );
+      await controller.createSession();
+      await controller.send(List.filled(600, '字').join());
+
+      expect(ai.calls, 0);
+      expect(controller.state, AiChatStreamState.idle);
+      expect(controller.messages.last.status, AiChatMessageStatus.error);
+      expect(controller.messages.last.errorMessage, contains('超出模型上下文窗口'));
     });
   });
 
@@ -357,12 +385,9 @@ void main() {
       var asked = 0;
       final ai = _FakeAiService([
         [
-          ChatToolCallsCompleted(
-            [
-              AiToolCall.parse(id: 'c1', name: 'read_tool', rawArguments: '{}'),
-            ],
-            'tool_calls',
-          ),
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c1', name: 'read_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
           ChatDone('tool_calls'),
         ],
         [ChatTextDelta('完成'), ChatDone('stop')],
@@ -401,12 +426,9 @@ void main() {
       );
       final ai = _FakeAiService([
         [
-          ChatToolCallsCompleted(
-            [
-              AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
-            ],
-            'tool_calls',
-          ),
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
           ChatDone('tool_calls'),
         ],
         [ChatTextDelta('好的'), ChatDone('stop')],
@@ -424,8 +446,9 @@ void main() {
 
       expect(asked, 1);
       expect(executed, 0);
-      final toolMessage = controller.messages
-          .firstWhere((m) => m.role == AiChatRole.tool);
+      final toolMessage = controller.messages.firstWhere(
+        (m) => m.role == AiChatRole.tool,
+      );
       expect(toolMessage.content, contains('用户拒绝'));
       expect(toolMessage.errorMessage, 'denied_by_user');
     });
@@ -434,21 +457,15 @@ void main() {
       var asked = 0;
       final ai = _FakeAiService([
         [
-          ChatToolCallsCompleted(
-            [
-              AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
-            ],
-            'tool_calls',
-          ),
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
           ChatDone('tool_calls'),
         ],
         [
-          ChatToolCallsCompleted(
-            [
-              AiToolCall.parse(id: 'c2', name: 'write_tool', rawArguments: '{}'),
-            ],
-            'tool_calls',
-          ),
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c2', name: 'write_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
           ChatDone('tool_calls'),
         ],
         [ChatTextDelta('完成'), ChatDone('stop')],
@@ -465,18 +482,18 @@ void main() {
       await controller.send('批量处理');
 
       expect(asked, 1);
-      expect(controller.messages.where((m) => m.role == AiChatRole.tool), hasLength(2));
+      expect(
+        controller.messages.where((m) => m.role == AiChatRole.tool),
+        hasLength(2),
+      );
     });
 
     test('无 handler（页面已销毁）时一律拒绝', () async {
       final ai = _FakeAiService([
         [
-          ChatToolCallsCompleted(
-            [
-              AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
-            ],
-            'tool_calls',
-          ),
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c1', name: 'write_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
           ChatDone('tool_calls'),
         ],
         [ChatTextDelta('ok'), ChatDone('stop')],
@@ -485,8 +502,9 @@ void main() {
       await controller.createSession();
       await controller.send('做点什么');
 
-      final toolMessage = controller.messages
-          .firstWhere((m) => m.role == AiChatRole.tool);
+      final toolMessage = controller.messages.firstWhere(
+        (m) => m.role == AiChatRole.tool,
+      );
       expect(toolMessage.errorMessage, 'denied_by_user');
     });
 
@@ -495,17 +513,12 @@ void main() {
         AiChatSettings.maxToolRoundsKey: 1,
       });
       List<AiChatEvent> toolRound(int i) => [
-        ChatToolCallsCompleted(
-          [AiToolCall.parse(id: 'c$i', name: 'read_tool', rawArguments: '{}')],
-          'tool_calls',
-        ),
+        ChatToolCallsCompleted([
+          AiToolCall.parse(id: 'c$i', name: 'read_tool', rawArguments: '{}'),
+        ], 'tool_calls'),
         ChatDone('tool_calls'),
       ];
-      final ai = _FakeAiService([
-        toolRound(1),
-        toolRound(2),
-        toolRound(3),
-      ]);
+      final ai = _FakeAiService([toolRound(1), toolRound(2), toolRound(3)]);
       final controller = build(ai, AiToolRegistry([_readTool('read_tool')]));
       await controller.createSession();
       await controller.send('循环调用');
@@ -706,7 +719,10 @@ void main() {
     test('同一分钟内第二轮不再重复注入', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{});
       final captured = <List<Map<String, dynamic>>>[];
-      final controller = build(captured, () => DateTime(2026, 11, 15, 20, 50, 10));
+      final controller = build(
+        captured,
+        () => DateTime(2026, 11, 15, 20, 50, 10),
+      );
       addTearDown(controller.dispose);
 
       await controller.createSession();
@@ -765,16 +781,18 @@ void main() {
 
   group('上下文注入标签解析', () {
     test('解析出注入的分块名', () {
-      const note = '<context-note>\n<runtime-context>\nA\n</runtime-context>\n'
+      const note =
+          '<context-note>\n<runtime-context>\nA\n</runtime-context>\n'
           '<time-context>\nB\n</time-context>\n</context-note>';
-      expect(
-        AiChatController.contextTagsOf(note),
-        ['runtime-context', 'time-context'],
-      );
+      expect(AiChatController.contextTagsOf(note), [
+        'runtime-context',
+        'time-context',
+      ]);
     });
 
     test('只注入时间时只返回 time-context', () {
-      const note = '<context-note>\n<time-context>\nB\n</time-context>\n</context-note>';
+      const note =
+          '<context-note>\n<time-context>\nB\n</time-context>\n</context-note>';
       expect(AiChatController.contextTagsOf(note), ['time-context']);
     });
 
@@ -821,7 +839,8 @@ void main() {
         final content = message['content'];
         if (content is List) {
           for (final part in content) {
-            if (part is Map && part['type'] == 'image_url') imageParts.add(part);
+            if (part is Map && part['type'] == 'image_url')
+              imageParts.add(part);
           }
         }
       }
@@ -847,8 +866,9 @@ void main() {
       await controller.createSession();
       await controller.send('打招呼');
 
-      final assistant = controller.messages
-          .lastWhere((m) => m.role == AiChatRole.assistant);
+      final assistant = controller.messages.lastWhere(
+        (m) => m.role == AiChatRole.assistant,
+      );
       expect(assistant.content, '你好，世界');
       expect(assistant.reasoning, '先想想');
       expect(assistant.status, AiChatMessageStatus.complete);
@@ -871,25 +891,24 @@ void main() {
 
       expect(ai.chatOnceCalls, 1);
       expect(ai.streamCalls, 0);
-      final assistant = controller.messages
-          .lastWhere((m) => m.role == AiChatRole.assistant);
+      final assistant = controller.messages.lastWhere(
+        (m) => m.role == AiChatRole.assistant,
+      );
       expect(assistant.content, '一次性回答');
     });
 
     test('请求失败时消息标 error 并保留已生成内容', () async {
       final ai = _FakeAiService([
-        [
-          ChatTextDelta('半句'),
-          ChatError(AiServiceException('网络请求失败')),
-        ],
+        [ChatTextDelta('半句'), ChatError(AiServiceException('网络请求失败'))],
       ]);
       final controller = build(ai, AiToolRegistry(const []));
       await controller.createSession();
       await controller.send('你好');
 
       expect(controller.error, contains('网络请求失败'));
-      final assistant = controller.messages
-          .lastWhere((m) => m.role == AiChatRole.assistant);
+      final assistant = controller.messages.lastWhere(
+        (m) => m.role == AiChatRole.assistant,
+      );
       expect(assistant.content, '半句');
       expect(assistant.status, AiChatMessageStatus.error);
     });

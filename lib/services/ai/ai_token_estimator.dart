@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// 轻量的 token 估算工具（不引入 tokenizer 依赖）。
 ///
 /// 用于在真正发起 AI 请求前，给用户一个「大概要花多少 token / 多少钱」的预估。
@@ -13,6 +15,9 @@ class AiTokenEstimator {
 
   /// 单条消息的对话模板额外开销（role / 分隔符等）。
   static const int _perMessageOverhead = 4;
+
+  /// 单张图片的保守估算值（低细节 + 一次缩放的开销量级）。
+  static const int imageTokenEstimate = 850;
 
   /// 一次回复的固定结构开销（`{"sentences":[]}` 等外壳）。
   static const int _replyEnvelopeOverhead = 12;
@@ -42,6 +47,51 @@ class AiTokenEstimator {
       // role 等字段本身的开销已并入了消息开销
     }
     return total;
+  }
+
+  /// 估算一条已经组装好的 OpenAI message（支持多模态 content 与 tool_calls）。
+  static int estimateChatMessage(Map<String, dynamic> message) {
+    var total = _perMessageOverhead;
+    final content = message['content'];
+    if (content is String) {
+      total += estimate(content);
+    } else if (content is List) {
+      for (final part in content) {
+        if (part is! Map) continue;
+        final type = part['type'];
+        if (type == 'image_url') {
+          total += imageTokenEstimate;
+        } else {
+          final text = part['text'];
+          if (text is String) total += estimate(text);
+        }
+      }
+    }
+    final reasoning = message['reasoning_content'];
+    if (reasoning is String) {
+      total += estimate(reasoning);
+    }
+    final toolCalls = message['tool_calls'];
+    if (toolCalls is List && toolCalls.isNotEmpty) {
+      total += estimate(jsonEncode(toolCalls));
+    }
+    return total;
+  }
+
+  /// 估算一组请求消息的 prompt tokens。
+  static int estimateChatMessages(List<Map<String, dynamic>> messages) {
+    var total = 0;
+    for (final message in messages) {
+      total += estimateChatMessage(message);
+    }
+    return total;
+  }
+
+  /// 估算工具定义占用的 prompt tokens（空列表为 0）。
+  static int estimateTools(List<Map<String, dynamic>> tools) {
+    if (tools.isEmpty) return 0;
+    // JSON 外壳 + 每个工具的名称/描述/参数结构开销。
+    return estimate(jsonEncode(tools)) + tools.length * 8;
   }
 
   /// 估算一次回复的固定外壳开销（JSON 包裹结构）。

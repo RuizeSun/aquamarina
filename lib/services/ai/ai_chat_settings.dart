@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../models/ai_chat.dart';
+import '../../models/ai_context.dart';
 import 'ai_image_service.dart';
 
 /// AI 对话的本地设置（SharedPreferences）。
@@ -18,6 +19,14 @@ class AiChatSettings {
   static const String temperatureOverrideKey = 'ai_chat_temperature_override';
   static const String maxTokensOverrideKey = 'ai_chat_max_tokens_override';
   static const String contextMessagesKey = 'ai_chat_context_messages';
+  static const String contextCompressionEnabledKey =
+      'ai_chat_context_compression_enabled';
+  static const String contextThresholdModeKey =
+      'ai_chat_context_threshold_mode';
+  static const String contextThresholdTokensKey =
+      'ai_chat_context_threshold_tokens';
+  static const String contextThresholdRatioKey =
+      'ai_chat_context_threshold_ratio';
   static const String toolsEnabledKey = 'ai_chat_tools_enabled';
   static const String toolDisabledNamesKey = 'ai_chat_tool_disabled_names';
   static const String autoApproveReadOnlyKey = 'ai_chat_auto_approve_readonly';
@@ -25,14 +34,15 @@ class AiChatSettings {
   static const String streamEnabledKey = 'ai_chat_stream_enabled';
   static const String imageSendModeKey = 'ai_chat_image_send_mode';
   static const String imageThumbnailSizeKey = 'ai_chat_image_thumbnail_size';
-  static const String injectRuntimeContextKey = 'ai_chat_inject_runtime_context';
+  static const String injectRuntimeContextKey =
+      'ai_chat_inject_runtime_context';
   static const String injectTimeContextKey = 'ai_chat_inject_time_context';
   static const String showUsageBadgeKey = 'ai_chat_show_usage_badge';
 
   // ── 取值范围 ──────────────────────────────────────
-  static const int minContextMessages = 2;
-  static const int maxContextMessages = 100;
-  static const int defaultContextMessages = 20;
+  static const int minContextMessages = AiContextPolicy.minMessageCount;
+  static const int maxContextMessages = AiContextPolicy.maxMessageCount;
+  static const int defaultContextMessages = AiContextPolicy.defaultMessageCount;
 
   static const int minMaxTokens = 64;
   static const int maxMaxTokens = 8192;
@@ -40,7 +50,6 @@ class AiChatSettings {
   static const int minToolRounds = 1;
   static const int maxToolRounds = 10;
   static const int defaultToolRounds = 5;
-
 
   /// 默认系统提示词：说明身份、可用能力，以及「写操作需要用户批准」。
   static const String defaultSystemPrompt =
@@ -134,12 +143,56 @@ class AiChatSettings {
     }
   }
 
-  // ── 上下文 ────────────────────────────────────────
+  // ── 上下文处理 ────────────────────────────────────
 
-  Future<int> getContextMessages() async {
+  /// 读取完整的上下文处理策略（消息条数 + 摘要压缩阈值）。
+  Future<AiContextPolicy> getContextPolicy() async {
     final prefs = await _prefs;
-    final value = prefs.getInt(contextMessagesKey) ?? defaultContextMessages;
-    return value.clamp(minContextMessages, maxContextMessages);
+    final messages = prefs.getInt(contextMessagesKey) ?? defaultContextMessages;
+    final enabled = prefs.getBool(contextCompressionEnabledKey) ?? false;
+    final mode = AiContextThresholdMode.fromName(
+      prefs.getString(contextThresholdModeKey),
+    );
+    final tokens =
+        prefs.getInt(contextThresholdTokensKey) ??
+        AiContextPolicy.defaultAbsoluteThreshold;
+    final ratio =
+        prefs.getDouble(contextThresholdRatioKey) ??
+        AiContextPolicy.defaultRatio;
+    return AiContextPolicy(
+      maxMessages: messages,
+      compressionEnabled: enabled,
+      thresholdMode: mode,
+      absoluteThreshold: tokens,
+      ratioThreshold: ratio,
+    ).normalized();
+  }
+
+  Future<void> setContextPolicy(AiContextPolicy policy) async {
+    final prefs = await _prefs;
+    final normalized = policy.normalized();
+    await prefs.setInt(contextMessagesKey, normalized.maxMessages);
+    await prefs.setBool(
+      contextCompressionEnabledKey,
+      normalized.compressionEnabled,
+    );
+    await prefs.setString(
+      contextThresholdModeKey,
+      normalized.thresholdMode.name,
+    );
+    await prefs.setInt(contextThresholdTokensKey, normalized.absoluteThreshold);
+    await prefs.setDouble(contextThresholdRatioKey, normalized.ratioThreshold);
+  }
+
+  /// 仅消息条数（兼容旧调用点 / 旧偏好键）。
+  Future<int> getContextMessages() async {
+    final policy = await getContextPolicy();
+    return policy.maxMessages;
+  }
+
+  Future<void> setContextMessages(int value) async {
+    final policy = await getContextPolicy();
+    await setContextPolicy(policy.copyWith(maxMessages: value));
   }
 
   // ── 上下文自动注入 ────────────────────────────────
@@ -164,14 +217,6 @@ class AiChatSettings {
   Future<void> setInjectTimeContext(bool value) async {
     final prefs = await _prefs;
     await prefs.setBool(injectTimeContextKey, value);
-  }
-
-  Future<void> setContextMessages(int value) async {
-    final prefs = await _prefs;
-    await prefs.setInt(
-      contextMessagesKey,
-      value.clamp(minContextMessages, maxContextMessages),
-    );
   }
 
   // ── 消息角标 ──────────────────────────────────────

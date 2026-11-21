@@ -165,9 +165,7 @@ class AiUsagePricing {
       cacheMissPrice: clearCacheMissPrice
           ? null
           : (cacheMissPrice ?? this.cacheMissPrice),
-      outputPrice: clearOutputPrice
-          ? null
-          : (outputPrice ?? this.outputPrice),
+      outputPrice: clearOutputPrice ? null : (outputPrice ?? this.outputPrice),
       requestPrice: clearRequestPrice
           ? null
           : (requestPrice ?? this.requestPrice),
@@ -216,6 +214,12 @@ class AiProfile {
   final String model;
   final int maxTokens;
 
+  /// 模型上下文窗口大小（tokens），由用户手动填写。
+  ///
+  /// 用于「上下文达到窗口 X% 时摘要压缩」以及压缩后的硬上限校验；
+  /// 0 表示未配置（此时按比例压缩不可用，绝对阈值同时作为上限）。
+  final int contextWindow;
+
   /// temperature: DeepSeek 思考模式下无效（为 null 时不发送）
   final double? temperature;
 
@@ -247,6 +251,7 @@ class AiProfile {
     this.apiKey = '',
     this.model = 'gpt-4o-mini',
     this.maxTokens = 2048,
+    this.contextWindow = 0,
     this.temperature,
     this.enableThinking = false,
     this.reasoningEffort,
@@ -264,6 +269,7 @@ class AiProfile {
     String? apiKey,
     String? model,
     int? maxTokens,
+    int? contextWindow,
     double? temperature,
     bool? enableThinking,
     String? reasoningEffort,
@@ -283,6 +289,7 @@ class AiProfile {
       apiKey: clearApiKey ? '' : (apiKey ?? this.apiKey),
       model: model ?? this.model,
       maxTokens: maxTokens ?? this.maxTokens,
+      contextWindow: contextWindow ?? this.contextWindow,
       temperature: temperature ?? this.temperature,
       enableThinking: enableThinking ?? this.enableThinking,
       reasoningEffort: reasoningEffort ?? this.reasoningEffort,
@@ -312,6 +319,7 @@ class AiProfile {
     'base_url': baseUrl,
     'model': model,
     'max_tokens': maxTokens,
+    if (contextWindow > 0) 'context_window': contextWindow,
     if (temperature != null) 'temperature': temperature,
     'enable_thinking': enableThinking,
     if (reasoningEffort != null) 'reasoning_effort': reasoningEffort,
@@ -334,15 +342,14 @@ class AiProfile {
       apiKey: '', // API Key 不从 JSON 读取
       model: json['model'] as String? ?? 'gpt-4o-mini',
       maxTokens: json['max_tokens'] as int? ?? 2048,
+      contextWindow: json['context_window'] as int? ?? 0,
       temperature: (json['temperature'] as num?)?.toDouble(),
       enableThinking: json['enable_thinking'] as bool? ?? false,
       reasoningEffort: json['reasoning_effort'] as String?,
       isDefault: json['is_default'] as bool? ?? false,
       balanceThreshold: (json['balance_threshold'] as num?)?.toDouble(),
       pricing: json['pricing'] is Map<String, dynamic>
-          ? AiUsagePricing.fromJson(
-              json['pricing'] as Map<String, dynamic>,
-            )
+          ? AiUsagePricing.fromJson(json['pricing'] as Map<String, dynamic>)
           : null,
       enableVision: json['enable_vision'] as bool? ?? false,
     );
