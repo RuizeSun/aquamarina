@@ -1,11 +1,10 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../../models/ai_chat.dart';
 import '../../services/ai/tools/ai_tool.dart';
 import '../../services/ai/tools/tool_approval.dart';
 import 'chat_labels.dart';
+import 'tool_arguments_view.dart';
 
 /// 工具批准面板：写操作执行前必须由用户显式确认。
 ///
@@ -22,9 +21,6 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
     builder: (sheetContext) {
       final theme = Theme.of(sheetContext);
       final colorScheme = theme.colorScheme;
-      final argumentsText = call.rawArguments.trim().isEmpty
-          ? '（无参数）'
-          : _prettyJson(call.rawArguments);
 
       return SafeArea(
         child: Padding(
@@ -117,7 +113,10 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
               const SizedBox(height: 4),
               Text(tool.description, style: theme.textTheme.bodySmall),
               const SizedBox(height: 12),
-              Text('参数', style: theme.textTheme.labelLarge),
+              Text(
+                tool.isMutating ? '将要执行的操作' : '将要查询的内容',
+                style: theme.textTheme.labelLarge,
+              ),
               const SizedBox(height: 4),
               Container(
                 width: double.infinity,
@@ -130,14 +129,7 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: SingleChildScrollView(
-                  child: SelectableText(
-                    argumentsText,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      height: 1.4,
-                    ),
-                  ),
+                  child: ToolArgumentsView(call: call),
                 ),
               ),
               if (call.parseError)
@@ -193,10 +185,3 @@ Future<AiToolApprovalDecision?> showToolApprovalSheet(
   ).then((value) => value ?? AiToolApprovalDecision.denied);
 }
 
-String _prettyJson(String raw) {
-  try {
-    return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
-  } catch (_) {
-    return raw;
-  }
-}

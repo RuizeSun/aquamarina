@@ -23,6 +23,17 @@ class ChatLabels {
     'system': '系统提示',
   };
 
+  static const Map<String, String> _arguments = <String, String>{
+    'word': '单词',
+    'words': '单词列表',
+    'query': '筛选关键词',
+    'book_id': '词书',
+    'limit': '数量上限',
+    'note': '笔记内容',
+    'favorite': '收藏',
+    'favorite_words': '收藏单词',
+  };
+
   static const Map<String, String> _contextTags = <String, String>{
     'runtime-context': '运行环境',
     'time-context': '当前时间',
@@ -32,6 +43,9 @@ class ChatLabels {
 
   /// 工具名 → 中文动作名。
   static String tool(String name) => _tools[name] ?? name;
+
+  /// 工具参数名 → 中文标签（未知参数回退原名）。
+  static String argument(String name) => _arguments[name] ?? name;
 
   /// 上下文分块名 → 中文名称。
   static String contextTag(String tag) => _contextTags[tag] ?? tag;

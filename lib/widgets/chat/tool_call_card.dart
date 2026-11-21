@@ -1,9 +1,8 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../../models/ai_chat.dart';
 import 'chat_labels.dart';
+import 'tool_arguments_view.dart';
 
 /// 对话中的一次工具调用卡片：中文动作名、执行状态、参数与结果。
 ///
@@ -66,14 +65,7 @@ class ToolCallCard extends StatelessWidget {
                   color: colorScheme.surface.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: SelectableText(
-                  _pretty(record.call.rawArguments),
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    height: 1.4,
-                  ),
-                ),
+                child: ToolArgumentsView(call: record.call),
               ),
               if (record.resultPreview != null &&
                   record.resultPreview!.isNotEmpty) ...[
@@ -137,14 +129,6 @@ class ToolCallCard extends StatelessWidget {
           colorScheme.error,
           '执行失败${record.errorCode == null ? '' : '（${record.errorCode}）'}',
         );
-    }
-  }
-
-  String _pretty(String raw) {
-    try {
-      return const JsonEncoder.withIndent('  ').convert(jsonDecode(raw));
-    } catch (_) {
-      return raw.isEmpty ? '（无参数）' : raw;
     }
   }
 }
