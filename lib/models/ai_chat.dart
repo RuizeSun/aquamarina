@@ -460,13 +460,26 @@ class AiChatMessage {
           'content': content,
         };
       case AiChatRole.assistant:
+        // DeepSeek 思考模式 + tools 时必须回传历史轮次的 reasoning_content，
+        // 否则 API 返回 400。是否真正发送由 AiService.buildChatBody 决定，
+        // 这里只负责把思维链带出模型层（其它厂商会在发送前被剔除）。
+        final reasoningContent = (reasoning == null || reasoning!.isEmpty)
+            ? null
+            : reasoning;
         if (toolCalls.isEmpty) {
-          return {'role': 'assistant', 'content': content};
+          return {
+            'role': 'assistant',
+            'content': content,
+            'reasoning_content': ?reasoningContent,
+          };
         }
         return {
           'role': 'assistant',
-          'content': content.isEmpty ? null : content,
+          // 官方样例在工具调用轮次里回传的是空串而不是 null：部分网关会
+          // 对 null content 直接报 400，空串则两边都能接受。
+          'content': content,
           'tool_calls': toolCalls.map((c) => c.toOpenAi()).toList(),
+          'reasoning_content': ?reasoningContent,
         };
       case AiChatRole.system:
         return {'role': 'system', 'content': content};

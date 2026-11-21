@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import '../../models/ai_chat.dart';
 import '../../models/ai_profile.dart';
@@ -68,9 +69,11 @@ class AiService {
     }
 
     // 清掉仅用于本地诊断的字段（image_size），避免污染服务端请求体
-    final cleanMessages = messages
-        .map(AiChatMessage.stripDiagnostics)
-        .toList(growable: false);
+    final cleanMessages = _applyReasoningContent(
+      messages.map(AiChatMessage.stripDiagnostics).toList(growable: false),
+      profile: profile,
+      hasTools: tools != null && tools.isNotEmpty,
+    );
 
     final body = <String, dynamic>{
       'model': profile.model,
@@ -110,6 +113,36 @@ class AiService {
     }
 
     return body;
+  }
+
+  /// 按厂商要求整理消息里的 `reasoning_content`。
+  ///
+  /// DeepSeek 思考模式 + tools 的规则（官方 thinking_mode 文档）：
+  /// 只要请求带 `tools`，就必须把历史所有轮次的 reasoning_content 完整回传，
+  /// 包括模型没发起工具调用的轮次；缺字段会被直接判 400。
+  /// 其它情况（非 DeepSeek、未开思考模式、或没带 tools）一律剔除该字段，
+  /// 避免 OpenAI 等严格校验的端点因未知字段报错。
+  List<Map<String, dynamic>> _applyReasoningContent(
+    List<Map<String, dynamic>> messages, {
+    required AiProfile profile,
+    required bool hasTools,
+  }) {
+    final keepReasoning = profile.isDeepSeek && profile.enableThinking;
+    return messages.map((message) {
+      final next = Map<String, dynamic>.from(message);
+      if (!keepReasoning) {
+        next.remove('reasoning_content');
+        return next;
+      }
+      // 带 tools 时字段必须存在（即使是空串），否则历史里缺少思维链的
+      // assistant 消息会让整个请求 400。
+      if (hasTools &&
+          next['role'] == 'assistant' &&
+          next['reasoning_content'] is! String) {
+        next['reasoning_content'] = '';
+      }
+      return next;
+    }).toList(growable: false);
   }
 
   /// 调用 Aquamarina 官方 API（非标准 OpenAI 兼容）
@@ -321,17 +354,22 @@ class AiService {
             await controller.close();
           }
         })
-        .catchError((error) {
+        .catchError((error) async {
           if (!controller.isClosed) {
             logError('AiService', '流式请求异常: $error');
             if (error is DioException) {
+              final body = await _readErrorBody(error.response?.data);
+              logError(
+                'AiService',
+                '流式请求失败: HTTP ${error.response?.statusCode} $body',
+              );
               controller.addError(
-                _mapError(error.response?.statusCode, error.response?.data),
+                _mapError(error.response?.statusCode, body),
               );
             } else {
               controller.addError(AiServiceException('请求失败：$error'));
             }
-            controller.close();
+            await controller.close();
           }
         });
 
@@ -541,17 +579,24 @@ class AiService {
             await controller.close();
           }
         })
-        .catchError((error) {
+        .catchError((error) async {
           if (controller.isClosed) return;
-          logError('AiService', '对话流式请求异常: $error');
           if (error is DioException) {
+            // 流式响应里 body 是未解码的 [ResponseBody]，
+            // 这里先读出来，才能把服务端 400 的具体原因带进日志和 UI。
+            final body = await _readErrorBody(error.response?.data);
+            logError(
+              'AiService',
+              '对话流式请求异常: HTTP ${error.response?.statusCode} $body',
+            );
             controller.add(
-              ChatError(_mapError(error.response?.statusCode, error.response?.data)),
+              ChatError(_mapError(error.response?.statusCode, body)),
             );
           } else {
+            logError('AiService', '对话流式请求异常: $error');
             controller.add(ChatError(AiServiceException('请求失败：$error')));
           }
-          controller.close();
+          await controller.close();
         });
 
     return controller.stream;
@@ -676,6 +721,42 @@ class AiService {
       );
     } catch (e, stackTrace) {
       logError('AiService', '记录 AI usage 失败: $e', stackTrace);
+    }
+  }
+
+  /// 尽力读取错误响应体。
+  ///
+  /// 流式请求（`responseType: stream`）失败时 Dio 给出的是未消费的
+  /// [ResponseBody]，不读出来日志里就只有一句 "bad response"，看不到服务端
+  /// 真正的 400 原因（例如缺少 reasoning_content）。
+  Future<dynamic> _readErrorBody(dynamic data) async {
+    if (data == null) return null;
+    if (data is Map || data is String) {
+      return data is String ? _decodeBodyText(data) : data;
+    }
+    if (data is! ResponseBody) return null;
+    try {
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in data.stream.timeout(
+        const Duration(seconds: 3),
+      )) {
+        builder.add(chunk);
+      }
+      final text = utf8
+          .decode(builder.takeBytes(), allowMalformed: true)
+          .trim();
+      if (text.isEmpty) return null;
+      return _decodeBodyText(text);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  dynamic _decodeBodyText(String text) {
+    try {
+      return jsonDecode(text);
+    } catch (_) {
+      return text;
     }
   }
 

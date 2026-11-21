@@ -937,21 +937,63 @@ class AiChatController extends ChangeNotifier {
       start -= 1;
     }
 
-    for (var i = start; i < usable.length; i++) {
-      final message = usable[i];
-      if (message.role == AiChatRole.tool) {
-        final assistant = i > 0 ? usable[i - 1] : null;
-        final paired = assistant != null &&
-            assistant.role == AiChatRole.assistant &&
-            assistant.toolCalls.any((c) => c.id == message.toolCallId);
-        if (!paired && start > 0) {
-          // 孤立的 tool 消息（父消息被裁掉）：跳过，避免 400
-          continue;
-        }
-      }
-      result.add(message.toOpenAiMessage());
-    }
+    // 保留窗口内的消息，再剔除「工具调用组不完整」的片段：
+    // 只要 assistant(tool_calls) 的所有调用没有一一对应的 tool 结果
+    // （例如执行到一半 App 被杀、或整组被裁断），DeepSeek 会直接 400，
+    // 因此这里按组丢弃，而不是把残缺的协议发给服务端。
+    final selected = usable.sublist(start);
+    result.addAll(dropIncompleteToolGroups(selected)
+        .map((message) => message.toOpenAiMessage()));
 
+    return result;
+  }
+
+  /// 丢弃「工具调用组不完整」的消息。
+  ///
+  /// 规则：assistant(tool_calls) 之后必须紧跟覆盖全部 id 的 tool 消息。
+  /// 缺任意一条（例如执行到一半 App 被杀、或整组被裁断）就整组丢弃，
+  /// 否则 OpenAI / DeepSeek 都会以 400 拒绝整个请求。
+  @visibleForTesting
+  static List<AiChatMessage> dropIncompleteToolGroups(
+    List<AiChatMessage> messages,
+  ) {
+    final result = <AiChatMessage>[];
+    var i = 0;
+    while (i < messages.length) {
+      final message = messages[i];
+      if (message.role == AiChatRole.tool) {
+        // 孤立的 tool 结果（父调用被裁掉或已丢弃）：跳过，避免 400
+        i += 1;
+        continue;
+      }
+      if (message.role != AiChatRole.assistant || !message.hasToolCalls) {
+        result.add(message);
+        i += 1;
+        continue;
+      }
+
+      final pending = message.toolCalls.map((c) => c.id).toSet();
+      final replies = <AiChatMessage>[];
+      var j = i + 1;
+      var consistent = true;
+      while (j < messages.length && messages[j].role == AiChatRole.tool) {
+        final id = messages[j].toolCallId;
+        if (id == null || !pending.remove(id)) consistent = false;
+        replies.add(messages[j]);
+        j += 1;
+      }
+
+      if (consistent && pending.isEmpty) {
+        result.add(message);
+        result.addAll(replies);
+      } else {
+        logInfo(
+          'AiChatController',
+          '丢弃不完整的工具调用组：缺 ${pending.length} 条工具结果',
+        );
+      }
+      i = j;
+    }
     return result;
   }
 }
