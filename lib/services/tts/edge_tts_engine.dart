@@ -28,8 +28,10 @@ class EdgeTtsEngine implements TtsEngine {
     final rate = _rate.toStringAsFixed(2);
     // pitch: 0.5~2.0 → -50Hz~+50Hz 映射
     final pitchStr = _pitchToString(_pitch);
-    // volume: 0.0~1.0 → 0~100 映射
-    final volumeStr = (_volume * 100).round().toString();
+    // 音量只在播放器侧应用（见 _ensureAudioPlayer / setVolume）。
+    // 若同时写入 SSML prosody，音量会被叠加两次（0.5 → 实际约 0.25），
+    // 且滑块曲线会变成平方关系，用户会觉得「调小了几乎没声音」。
+    const volumeStr = '100';
 
     try {
       final result = await _tts!.synthesize(

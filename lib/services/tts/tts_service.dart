@@ -11,6 +11,10 @@ class TtsService {
   TtsService._();
 
   TtsEngine? _engine;
+
+  /// 系统 TTS 降级引擎（懒加载后复用，避免每次降级泄漏平台 channel）。
+  TtsEngine? _fallbackEngine;
+
   TtsSettings _settings = const TtsSettings();
   bool _initialized = false;
 
@@ -58,8 +62,11 @@ class TtsService {
     if (providerChanged) {
       await _disposeEngine();
       await _createEngine();
-    } else if (_engine != null) {
-      await _applySettingsToEngine();
+    } else {
+      if (_engine != null) await _applySettingsToEngine();
+      // 降级引擎也跟随设置（否则用户调过的语速/音量在降级后失效）
+      final fallback = _fallbackEngine;
+      if (fallback != null) await _applySettingsToEngine(fallback);
     }
   }
 
@@ -75,8 +82,10 @@ class TtsService {
     if (providerChanged) {
       await _disposeEngine();
       await _createEngine();
-    } else if (_engine != null) {
-      await _applySettingsToEngine();
+    } else {
+      if (_engine != null) await _applySettingsToEngine();
+      final fallback = _fallbackEngine;
+      if (fallback != null) await _applySettingsToEngine(fallback);
     }
   }
 
@@ -100,12 +109,11 @@ class TtsService {
     // 在线引擎失败（如无网络、API Key 无效）时降级到系统 TTS
     if (allowFallback && _settings.provider != TtsProvider.system) {
       try {
-        // 临时创建系统引擎并朗读（不影响用户设置的 provider）
         logWarning(
           'TtsService',
           '${_settings.provider.label} TTS 失败，降级到系统 TTS',
         );
-        final fallback = SystemTtsEngine();
+        final fallback = await _ensureFallbackEngine();
         return await fallback.speak(text);
       } catch (e) {
         logError('TtsService', '系统 TTS 降级也失败: $e');
@@ -113,6 +121,20 @@ class TtsService {
       }
     }
     return false;
+  }
+
+  /// 系统 TTS 降级引擎（懒加载复用）。
+  ///
+  /// 之前每次降级都 new 一个 [SystemTtsEngine] 且从不释放：平台 channel
+  /// 会随每次点词泄漏，且新引擎用的是平台默认音量/语速，用户设置失效。
+  Future<TtsEngine> _ensureFallbackEngine() async {
+    var engine = _fallbackEngine;
+    if (engine == null) {
+      engine = SystemTtsEngine();
+      _fallbackEngine = engine;
+      await _applySettingsToEngine(engine);
+    }
+    return engine;
   }
 
   /// 停止朗读
@@ -154,6 +176,9 @@ class TtsService {
   /// 释放资源
   Future<void> dispose() async {
     await _disposeEngine();
+    final fallback = _fallbackEngine;
+    _fallbackEngine = null;
+    if (fallback != null) await fallback.dispose();
     _initialized = false;
   }
 
@@ -196,11 +221,11 @@ class TtsService {
     await _applySettingsToEngine();
   }
 
-  Future<void> _applySettingsToEngine() async {
-    if (_engine == null) return;
+  Future<void> _applySettingsToEngine([TtsEngine? target]) async {
+    final engine = target ?? _engine;
+    if (engine == null) return;
 
     // MiMo 专属配置（Base URL / 模型 / 风格指令 / 音频标签前缀）
-    final engine = _engine;
     if (engine is MimoTtsEngine) {
       engine.updateConfig(
         baseUrl: _settings.mimoBaseUrl,
@@ -210,12 +235,12 @@ class TtsService {
       );
     }
 
-    await _engine!.setVolume(_settings.volume);
-    await _engine!.setRate(_settings.rate);
-    await _engine!.setPitch(_settings.pitch);
+    await engine.setVolume(_settings.volume);
+    await engine.setRate(_settings.rate);
+    await engine.setPitch(_settings.pitch);
     final voice = _settings.effectiveVoiceName;
     if (voice != null && voice.isNotEmpty) {
-      await _engine!.setVoice(voice);
+      await engine.setVoice(voice);
     }
   }
 
