@@ -241,6 +241,12 @@ class DatabaseService {
         await db.execute('PRAGMA foreign_keys = ON');
         // WAL 提升读写并发与写入性能
         await db.rawQuery('PRAGMA journal_mode = WAL');
+        // 同步引擎在事务里批量写 chunk，同时用户可能在学习页写库。
+        // 默认 busy_timeout 为 0，会让并发写直接抛 "database is locked"。
+        await db.rawQuery('PRAGMA busy_timeout = 5000');
+        // WAL + NORMAL 是持久化与性能的标准组合；FULL 会明显拖慢每批
+        // chunk 的落盘。
+        await db.rawQuery('PRAGMA synchronous = NORMAL');
       },
       onCreate: (db, version) async {
         // ── 词库相关 ──

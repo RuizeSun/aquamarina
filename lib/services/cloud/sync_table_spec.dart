@@ -81,8 +81,19 @@ class SyncTableSpec {
   String get oplogDdl =>
       'CREATE TABLE IF NOT EXISTS "$oplogTable" (\n  $_columnsSql\n)';
 
-  String get pendingIndexDdl =>
-      'CREATE INDEX IF NOT EXISTS "$pendingIndex" ON "$oplogTable"("hlc_ms")';
+  /// 待上传 / 待拉取查询的索引。
+  ///
+  /// 捕获服务按 `hlc_ms IS NULL ORDER BY captured_at_ms, seq` 取待上传行，
+  /// 拉取侧按 `hlc_ms IS NOT NULL ORDER BY hlc_ms, hlc_counter, seq` 取已
+  /// 上传行。单列 `hlc_ms` 索引对 `IS NULL` + 另一个排序键完全无效，
+  /// 因此改用两个分区索引（SQLite 支持 partial index）。
+  List<String> get pendingIndexDdls => [
+    'CREATE INDEX IF NOT EXISTS "${pendingIndex}_pending" '
+        'ON "$oplogTable"("captured_at_ms", "seq") WHERE hlc_ms IS NULL',
+    'CREATE INDEX IF NOT EXISTS "${pendingIndex}_uploaded" '
+        'ON "$oplogTable"("hlc_ms", "hlc_counter", "seq") '
+        'WHERE hlc_ms IS NOT NULL',
+  ];
 
   /// 生成 3 个触发器（INSERT / UPDATE / DELETE）。
   List<String> get triggerDdls => [

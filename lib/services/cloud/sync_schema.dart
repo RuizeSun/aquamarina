@@ -187,7 +187,11 @@ class SyncSchema {
 
     for (final spec in SyncSpecs.all) {
       await db.execute(spec.oplogDdl);
-      await db.execute(spec.pendingIndexDdl);
+      // v23：旧的单列 hlc_ms 索引对 IS NULL 查询无效，改用分区索引。
+      await db.execute('DROP INDEX IF EXISTS ${spec.pendingIndex}');
+      for (final ddl in spec.pendingIndexDdls) {
+        await db.execute(ddl);
+      }
       // v16：为已存在的 oplog 表补捕获时间列（CREATE TABLE IF NOT EXISTS 不补列）。
       await _ensureColumn(db, spec.oplogTable, 'captured_at_ms', 'INTEGER');
       for (final trigger in spec.triggerDdls) {
