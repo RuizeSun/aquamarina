@@ -131,15 +131,14 @@ class _LearningPageState extends WordSessionBaseState<LearningPage> {
     animController.forward(from: 0);
     final word = currentWord.trim().toLowerCase();
 
-    String result;
-    if (firstChoice == false) {
-      result = 'forgot';
-    } else if (firstChoice == true && correct == false) {
-      result = 'hard';
-    } else {
-      result = 'easy';
-    }
-    results[word] = result;
+    // 学习页此前完全忽略选择题结果，与复习页判定不一致；这里统一使用
+    // 同一个评分函数，选择题确实参与了本次 stage 计算。
+    final selected = selectedQuizOption;
+    final quizCorrect =
+        selected != null && correctOptionIndex >= 0
+        ? selected == correctOptionIndex
+        : null;
+    results[word] = gradeRecallResult(recalled: correct, quizCorrect: quizCorrect);
 
     await advanceAfterResult();
   }

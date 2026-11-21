@@ -161,6 +161,37 @@ class _VocabTestPageState extends State<VocabTestPage>
       _entryCache.clear();
       _entryCache.addAll(await loadEntries(words: _testWords));
 
+      // 前置剔除没有释义的词：它们无法出选择题，之前被直接记为「正确」，
+      // 会污染正确率与测试历史。现在既不参与出题，也不计入分母。
+      final playableWords = <String>[];
+      final playableEntries = <int, WordEntry?>{};
+      for (var i = 0; i < _testWords.length; i++) {
+        if (extractFirstMeaning(_entryCache[i]?.translation).isNotEmpty) {
+          playableEntries[playableWords.length] = _entryCache[i];
+          playableWords.add(_testWords[i]);
+        }
+      }
+      final skipped = _testWords.length - playableWords.length;
+      _testWords = playableWords;
+      // 重建索引缓存，保证 entryCache[i] 与 _testWords[i] 对齐
+      _entryCache
+        ..clear()
+        ..addAll(playableEntries);
+      if (_testWords.isEmpty) {
+        if (mounted) {
+          setState(() => _isLoadingTest = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('所选单词都缺少释义，无法开始测试')),
+          );
+        }
+        return;
+      }
+      if (skipped > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已跳过 $skipped 个缺少释义的单词')),
+        );
+      }
+
       // 加载干扰项池
       _distractorPool.clear();
       _distractorPool.addAll(

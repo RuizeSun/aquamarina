@@ -170,19 +170,11 @@ class _ReviewPageState extends WordSessionBaseState<ReviewPage> {
     final word = currentWord.trim().toLowerCase();
     final quizCorrect = selectedQuizOption == correctOptionIndex;
 
-    String result;
-    if (firstChoice == false) {
-      // 一开始就没想起来
-      // 选择题选对 → 可能是蒙对的，hard；选错 → 彻底忘记，forgot
-      result = quizCorrect ? 'hard' : 'forgot';
-    } else if (!correct) {
-      // 自以为记得但实际错了 → 掌握不牢
-      result = 'hard';
-    } else {
-      // 确实想对了，再参考选择题确认是否真正掌握
-      result = quizCorrect ? 'easy' : 'hard';
-    }
-    results[word] = result;
+    // 与学习页共用同一套判定，避免两条流程对同一个词给出不同 stage。
+    results[word] = gradeRecallResult(
+      recalled: correct,
+      quizCorrect: quizCorrect,
+    );
 
     await advanceAfterResult();
   }

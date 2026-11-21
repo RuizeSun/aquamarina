@@ -60,4 +60,22 @@ void main() {
       expect(extractFirstMeaning(''), '');
     });
   });
+
+  group('gradeRecallResult', () {
+    test('学习页与复习页共用同一判定', () {
+      // 没想起来 + 选择题错 → forgot
+      expect(gradeRecallResult(recalled: false, quizCorrect: false), 'forgot');
+      // 没想起来 + 选择题对 → hard（可能蒙对）
+      expect(gradeRecallResult(recalled: false, quizCorrect: true), 'hard');
+      // 想起来 + 选择题错 → hard
+      expect(gradeRecallResult(recalled: true, quizCorrect: false), 'hard');
+      // 想起来 + 选择题对 → easy
+      expect(gradeRecallResult(recalled: true, quizCorrect: true), 'easy');
+    });
+
+    test('没有选择题时退化为纯回忆判定', () {
+      expect(gradeRecallResult(recalled: true), 'easy');
+      expect(gradeRecallResult(recalled: false), 'forgot');
+    });
+  });
 }
