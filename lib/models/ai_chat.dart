@@ -106,6 +106,130 @@ class AiToolCall {
   };
 }
 
+/// 一条消息对应的 token 用量与费用快照。
+///
+/// assistant 消息记录的是**该轮请求**的真实用量（来自服务端 `usage`）；
+/// 没有真实用量的消息（用户提问、历史数据）由 UI 退回按字符估算。
+/// 该数据只用于展示与导出，**绝不进入请求体**。
+class AiMessageUsage {
+  final int promptTokens;
+  final int cacheHitTokens;
+  final int cacheMissTokens;
+  final int completionTokens;
+  final int totalTokens;
+
+  /// 该轮请求的费用；配置未启用计费时为 null。
+  final double? cost;
+  final String currencySymbol;
+  final int currencyDecimals;
+  final bool currencyGrouping;
+
+  const AiMessageUsage({
+    required this.promptTokens,
+    this.cacheHitTokens = 0,
+    this.cacheMissTokens = 0,
+    required this.completionTokens,
+    required this.totalTokens,
+    this.cost,
+    this.currencySymbol = '¥',
+    this.currencyDecimals = 2,
+    this.currencyGrouping = true,
+  });
+
+  /// 是否没有任何有效数字（全 0 时不必展示角标）。
+  bool get isEmpty =>
+      promptTokens == 0 && completionTokens == 0 && totalTokens == 0;
+
+  /// 合并多轮请求的用量。
+  ///
+  /// 一次提问可能触发「工具调用 → 继续生成」多轮，界面上仍是一个回答气泡，
+  /// 因此角标按轮次求和；费用只有全部轮次都可计价时才给出总额。
+  static AiMessageUsage combine(Iterable<AiMessageUsage> parts) {
+    var prompt = 0;
+    var hit = 0;
+    var miss = 0;
+    var completion = 0;
+    var total = 0;
+    double? cost;
+    var costKnown = true;
+    var symbol = '¥';
+    var decimals = 2;
+    var grouping = true;
+    for (final part in parts) {
+      prompt += part.promptTokens;
+      hit += part.cacheHitTokens;
+      miss += part.cacheMissTokens;
+      completion += part.completionTokens;
+      total += part.totalTokens;
+      final partCost = part.cost;
+      if (partCost == null) {
+        // 任一轮不可计价就不再给总额，避免把「部分费用」当成完整费用展示。
+        costKnown = false;
+      } else {
+        cost = (cost ?? 0) + partCost;
+      }
+      symbol = part.currencySymbol;
+      decimals = part.currencyDecimals;
+      grouping = part.currencyGrouping;
+    }
+    return AiMessageUsage(
+      promptTokens: prompt,
+      cacheHitTokens: hit,
+      cacheMissTokens: miss,
+      completionTokens: completion,
+      totalTokens: total,
+      cost: costKnown ? cost : null,
+      currencySymbol: symbol,
+      currencyDecimals: decimals,
+      currencyGrouping: grouping,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'prompt_tokens': promptTokens,
+    'cache_hit_tokens': cacheHitTokens,
+    'cache_miss_tokens': cacheMissTokens,
+    'completion_tokens': completionTokens,
+    'total_tokens': totalTokens,
+    'cost': cost,
+    'currency_symbol': currencySymbol,
+    'currency_decimals': currencyDecimals,
+    'currency_grouping': currencyGrouping ? 1 : 0,
+  };
+
+  factory AiMessageUsage.fromJson(Map<String, dynamic> json) {
+    int asInt(Object? value) => (value as num?)?.toInt() ?? 0;
+    return AiMessageUsage(
+      promptTokens: asInt(json['prompt_tokens']),
+      cacheHitTokens: asInt(json['cache_hit_tokens']),
+      cacheMissTokens: asInt(json['cache_miss_tokens']),
+      completionTokens: asInt(json['completion_tokens']),
+      totalTokens: asInt(json['total_tokens']),
+      cost: (json['cost'] as num?)?.toDouble(),
+      currencySymbol: (json['currency_symbol'] as String?) ?? '¥',
+      currencyDecimals: asInt(json['currency_decimals']) == 0
+          ? 2
+          : asInt(json['currency_decimals']),
+      currencyGrouping: asInt(json['currency_grouping']) != 0,
+    );
+  }
+
+  /// 解析落库的 JSON 文本；为 null / 损坏 / 全 0 时返回 null。
+  static AiMessageUsage? tryDecode(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final usage = AiMessageUsage.fromJson(
+        decoded.map((k, v) => MapEntry(k.toString(), v)),
+      );
+      return usage.isEmpty ? null : usage;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 /// 消息中的一张图片附件。
 ///
 /// 原图不入库、不入同步：数据库只保存元数据（尺寸、原始文件名）与
@@ -242,6 +366,11 @@ class AiChatMessage {
   /// 用户随消息发送的图片（仅 user 消息使用）。
   final List<AiChatAttachment> attachments;
 
+  /// 该条 assistant 消息对应请求的用量与费用角标（仅 assistant 消息会有）。
+  ///
+  /// 不参与请求体构造，只用于界面展示与导出。
+  final AiMessageUsage? usage;
+
   const AiChatMessage({
     required this.id,
     required this.sessionId,
@@ -256,6 +385,7 @@ class AiChatMessage {
     required this.createdAt,
     this.sortIndex = 0,
     this.attachments = const [],
+    this.usage,
   });
 
   bool get hasAttachments => attachments.isNotEmpty;
@@ -275,6 +405,7 @@ class AiChatMessage {
     double sortIndex = 0,
     String? id,
     List<AiChatAttachment> attachments = const [],
+    AiMessageUsage? usage,
   }) {
     return AiChatMessage(
       id: id ?? const Uuid().v4(),
@@ -288,6 +419,7 @@ class AiChatMessage {
       status: status,
       errorMessage: errorMessage,
       attachments: attachments,
+      usage: usage,
       createdAt: createdAt ?? DateTime.now(),
       sortIndex: sortIndex,
     );
@@ -310,6 +442,7 @@ class AiChatMessage {
     String? errorMessage,
     double? sortIndex,
     List<AiChatAttachment>? attachments,
+    AiMessageUsage? usage,
     bool clearReasoning = false,
     bool clearErrorMessage = false,
   }) {
@@ -327,6 +460,7 @@ class AiChatMessage {
       createdAt: createdAt,
       sortIndex: sortIndex ?? this.sortIndex,
       attachments: attachments ?? this.attachments,
+      usage: usage ?? this.usage,
     );
   }
 
@@ -354,6 +488,7 @@ class AiChatMessage {
     'attachments': attachments.isEmpty
         ? null
         : jsonEncode(attachments.map((a) => a.toJson()).toList()),
+    'usage': usage == null ? null : jsonEncode(usage!.toJson()),
     'created_at': createdAt.toIso8601String(),
     'sort_index': sortIndex,
   };
@@ -412,6 +547,7 @@ class AiChatMessage {
       status: AiChatMessageStatus.fromName(row['status'] as String?),
       errorMessage: row['error_message'] as String?,
       attachments: attachments,
+      usage: AiMessageUsage.tryDecode(row['usage'] as String?),
       createdAt: createdAtRaw is String
           ? (DateTime.tryParse(createdAtRaw) ?? DateTime.now())
           : DateTime.now(),

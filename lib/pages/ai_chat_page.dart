@@ -3,24 +3,31 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pasteboard/pasteboard.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/ai_chat.dart';
 import '../services/ai/ai_chat_controller.dart';
+import '../services/ai/ai_chat_export.dart';
 import '../services/ai/ai_chat_service.dart';
 import '../services/ai/ai_chat_settings.dart';
 import '../services/ai/ai_image_service.dart';
 import '../services/ai/ai_profile_service.dart';
+import '../services/ai/ai_token_estimator.dart';
 import '../services/ai/tools/ai_tool_registry.dart';
 import '../services/ai/tools/app_tools.dart';
 import '../services/ai/tools/tool_approval.dart';
 import '../widgets/chat/attachment_image.dart';
 import '../widgets/chat/chat_labels.dart';
 import '../widgets/chat/context_note_card.dart';
+import '../widgets/chat/message_usage_badge.dart';
 import '../widgets/chat/thinking_section.dart';
 import '../widgets/chat/tool_approval_sheet.dart';
 import '../widgets/chat/tool_call_card.dart';
@@ -76,6 +83,16 @@ class AiChatPageState extends State<AiChatPage> {
   bool _loadingSessions = true;
   String? _setupHint;
 
+  /// 会话搜索框。
+  final TextEditingController _searchController = TextEditingController();
+  Timer? _searchDebounce;
+  String _searchQuery = '';
+  List<AiChatSearchHit> _searchHits = const [];
+  bool _searching = false;
+
+  /// 是否在消息下方显示 token / 费用角标（设置项，默认开启）。
+  bool _showUsage = true;
+
   @override
   void initState() {
     super.initState();
@@ -87,6 +104,7 @@ class AiChatPageState extends State<AiChatPage> {
         );
     _controller.addListener(_onControllerChanged);
     _load();
+    _loadUsageBadgeSetting();
   }
 
   @override
@@ -95,7 +113,9 @@ class AiChatPageState extends State<AiChatPage> {
     if (widget.controller == null) {
       _controller.dispose();
     }
+    _searchDebounce?.cancel();
     _inputController.dispose();
+    _searchController.dispose();
     _scrollController.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -310,6 +330,183 @@ class AiChatPageState extends State<AiChatPage> {
       ),
     );
     await _checkProfile();
+    await _loadUsageBadgeSetting();
+  }
+
+  /// 读取「显示 token / 费用角标」开关。
+  Future<void> _loadUsageBadgeSetting() async {
+    final enabled = await _settings.getShowUsageBadge();
+    if (!mounted) return;
+    setState(() => _showUsage = enabled);
+  }
+
+  // ── 会话搜索 ──────────────────────────────────────
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    final query = value.trim();
+    setState(() {
+      _searchQuery = query;
+      if (query.isEmpty) {
+        _searchHits = const [];
+        _searching = false;
+      }
+    });
+    if (query.isEmpty) return;
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 250),
+      () => _runSearch(query),
+    );
+  }
+
+  Future<void> _runSearch(String query) async {
+    if (!mounted) return;
+    setState(() => _searching = true);
+    final hits = await _chatService.searchSessions(query);
+    if (!mounted || _searchQuery != query) return;
+    setState(() {
+      _searchHits = hits;
+      _searching = false;
+    });
+  }
+
+  void _clearSearch() {
+    _searchDebounce?.cancel();
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+      _searchHits = const [];
+      _searching = false;
+    });
+  }
+
+  // ── 导出 ──────────────────────────────────────────
+
+  Future<void> _exportCurrentSession() async {
+    final session = _controller.session;
+    final messages = _controller.messages;
+    if (session == null || messages.isEmpty) {
+      _showSnack('当前对话还没有可导出的内容');
+      return;
+    }
+
+    final format = await showDialog<_ChatExportFormat>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('导出对话'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_ChatExportFormat.markdown),
+            child: const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.description_outlined),
+              title: Text('Markdown'),
+              subtitle: Text('便于阅读、粘贴与分享'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(_ChatExportFormat.json),
+            child: const ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.data_object),
+              title: Text('JSON'),
+              subtitle: Text('结构化备份，包含工具调用与用量'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (format == null || !mounted) return;
+
+    final isMarkdown = format == _ChatExportFormat.markdown;
+    final content = isMarkdown
+        ? AiChatExport.toMarkdown(
+            session: session,
+            messages: messages,
+            includeUsage: _showUsage,
+          )
+        : AiChatExport.toJson(session: session, messages: messages);
+    final fileName = AiChatExport.fileNameFor(
+      session,
+      extension: isMarkdown
+          ? AiChatExport.markdownExtension
+          : AiChatExport.jsonExtension,
+    );
+    await _saveTextFile(
+      content: content,
+      fileName: fileName,
+      typeGroup: isMarkdown ? _markdownTypeGroup : _jsonTypeGroup,
+    );
+  }
+
+  /// 保存/分享文本：手机走系统分享，桌面走保存对话框（与日志、句式集导出一致）。
+  Future<void> _saveTextFile({
+    required String content,
+    required String fileName,
+    required XTypeGroup typeGroup,
+  }) async {
+    final mobile =
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS;
+    if (mobile) {
+      try {
+        final dir = await getTemporaryDirectory();
+        final path = p.join(dir.path, fileName);
+        final file = File(path);
+        await file.writeAsString(content, flush: true);
+        if (!mounted) return;
+        final result = await SharePlus.instance.share(
+          ShareParams(
+            files: [XFile(path, mimeType: typeGroup.mimeTypes?.first)],
+            subject: fileName,
+          ),
+        );
+        if (await file.exists()) await file.delete();
+        if (!mounted) return;
+        if (result.status != ShareResultStatus.unavailable) {
+          _showSnack('已导出 $fileName');
+        }
+      } catch (e) {
+        if (mounted) _showSnack('导出失败：$e');
+      }
+      return;
+    }
+
+    FileSaveLocation? location;
+    try {
+      location = await getSaveLocation(
+        suggestedName: fileName,
+        acceptedTypeGroups: [typeGroup],
+      );
+    } catch (_) {
+      if (mounted) _showSnack('无法打开文件保存对话框');
+      return;
+    }
+    if (location == null) return; // 用户取消
+    try {
+      await File(location.path).writeAsString(content, flush: true);
+      if (mounted) _showSnack('已导出到：\n${location.path}');
+    } catch (e) {
+      if (mounted) _showSnack('保存失败：$e');
+    }
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  /// 汇总一轮问答里所有模型轮次的用量（工具调用会产生多轮）。
+  AiMessageUsage? _aggregateUsage(_ChatTurn turn) {
+    final usages = <AiMessageUsage>[
+      for (final round in turn.rounds)
+        if (round.usage != null) round.usage!,
+    ];
+    return usages.isEmpty ? null : AiMessageUsage.combine(usages);
   }
 
   /// 从文件选择器添加图片。
@@ -485,6 +682,11 @@ class AiChatPageState extends State<AiChatPage> {
             ),
           ),
         IconButton(
+          tooltip: '导出当前对话',
+          onPressed: _exportCurrentSession,
+          icon: const Icon(Icons.ios_share),
+        ),
+        IconButton(
           tooltip: 'AI 对话设置',
           onPressed: _openSettings,
           icon: const Icon(Icons.tune),
@@ -519,8 +721,37 @@ class AiChatPageState extends State<AiChatPage> {
             ],
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+          child: TextField(
+            controller: _searchController,
+            onChanged: _onSearchChanged,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: '搜索会话或内容',
+              prefixIcon: const Icon(Icons.search, size: 18),
+              suffixIcon: _searchQuery.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: '清除搜索',
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: _clearSearch,
+                    ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 8,
+                vertical: 8,
+              ),
+            ),
+          ),
+        ),
         Expanded(
-          child: _sessions.isEmpty
+          child: _searchQuery.isNotEmpty
+              ? _buildSearchResults(theme)
+              : _sessions.isEmpty
               ? Center(
                   child: Text(
                     '还没有对话',
@@ -558,6 +789,67 @@ class AiChatPageState extends State<AiChatPage> {
                 ),
         ),
       ],
+    );
+  }
+
+  /// 会话搜索结果列表。
+  Widget _buildSearchResults(ThemeData theme) {
+    if (_searching) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+    if (_searchHits.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(
+            '没有找到匹配「$_searchQuery」的内容',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      itemCount: _searchHits.length,
+      itemBuilder: (context, index) {
+        final hit = _searchHits[index];
+        final snippet = hit.snippet;
+        return ListTile(
+          dense: true,
+          selected: hit.session.id == _controller.session?.id,
+          leading: Icon(
+            hit.matchedTitle ? Icons.title : Icons.subject,
+            size: 18,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          title: Text(
+            hit.session.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            snippet == null || snippet.isEmpty ? '标题匹配' : snippet,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.labelSmall,
+          ),
+          onTap: () async {
+            _clearSearch();
+            await _selectSession(hit.session);
+          },
+        );
+      },
     );
   }
 
@@ -759,6 +1051,13 @@ class AiChatPageState extends State<AiChatPage> {
                 ),
               ),
             if (message.content.isNotEmpty) SelectableText(message.content),
+            if (_showUsage && message.content.isNotEmpty)
+              Align(
+                alignment: Alignment.centerRight,
+                child: MessageUsageBadge(
+                  estimateTokens: AiTokenEstimator.estimate(message.content),
+                ),
+              ),
           ],
         ),
       ),
@@ -773,6 +1072,7 @@ class AiChatPageState extends State<AiChatPage> {
     final reasoning = turn.reasoning;
     final note = turn.contextNote;
     final status = turn.status;
+    final usage = _showUsage ? _aggregateUsage(turn) : null;
 
     return Align(
       alignment: Alignment.centerLeft,
@@ -848,6 +1148,11 @@ class AiChatPageState extends State<AiChatPage> {
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
+              ),
+            if (usage != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: MessageUsageBadge(usage: usage),
               ),
           ],
         ),
@@ -1011,6 +1316,13 @@ class AiChatPageState extends State<AiChatPage> {
                   text,
                   style: theme.textTheme.bodyMedium,
                   onLinkTap: (url, _) => _openLink(url),
+                ),
+              ),
+            if (_showUsage && text.isNotEmpty)
+              Align(
+                alignment: Alignment.centerRight,
+                child: MessageUsageBadge(
+                  estimateTokens: AiTokenEstimator.estimate(text),
                 ),
               ),
           ],
@@ -1209,6 +1521,23 @@ class AiChatPageState extends State<AiChatPage> {
   }
 }
 
+/// 导出格式。
+enum _ChatExportFormat { markdown, json }
+
+const XTypeGroup _markdownTypeGroup = XTypeGroup(
+  label: 'Markdown',
+  extensions: ['md'],
+  mimeTypes: ['text/markdown'],
+  uniformTypeIdentifiers: ['net.daringfireball.markdown'],
+);
+
+const XTypeGroup _jsonTypeGroup = XTypeGroup(
+  label: 'JSON',
+  extensions: ['json'],
+  mimeTypes: ['application/json'],
+  uniformTypeIdentifiers: ['public.json'],
+);
+
 /// UI 层的一轮问答：一次提问 + 它触发的全部模型轮次与工具调用。
 ///
 /// 控制器仍然逐条落库（assistant / tool 分成多条消息，回灌协议需要），
@@ -1227,7 +1556,6 @@ class _ChatTurn {
 
   /// 该轮里模型产出的所有 assistant 消息，按发生顺序。
   final List<AiChatMessage> rounds = [];
-
   /// 该轮发起的工具调用记录，与 [rounds] 里的 tool_calls 一一对应。
   final List<AiToolCallRecord> tools = [];
 

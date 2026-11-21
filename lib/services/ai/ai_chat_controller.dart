@@ -12,6 +12,7 @@ import 'ai_context_builder.dart';
 import 'ai_image_service.dart';
 import 'ai_profile_service.dart';
 import 'ai_service.dart';
+import 'ai_usage_service.dart';
 import 'tools/ai_tool.dart';
 import 'tools/app_tools.dart';
 import 'tools/ai_tool_registry.dart';
@@ -322,6 +323,7 @@ class AiChatController extends ChangeNotifier {
           sessionId: session.id,
           content: result.text,
           reasoning: result.reasoning,
+          usage: result.usage,
         );
         return;
       }
@@ -334,6 +336,7 @@ class AiChatController extends ChangeNotifier {
           content: result.text,
           reasoning: result.reasoning.isEmpty ? null : result.reasoning,
           toolCalls: calls,
+          usage: result.usage,
         ),
       );
       _messages.add(assistant);
@@ -697,6 +700,7 @@ class AiChatController extends ChangeNotifier {
     final text = StringBuffer();
     final reasoning = StringBuffer();
     var toolCalls = const <AiToolCall>[];
+    AiUsageSnapshot? usageSnapshot;
     String? failure;
 
     try {
@@ -707,6 +711,8 @@ class AiChatController extends ChangeNotifier {
         temperatureOverride: temperatureOverride,
         maxTokensOverride: maxTokensOverride,
         cancelToken: token,
+        // 服务端 usage 只在本轮流结束时交付一次，这里立刻转成可落库的角标数据。
+        onUsage: (snapshot) => usageSnapshot = snapshot,
       );
       await for (final event in stream) {
         switch (event) {
@@ -734,6 +740,8 @@ class AiChatController extends ChangeNotifier {
       if (identical(_cancelToken, token)) _cancelToken = null;
     }
 
+    final usage = _messageUsage(profile, usageSnapshot);
+
     if (failure != null) {
       _state = AiChatStreamState.idle;
       final cancelled = token.isCancelled;
@@ -747,6 +755,7 @@ class AiChatController extends ChangeNotifier {
               role: AiChatRole.assistant,
               content: text.toString(),
               reasoning: reasoning.isEmpty ? null : reasoning.toString(),
+              usage: usage,
               status: AiChatMessageStatus.cancelled,
             ),
           );
@@ -762,6 +771,7 @@ class AiChatController extends ChangeNotifier {
           role: AiChatRole.assistant,
           content: text.toString(),
           reasoning: reasoning.isEmpty ? null : reasoning.toString(),
+          usage: usage,
           status: AiChatMessageStatus.error,
           errorMessage: failure,
         ),
@@ -777,6 +787,34 @@ class AiChatController extends ChangeNotifier {
       text: text.toString(),
       reasoning: reasoning.toString(),
       toolCalls: toolCalls,
+      usage: usage,
+    );
+  }
+
+  /// 把服务端 usage 快照转成可落库的消息角标（含按当前配置价格计算的费用）。
+  ///
+  /// 价格在请求发生时快照进数据，之后改配置不会改动历史金额。
+  AiMessageUsage? _messageUsage(AiProfile profile, AiUsageSnapshot? snapshot) {
+    if (snapshot == null || snapshot.totalTokens <= 0) return null;
+    final pricing = profile.pricing;
+    final cost = pricing == null
+        ? null
+        : AiUsageService.computeCost(
+            pricing,
+            cacheHitTokens: snapshot.cacheHitTokens,
+            cacheMissTokens: snapshot.cacheMissTokens,
+            completionTokens: snapshot.completionTokens,
+          );
+    return AiMessageUsage(
+      promptTokens: snapshot.promptTokens,
+      cacheHitTokens: snapshot.cacheHitTokens,
+      cacheMissTokens: snapshot.cacheMissTokens,
+      completionTokens: snapshot.completionTokens,
+      totalTokens: snapshot.totalTokens,
+      cost: cost,
+      currencySymbol: pricing?.currencySymbol ?? '¥',
+      currencyDecimals: pricing?.currencyDecimals ?? 2,
+      currencyGrouping: pricing?.currencyGrouping ?? true,
     );
   }
 
@@ -799,6 +837,7 @@ class AiChatController extends ChangeNotifier {
     required String sessionId,
     required String content,
     required String reasoning,
+    AiMessageUsage? usage,
   }) async {
     if (content.isEmpty && reasoning.isEmpty) {
       _resetStreamBuffers();
@@ -812,6 +851,7 @@ class AiChatController extends ChangeNotifier {
         role: AiChatRole.assistant,
         content: content,
         reasoning: reasoning.isEmpty ? null : reasoning,
+        usage: usage,
       ),
     );
     _messages.add(saved);
@@ -1004,9 +1044,13 @@ class _RoundResult {
   final String reasoning;
   final List<AiToolCall> toolCalls;
 
+  /// 本轮请求的真实用量（服务端未返回 usage 时为 null）。
+  final AiMessageUsage? usage;
+
   const _RoundResult({
     required this.text,
     required this.reasoning,
     required this.toolCalls,
+    this.usage,
   });
 }

@@ -348,6 +348,7 @@ class SyncSpecs {
         'status': 'TEXT',
         'error_message': 'TEXT',
         'attachments': 'TEXT',
+        'usage': 'TEXT',
         'created_at': 'TEXT',
         'sort_index': 'REAL',
       },

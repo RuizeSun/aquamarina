@@ -78,6 +78,29 @@ class _CapturingAiService extends AiService {
   }
 }
 
+/// 会回调 usage 的假服务，用于验证消息级 token / 费用角标。
+class _UsageAiService extends AiService {
+  _UsageAiService(this.snapshot);
+
+  final AiUsageSnapshot snapshot;
+
+  @override
+  Stream<AiChatEvent> chatStreamEvents({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    List<Map<String, dynamic>>? tools,
+    String? toolChoice,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+    void Function(AiUsageSnapshot usage)? onUsage,
+  }) async* {
+    onUsage?.call(snapshot);
+    yield const ChatTextDelta('好的');
+    yield const ChatDone('stop');
+  }
+}
+
 /// 只实现非流式接口的假服务，用于验证「关闭流式」分支。
 class _NonStreamFakeAiService extends AiService {
   _NonStreamFakeAiService(this.reply);
@@ -184,14 +207,15 @@ void main() {
   });
 
   AiChatController build(
-    _FakeAiService ai,
+    AiService ai,
     AiToolRegistry registry, {
     AiToolApprovalHandler? handler,
+    AiProfile? profile,
   }) {
     return AiChatController(
       chatService: chatService,
       aiService: ai,
-      profileService: _FakeProfileService(_profile()),
+      profileService: _FakeProfileService(profile ?? _profile()),
       settings: AiChatSettings(),
       toolRegistry: registry,
       approvalHandler: handler,
@@ -254,6 +278,77 @@ void main() {
         msg(AiChatRole.user, 'u'),
       ], 10, system: '   ');
       expect(trimmed, hasLength(1));
+    });
+  });
+
+  group('用量角标', () {
+    test('回答记录本轮真实用量与费用，并随消息落库', () async {
+      const pricing = AiUsagePricing(
+        unit: AiPriceUnit.perMillion,
+        cacheHitPrice: 1,
+        cacheMissPrice: 5,
+        outputPrice: 10,
+      );
+      final ai = _UsageAiService(
+        const AiUsageSnapshot(
+          promptTokens: 1000,
+          cacheHitTokens: 400,
+          cacheMissTokens: 600,
+          completionTokens: 200,
+          totalTokens: 1200,
+        ),
+      );
+      final controller = build(
+        ai,
+        AiToolRegistry([]),
+        profile: _profile().copyWith(pricing: pricing),
+      );
+      await controller.createSession();
+      await controller.send('你好');
+
+      final assistant = controller.messages.last;
+      expect(assistant.role, AiChatRole.assistant);
+      final usage = assistant.usage;
+      expect(usage, isNotNull);
+      expect(usage!.promptTokens, 1000);
+      expect(usage.completionTokens, 200);
+      expect(usage.totalTokens, 1200);
+      // 400/1M*1 + 600/1M*5 + 200/1M*10 = 0.0054
+      expect(usage.cost, closeTo(0.0054, 1e-9));
+
+      // 落库后 JSON 往返仍然完整
+      final reloaded = await chatService.loadMessages(controller.session!.id);
+      expect(reloaded.last.usage, isNotNull);
+      expect(reloaded.last.usage!.totalTokens, 1200);
+      expect(reloaded.last.usage!.cost, closeTo(0.0054, 1e-9));
+    });
+
+    test('没有 usage 时不写角标', () async {
+      final ai = _FakeAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ]);
+      final controller = build(ai, AiToolRegistry([]));
+      await controller.createSession();
+      await controller.send('你好');
+      expect(controller.messages.last.usage, isNull);
+    });
+
+    test('配置未启用计费时只有 token 没有费用', () async {
+      final ai = _UsageAiService(
+        const AiUsageSnapshot(
+          promptTokens: 100,
+          cacheHitTokens: 0,
+          cacheMissTokens: 100,
+          completionTokens: 20,
+          totalTokens: 120,
+        ),
+      );
+      final controller = build(ai, AiToolRegistry([]));
+      await controller.createSession();
+      await controller.send('你好');
+      final usage = controller.messages.last.usage;
+      expect(usage, isNotNull);
+      expect(usage!.cost, isNull);
     });
   });
 

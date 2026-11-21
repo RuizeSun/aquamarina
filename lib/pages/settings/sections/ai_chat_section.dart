@@ -45,6 +45,7 @@ class _AiChatSectionState extends State<AiChatSection> {
   Set<String> _disabledTools = {};
   bool _injectRuntime = true;
   bool _injectTime = true;
+  bool _showUsageBadge = true;
   AiImageSendMode _imageSendMode = AiImageSendMode.compressed;
   int _imageThumbnailSize = AiChatAttachment.thumbSizeLarge;
   int _sessionCount = 0;
@@ -86,6 +87,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _settings.getImageThumbnailSize(),
       _settings.getInjectRuntimeContext(),
       _settings.getInjectTimeContext(),
+      _settings.getShowUsageBadge(),
     ]);
     if (!mounted) return;
     setState(() {
@@ -105,6 +107,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _imageThumbnailSize = results[13] as int;
       _injectRuntime = results[14] as bool;
       _injectTime = results[15] as bool;
+      _showUsageBadge = results[16] as bool;
       _loading = false;
     });
   }
@@ -270,6 +273,21 @@ class _AiChatSectionState extends State<AiChatSection> {
           onChanged: (v) async {
             await _settings.setInjectTimeContext(v);
             setState(() => _injectTime = v);
+          },
+        ),
+
+        const Divider(),
+
+        // ── 消息显示 ──
+        const SettingsSectionHeader(title: '消息显示'),
+        SwitchListTile(
+          secondary: Icon(Icons.token_outlined, color: colorScheme.primary),
+          title: const Text('显示 token / 费用角标'),
+          subtitle: const Text('回答下方显示该轮的真实用量与费用；提问按字符估算，仅供参考'),
+          value: _showUsageBadge,
+          onChanged: (value) async {
+            await _settings.setShowUsageBadge(value);
+            setState(() => _showUsageBadge = value);
           },
         ),
 

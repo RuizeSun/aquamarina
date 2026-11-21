@@ -11,7 +11,7 @@ import '../cloud/sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 21;
+  static const int schemaVersion = 22;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -82,6 +82,7 @@ class DatabaseService {
             status TEXT NOT NULL DEFAULT 'complete',
             error_message TEXT,
             attachments TEXT,
+            usage TEXT,
             created_at TEXT NOT NULL,
             sort_index REAL NOT NULL DEFAULT 0,
             FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
@@ -103,6 +104,8 @@ class DatabaseService {
     await db.execute(aiChatMessagesIndexSql);
     // 多模态附件列：CREATE TABLE IF NOT EXISTS 不会给已有表补列，这里显式补齐。
     await _ensureChatColumn(db, 'ai_chat_messages', 'attachments', 'TEXT');
+    // v22：每条 assistant 消息的 token / 费用角标快照（JSON 文本）。
+    await _ensureChatColumn(db, 'ai_chat_messages', 'usage', 'TEXT');
   }
 
   /// 幂等补列（[DatabaseExecutor] 版本，供建表阶段复用）。
@@ -637,6 +640,10 @@ class DatabaseService {
         if (oldVersion < 21) {
           await migrateToV21(db);
         }
+        // 21 → 22：AI 对话消息的用量角标列（含 oplog 与触发器重建）
+        if (oldVersion < 22) {
+          await migrateToV22(db);
+        }
       },
     );
   }
@@ -651,6 +658,19 @@ class DatabaseService {
     await _ensureColumn(db, 'ai_chat_messages', 'attachments', 'TEXT');
     await SyncSchema.ensure(db);
     logInfo('DatabaseService', 'v21 AI 对话 schema 迁移完成');
+  }
+
+  /// v21 → v22：AI 对话消息增加 `usage` 列（token / 费用角标）。
+  ///
+  /// 同步要求「业务表列」与「oplog 列」同时存在：oplog 由触发器按
+  /// [SyncSpecs] 里的 dataColumns 生成，因此补列之后必须重建触发器，
+  /// 否则新数据写入时触发器会引用不存在的列而报错。
+  static Future<void> migrateToV22(Database db) async {
+    await ensureChatTables(db);
+    await _ensureColumn(db, 'ai_chat_messages', 'usage', 'TEXT');
+    await _ensureColumn(db, 'oplog_ai_chat_messages', 'usage', 'TEXT');
+    await SyncSchema.reinstallTriggers(db);
+    logInfo('DatabaseService', 'v22 AI 对话用量角标 schema 迁移完成');
   }
 
   /// v9 → v10 迁移：错题本支持「同一句子只保留一条记录」。
@@ -1050,6 +1070,7 @@ class DatabaseService {
           if (oldVersion < 19) await migrateToV19(db);
           if (oldVersion < 20) await migrateToV20(db);
           if (oldVersion < 21) await migrateToV21(db);
+          if (oldVersion < 22) await migrateToV22(db);
         },
       ),
     );

@@ -27,6 +27,7 @@ class AiChatSettings {
   static const String imageThumbnailSizeKey = 'ai_chat_image_thumbnail_size';
   static const String injectRuntimeContextKey = 'ai_chat_inject_runtime_context';
   static const String injectTimeContextKey = 'ai_chat_inject_time_context';
+  static const String showUsageBadgeKey = 'ai_chat_show_usage_badge';
 
   // ── 取值范围 ──────────────────────────────────────
   static const int minContextMessages = 2;
@@ -171,6 +172,19 @@ class AiChatSettings {
       contextMessagesKey,
       value.clamp(minContextMessages, maxContextMessages),
     );
+  }
+
+  // ── 消息角标 ──────────────────────────────────────
+
+  /// 是否在每条消息下方显示 token / 费用角标（默认开启）。
+  Future<bool> getShowUsageBadge() async {
+    final prefs = await _prefs;
+    return prefs.getBool(showUsageBadgeKey) ?? true;
+  }
+
+  Future<void> setShowUsageBadge(bool value) async {
+    final prefs = await _prefs;
+    await prefs.setBool(showUsageBadgeKey, value);
   }
 
   // ── 工具调用 ──────────────────────────────────────

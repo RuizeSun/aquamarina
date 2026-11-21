@@ -5,6 +5,22 @@ import '../../models/ai_chat.dart';
 import '../data/database_service.dart';
 import '../system/log_service.dart';
 
+/// 一条会话搜索结果。
+///
+/// [matchedTitle] 表示标题命中；[snippet] 是正文命中时关键词附近的片段，
+/// 标题命中但正文没命中时为 null。
+class AiChatSearchHit {
+  final AiChatSession session;
+  final bool matchedTitle;
+  final String? snippet;
+
+  const AiChatSearchHit({
+    required this.session,
+    this.matchedTitle = false,
+    this.snippet,
+  });
+}
+
 /// AI 对话的会话与消息持久化服务。
 ///
 /// 读写失败只记录日志、不抛出到 UI：对话本身仍然可用，只是本次内容未能保存。
@@ -236,6 +252,112 @@ class AiChatService {
     } catch (e, stackTrace) {
       logError('AiChatService', '删除消息失败: $e', stackTrace);
     }
+  }
+
+  // ── 搜索 ──────────────────────────────────────────
+
+  /// 在会话标题与消息正文里搜索关键词。
+  ///
+  /// 用 `instr(lower(...), lower(?))` 而不是 LIKE：关键词里的 % 和 _
+  /// 会被 LIKE 当成通配符，用户搜「100%」时反而匹配不到东西。
+  /// 结果按会话最近更新时间倒序，最多返回 [limit] 条。
+  Future<List<AiChatSearchHit>> searchSessions(
+    String query, {
+    int limit = 50,
+  }) async {
+    final keyword = query.trim();
+    if (keyword.isEmpty || limit <= 0) return const [];
+    try {
+      final db = await _openDatabase();
+      final sessions = <String, AiChatSession>{};
+      final titleMatched = <String>{};
+      final snippets = <String, String>{};
+
+      // 1. 标题命中
+      final titleRows = await db.rawQuery(
+        'SELECT * FROM $sessionsTable '
+        'WHERE instr(lower(title), lower(?)) > 0 '
+        'ORDER BY updated_at DESC LIMIT ?',
+        [keyword, limit],
+      );
+      for (final row in titleRows) {
+        final session = AiChatSession.fromRow(row);
+        sessions[session.id] = session;
+        titleMatched.add(session.id);
+      }
+
+      // 2. 正文命中（同一会话只保留最近一条命中片段）
+      final messageRows = await db.rawQuery(
+        'SELECT session_id, content FROM $messagesTable '
+        'WHERE instr(lower(content), lower(?)) > 0 '
+        'ORDER BY created_at DESC LIMIT ?',
+        [keyword, limit * 8],
+      );
+      for (final row in messageRows) {
+        final sessionId = (row['session_id'] ?? '').toString();
+        if (sessionId.isEmpty || snippets.containsKey(sessionId)) continue;
+        snippets[sessionId] = buildSearchSnippet(
+          (row['content'] ?? '').toString(),
+          keyword,
+        );
+      }
+
+      // 3. 正文命中的会话需要补查标题等信息
+      final missingIds = snippets.keys
+          .where((id) => !sessions.containsKey(id))
+          .toList(growable: false);
+      if (missingIds.isNotEmpty) {
+        final placeholders = List.filled(missingIds.length, '?').join(',');
+        final rows = await db.query(
+          sessionsTable,
+          where: 'id IN ($placeholders)',
+          whereArgs: missingIds,
+        );
+        for (final row in rows) {
+          final session = AiChatSession.fromRow(row);
+          sessions[session.id] = session;
+        }
+      }
+
+      final hitIds = <String>{...titleMatched, ...snippets.keys};
+      final hits = <AiChatSearchHit>[
+        for (final id in hitIds)
+          if (sessions[id] != null)
+            AiChatSearchHit(
+              session: sessions[id]!,
+              matchedTitle: titleMatched.contains(id),
+              snippet: snippets[id],
+            ),
+      ]..sort((a, b) => b.session.updatedAt.compareTo(a.session.updatedAt));
+      return hits.take(limit).toList(growable: false);
+    } catch (e, stackTrace) {
+      logError('AiChatService', '搜索会话失败: $e', stackTrace);
+      return const [];
+    }
+  }
+
+  /// 截取关键词附近的片段，供搜索结果展示。
+  @visibleForTesting
+  static String buildSearchSnippet(
+    String content,
+    String keyword, {
+    int before = 24,
+    int after = 48,
+  }) {
+    final text = content.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (text.isEmpty || keyword.isEmpty) return '';
+    final index = text.toLowerCase().indexOf(keyword.toLowerCase());
+    if (index < 0) {
+      return text.length <= before + after
+          ? text
+          : '${text.substring(0, before + after)}…';
+    }
+    final start = index - before < 0 ? 0 : index - before;
+    final end = index + keyword.length + after;
+    final clipped = end >= text.length
+        ? text.substring(start)
+        : '${text.substring(start, end)}…';
+    return start > 0 ? '…$clipped' : clipped;
   }
 
   // ── 统计与清空 ────────────────────────────────────
