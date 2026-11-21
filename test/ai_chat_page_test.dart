@@ -102,6 +102,15 @@ void main() {
     expect(find.text('会话'), findsOneWidget);
     expect(find.text('开始一段新对话'), findsOneWidget);
     expect(find.byIcon(Icons.list_alt), findsNothing);
+
+    // 空态随机展示 3 条预设提问，并提供「换一批」。
+    expect(find.byType(OutlinedButton), findsNWidgets(3));
+    expect(find.text('换一批'), findsOneWidget);
+
+    await tester.tap(find.text('换一批'));
+    await tester.pump();
+    expect(find.byType(OutlinedButton), findsNWidgets(3));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('已有消息时渲染两侧气泡', (tester) async {

@@ -17,6 +17,7 @@ import '../models/ai_chat.dart';
 import '../models/ai_context.dart';
 import '../services/ai/ai_chat_controller.dart';
 import '../services/ai/ai_chat_export.dart';
+import '../services/ai/ai_chat_prompt_suggestions.dart';
 import '../services/ai/ai_chat_service.dart';
 import '../services/ai/ai_chat_settings.dart';
 import '../services/ai/ai_image_service.dart';
@@ -93,6 +94,9 @@ class AiChatPageState extends State<AiChatPage> {
 
   /// 是否在消息下方显示 token / 费用角标（设置项，默认开启）。
   bool _showUsage = true;
+
+  /// 空态展示的预设提问，进入页面时抽一批，「换一批」时重抽。
+  List<String> _suggestions = AiChatPromptSuggestions.pick();
 
   @override
   void initState() {
@@ -1007,11 +1011,6 @@ class AiChatPageState extends State<AiChatPage> {
 
   Widget _buildEmptyState() {
     final theme = Theme.of(context);
-    final prompts = [
-      '帮我查一下 "ephemeral" 这个词的用法',
-      '我今天的学习进度怎么样？',
-      '总结一下我待复习的单词，并给出记忆建议',
-    ];
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
@@ -1034,7 +1033,7 @@ class AiChatPageState extends State<AiChatPage> {
               ),
             ),
             const SizedBox(height: 16),
-            for (final prompt in prompts)
+            for (final prompt in _suggestions)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: OutlinedButton(
@@ -1045,6 +1044,16 @@ class AiChatPageState extends State<AiChatPage> {
                   child: Text(prompt, textAlign: TextAlign.center),
                 ),
               ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () {
+                setState(() {
+                  _suggestions = AiChatPromptSuggestions.pick();
+                });
+              },
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('换一批'),
+            ),
           ],
         ),
       ),
