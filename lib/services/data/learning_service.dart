@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -1125,29 +1126,74 @@ class LearningService {
     CloudSyncActivitySyncService.notifyLearningCompleted();
   }
 
-  /// 将单词加入今日错词队列（已存在则把计划日期更新为今天）。
+  /// 同一天内一个错词最多重排几次；超过后顺延到明天，避免队列无法收敛。
+  static const int maxWrongWordRetriesPerDay = 3;
+
+  /// 计算错词下次排期。纯函数，便于测试。
   ///
-  /// 与 `wrong_sentences`（句型错题）区分：本表只服务单词复习流程，
-  /// `getDailyStats` / `getTodayWrongWords` / `getDueReviews` 都依赖它。
+  /// 返回 (scheduled_date, retry_count)：
+  /// - 首次答错（无现有计划，或计划不是今天）→ (today, 0)；
+  /// - 当天再次答错 → (today, retry + 1)；
+  /// - 当天重试达到上限 → (tomorrow, 0)。
+  @visibleForTesting
+  static ({String scheduledDate, int retryCount}) nextWrongWordSchedule({
+    String? currentScheduledDate,
+    int currentRetryCount = 0,
+    required String today,
+    required String tomorrow,
+    int maxRetries = maxWrongWordRetriesPerDay,
+  }) {
+    final sameDay = currentScheduledDate == today;
+    final nextRetry = sameDay ? currentRetryCount + 1 : 0;
+    if (nextRetry >= maxRetries) {
+      return (scheduledDate: tomorrow, retryCount: 0);
+    }
+    return (scheduledDate: today, retryCount: nextRetry);
+  }
+
+  /// 将单词加入今日错词队列。
+  ///
+  /// 语义由 [nextWrongWordSchedule] 决定：同一天重试达到上限后顺延到
+  /// 明天并清零，否则「今日待复习」永远非空，用户再也无法学新词、
+  /// 也无法完成打卡。
   static Future<void> _upsertWrongWord(
     DatabaseExecutor txn,
     String word,
     String today,
     String now,
   ) async {
-    final updated = await txn.update(
+    final existing = await txn.query(
       'wrong_words',
-      {'scheduled_date': today},
+      columns: ['scheduled_date', 'retry_count'],
       where: 'word = ?',
       whereArgs: [word],
     );
-    if (updated == 0) {
+
+    if (existing.isEmpty) {
       await txn.insert('wrong_words', {
         'word': word,
         'scheduled_date': today,
+        'retry_count': 0,
         'created_at': now,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      return;
     }
+
+    final schedule = nextWrongWordSchedule(
+      currentScheduledDate: existing.first['scheduled_date'] as String?,
+      currentRetryCount: (existing.first['retry_count'] as int?) ?? 0,
+      today: today,
+      tomorrow: _dateStr(DateTime.now().add(const Duration(days: 1))),
+    );
+    await txn.update(
+      'wrong_words',
+      {
+        'scheduled_date': schedule.scheduledDate,
+        'retry_count': schedule.retryCount,
+      },
+      where: 'word = ?',
+      whereArgs: [word],
+    );
   }
 
   static Future<UserWordRecord?> getRecord(String word) async {

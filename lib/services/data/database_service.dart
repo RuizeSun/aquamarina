@@ -11,7 +11,7 @@ import '../cloud/sync_table_spec.dart';
 
 class DatabaseService {
   /// 业务数据库当前 Schema 版本（备份导入预检也使用这个值）
-  static const int schemaVersion = 22;
+  static const int schemaVersion = 23;
 
   /// 句式集元数据表（v14 从 SharedPreferences 迁入，便于事务与增量同步）。
   static const String sentenceSetsTableSql = '''
@@ -289,6 +289,7 @@ class DatabaseService {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             word TEXT NOT NULL UNIQUE COLLATE NOCASE,
             scheduled_date TEXT NOT NULL,
+            retry_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT
           )
         ''');
@@ -464,6 +465,8 @@ class DatabaseService {
         await migrateToV19(db);
         // ── v20：去重键加入 HLC，并重放快照后的远端增量 ──
         await migrateToV20(db);
+        // ── v23：错词重试计数 ──
+        await migrateToV23(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         // 老库升级同样要先建表：随后的 migrateToV13 会安装同步触发器。
@@ -644,8 +647,34 @@ class DatabaseService {
         if (oldVersion < 22) {
           await migrateToV22(db);
         }
+        // 22 → 23：错词重试计数，避免 hard 词永久阻塞今日复习队列
+        if (oldVersion < 23) {
+          await migrateToV23(db);
+        }
       },
     );
+  }
+
+  /// v22 → v23：错词增加 `retry_count`，用于「同一天重试上限」。
+  ///
+  /// 之前 `hard`/`forgot` 会把 `scheduled_date` 写成今天且永不清零，
+  /// 导致今日待复习永远非空、无法学新词。现在同一天重试达到上限后
+  /// 自动顺延到明天，队列可以收敛。
+  static Future<void> migrateToV23(Database db) async {
+    await _ensureColumn(
+      db,
+      'wrong_words',
+      'retry_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _ensureColumn(
+      db,
+      'oplog_wrong_words',
+      'retry_count',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
+    await SyncSchema.reinstallTriggers(db);
+    logInfo('DatabaseService', 'v23 错词重试计数 schema 迁移完成');
   }
 
   /// v20 → v21：AI 对话（会话 / 消息）业务表与同步触发器。

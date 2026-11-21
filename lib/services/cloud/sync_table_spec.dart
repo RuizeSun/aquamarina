@@ -174,7 +174,11 @@ class SyncSpecs {
       entity: 'wrong_words',
       table: 'wrong_words',
       keyColumns: {'word': 'TEXT'},
-      dataColumns: {'scheduled_date': 'TEXT', 'created_at': 'TEXT'},
+      dataColumns: {
+        'scheduled_date': 'TEXT',
+        'retry_count': 'INTEGER',
+        'created_at': 'TEXT',
+      },
     ),
     SyncTableSpec(
       entity: 'word_notes',
