@@ -143,10 +143,20 @@ class AiChatController extends ChangeNotifier {
 
   CancelToken? _cancelToken;
 
+  /// 生成代次。取消或切换会话都会递增，正在运行的工具循环在下一个
+  /// 检查点发现代次不匹配就立即退出，避免「点了停止还在发下一轮请求」，
+  /// 也避免旧会话的流式内容被写进新会话。
+  int _generation = 0;
+
+  bool _isStale(int generation) => _disposed || generation != _generation;
+
   // ── 会话切换 ──────────────────────────────────────
 
   /// 加载会话的消息（切 Tab / 重启后恢复）。
   Future<void> openSession(AiChatSession session) async {
+    // 正在生成的上一段对话必须先停掉，否则它会在本轮结束后
+    // 继续把内容写进新会话的 _messages。
+    cancel();
     _session = session;
     _messages
       ..clear()
@@ -253,6 +263,9 @@ class AiChatController extends ChangeNotifier {
 
   /// 取消当前生成（保留已生成的部分内容）。
   void cancel() {
+    // 递增代次：即使 _cancelToken 还没来得及传播到工具循环，
+    // 循环也会在下一个检查点发现自己是过期的一代并退出。
+    _generation += 1;
     _cancelToken?.cancel('用户取消');
     _cancelToken = null;
     if (_state != AiChatStreamState.idle) {
@@ -266,6 +279,7 @@ class AiChatController extends ChangeNotifier {
   Future<void> _runConversation() async {
     final session = _session;
     if (session == null) return;
+    final generation = _generation;
 
     final settings = _settings;
     final toolsEnabled = await settings.getToolsEnabled();
@@ -279,6 +293,7 @@ class AiChatController extends ChangeNotifier {
     final streamEnabled = await settings.getStreamEnabled();
 
     final profile = await _resolveProfile();
+    if (_isStale(generation)) return;
     if (profile == null) {
       await _failWith('请先在设置中配置可用的 AI 服务（OpenAI 兼容或 DeepSeek）');
       return;
@@ -320,6 +335,7 @@ class AiChatController extends ChangeNotifier {
 
     var round = 0;
     while (true) {
+      if (_isStale(generation)) return;
       List<Map<String, dynamic>> requestMessages;
       try {
         requestMessages = await injectContext(
@@ -340,15 +356,19 @@ class AiChatController extends ChangeNotifier {
         return;
       }
       _logImagePayload(requestMessages);
+      if (_isStale(generation)) return;
       final result = await _streamOnce(
         profile: profile,
         messages: requestMessages,
         tools: openAiTools,
         temperatureOverride: temperature,
         maxTokensOverride: maxTokens,
+        generation: generation,
+        sessionId: session.id,
       );
 
       if (result == null) return; // 出错或已取消
+      if (_isStale(generation)) return;
 
       final calls = result.toolCalls;
       if (calls.isEmpty) {
@@ -385,6 +405,7 @@ class AiChatController extends ChangeNotifier {
       }
 
       for (final call in calls) {
+        if (_isStale(generation)) return;
         final tool = _registry.lookup(call.name);
         if (tool == null) {
           final denial = AiToolResult.failure(
@@ -412,6 +433,8 @@ class AiChatController extends ChangeNotifier {
         _notify();
 
         final approved = await policy.ensureApproved(call, tool);
+        // 等待批准期间用户可能点了停止或切换了会话：此时不能再执行工具。
+        if (_isStale(generation)) return;
         if (!approved) {
           await _recordToolResult(
             session.id,
@@ -428,10 +451,11 @@ class AiChatController extends ChangeNotifier {
         _state = AiChatStreamState.waitingTool;
         _notify();
         final result = await _registry.execute(call);
+        if (_isStale(generation)) return;
         await _recordToolResult(session.id, call, result);
       }
 
-      if (_cancelToken?.isCancelled ?? false) return;
+      if (_isStale(generation)) return;
     }
   }
 
@@ -447,6 +471,7 @@ class AiChatController extends ChangeNotifier {
   }) async {
     final session = _session;
     if (session == null) return;
+    final generation = _generation;
 
     _state = AiChatStreamState.streaming;
     _notify();
@@ -474,6 +499,7 @@ class AiChatController extends ChangeNotifier {
         maxTokensOverride: maxTokensOverride,
         cancelToken: token,
       );
+      if (_isStale(generation)) return;
       final saved = await _persist(
         AiChatMessage.create(
           sessionId: session.id,
@@ -482,8 +508,10 @@ class AiChatController extends ChangeNotifier {
           status: AiChatMessageStatus.complete,
         ),
       );
+      if (_isStale(generation)) return;
       _messages.add(saved);
     } catch (e) {
+      if (_isStale(generation)) return;
       final message = e is AiServiceException ? e.message : e.toString();
       _error = message;
       final cancelled = token.isCancelled;
@@ -498,11 +526,14 @@ class AiChatController extends ChangeNotifier {
           errorMessage: cancelled ? null : message,
         ),
       );
+      if (_isStale(generation)) return;
       _messages.add(saved);
     } finally {
       if (identical(_cancelToken, token)) _cancelToken = null;
-      _state = AiChatStreamState.idle;
-      _notify();
+      if (!_isStale(generation)) {
+        _state = AiChatStreamState.idle;
+        _notify();
+      }
     }
   }
 
@@ -802,6 +833,8 @@ class AiChatController extends ChangeNotifier {
     required List<Map<String, dynamic>> tools,
     required double? temperatureOverride,
     required int? maxTokensOverride,
+    required int generation,
+    required String sessionId,
   }) async {
     _resetStreamBuffers();
     _state = AiChatStreamState.streaming;
@@ -828,6 +861,9 @@ class AiChatController extends ChangeNotifier {
         onUsage: (snapshot) => usageSnapshot = snapshot,
       );
       await for (final event in stream) {
+        // 会话已切走或用户已取消：立刻停止消费事件，避免继续刷新
+        // 新会话的流式缓冲区。
+        if (_isStale(generation)) break;
         switch (event) {
           case ChatTextDelta(text: final delta):
             text.write(delta);
@@ -856,15 +892,20 @@ class AiChatController extends ChangeNotifier {
     final usage = _messageUsage(profile, usageSnapshot);
 
     if (failure != null) {
+      // 会话已被切走 / 用户已停止：不要再往新会话里写错误消息，
+      // 也不要覆盖新会话的流式状态。
+      if (_isStale(generation)) {
+        _resetStreamBuffers();
+        return null;
+      }
       _state = AiChatStreamState.idle;
       final cancelled = token.isCancelled;
       if (cancelled) {
         // 取消：保留已生成的正文，状态标 cancelled
-        final session = _session;
-        if (session != null && text.isNotEmpty) {
+        if (text.isNotEmpty) {
           await _persist(
             AiChatMessage.create(
-              sessionId: session.id,
+              sessionId: sessionId,
               role: AiChatRole.assistant,
               content: text.toString(),
               reasoning: reasoning.isEmpty ? null : reasoning.toString(),
@@ -880,7 +921,7 @@ class AiChatController extends ChangeNotifier {
       _error = failure;
       final failed = await _persist(
         AiChatMessage.create(
-          sessionId: _session?.id ?? '',
+          sessionId: sessionId,
           role: AiChatRole.assistant,
           content: text.toString(),
           reasoning: reasoning.isEmpty ? null : reasoning.toString(),
@@ -895,6 +936,7 @@ class AiChatController extends ChangeNotifier {
       return null;
     }
 
+    if (_isStale(generation)) return null;
     _state = AiChatStreamState.idle;
     return _RoundResult(
       text: text.toString(),

@@ -55,6 +55,65 @@ class _FakeAiService extends AiService {
   }
 }
 
+/// 可观察时序的假服务：第一轮/首个增量送达后放行测试回调，
+/// 便于在流式途中注入 cancel 或切换会话。
+class _ControllableAiService extends AiService {
+  _ControllableAiService(this.rounds);
+
+  final List<List<AiChatEvent>> rounds;
+  int calls = 0;
+  final Completer<void> firstDeltaSent = Completer<void>();
+  final Completer<void> firstRoundDone = Completer<void>();
+
+  /// 第一轮送出首个文本增量后暂停，直到测试调用 [release]。
+  /// 让「取消/切换会话」严格发生在流式途中，避免竞态。
+  final Completer<void> _gate = Completer<void>();
+
+  /// 放行第一轮继续发送剩余事件。
+  void release() {
+    if (!_gate.isCompleted) _gate.complete();
+  }
+
+  @override
+  Stream<AiChatEvent> chatStreamEvents({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    List<Map<String, dynamic>>? tools,
+    String? toolChoice,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+    void Function(AiUsageSnapshot usage)? onUsage,
+  }) {
+    final index = calls;
+    calls += 1;
+    final events = index < rounds.length
+        ? rounds[index]
+        : const <AiChatEvent>[];
+    final controller = StreamController<AiChatEvent>();
+    scheduleMicrotask(() async {
+      for (final event in events) {
+        // 每条事件之间让出一次微任务，测试才有机会在流式途中介入。
+        await Future<void>.delayed(Duration.zero);
+        if (controller.isClosed) {
+          return;
+        }
+        controller.add(event);
+        if (index == 0 && event is ChatTextDelta) {
+          if (!firstDeltaSent.isCompleted) firstDeltaSent.complete();
+          await _gate.future;
+        }
+      }
+      await Future<void>.delayed(Duration.zero);
+      if (!controller.isClosed) await controller.close();
+      if (index == 0 && !firstRoundDone.isCompleted) {
+        firstRoundDone.complete();
+      }
+    });
+    return controller.stream;
+  }
+}
+
 /// 记录每次请求消息的假服务。
 class _CapturingAiService extends AiService {
   _CapturingAiService(this.captured);
@@ -900,6 +959,58 @@ void main() {
       );
       expect(assistant.content, '半句');
       expect(assistant.status, AiChatMessageStatus.error);
+    });
+  });
+
+  group('取消与会话切换', () {
+    test('工具轮次中途取消后不再发起下一轮请求', () async {
+      final ai = _ControllableAiService([
+        [
+          ChatToolCallsCompleted([
+            AiToolCall.parse(id: 'c1', name: 'read_tool', rawArguments: '{}'),
+          ], 'tool_calls'),
+          ChatDone('tool_calls'),
+        ],
+        const [ChatTextDelta('第二轮'), ChatDone('stop')],
+      ]);
+      final controller = build(ai, AiToolRegistry([_readTool('read_tool')]));
+      addTearDown(controller.dispose);
+      await controller.createSession();
+
+      final future = controller.send('循环调用');
+      // 等第一轮响应结束（此时正在执行工具/准备下一轮），再取消
+      await ai.firstRoundDone.future;
+      controller.cancel();
+      await future;
+
+      // 取消后不得再发起第二轮
+      expect(ai.calls, 1);
+      expect(controller.state, AiChatStreamState.idle);
+    });
+
+    test('切换会话后旧流式内容不会污染新会话', () async {
+      final ai = _ControllableAiService([
+        const [ChatTextDelta('旧会话回答'), ChatDone('stop')],
+        const [ChatTextDelta('新会话回答'), ChatDone('stop')],
+      ]);
+      final controller = build(ai, AiToolRegistry(const []));
+      addTearDown(controller.dispose);
+      await controller.createSession();
+
+      final future = controller.send('旧问题');
+      await ai.firstDeltaSent.future;
+      final newSession = await controller.createSession();
+      ai.release();
+      await future;
+      await controller.send('新问题');
+
+      // 旧会话仍在数据库里，但不应该出现在新会话视图中
+      expect(controller.session?.id, newSession.id);
+      final contents = controller.messages
+          .where((m) => m.role == AiChatRole.assistant)
+          .map((m) => m.content)
+          .toList();
+      expect(contents, isNot(contains('旧会话回答')));
     });
   });
 }
