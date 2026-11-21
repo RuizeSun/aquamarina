@@ -47,6 +47,7 @@ class _AiChatSectionState extends State<AiChatSection> {
   bool _injectRuntime = true;
   bool _injectTime = true;
   bool _showUsageBadge = true;
+  bool _autoTitleEnabled = true;
   AiImageSendMode _imageSendMode = AiImageSendMode.compressed;
   int _imageThumbnailSize = AiChatAttachment.thumbSizeLarge;
   int _sessionCount = 0;
@@ -89,6 +90,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _settings.getInjectRuntimeContext(),
       _settings.getInjectTimeContext(),
       _settings.getShowUsageBadge(),
+      _settings.getAutoTitleEnabled(),
     ]);
     if (!mounted) return;
     setState(() {
@@ -109,6 +111,7 @@ class _AiChatSectionState extends State<AiChatSection> {
       _injectRuntime = results[14] as bool;
       _injectTime = results[15] as bool;
       _showUsageBadge = results[16] as bool;
+      _autoTitleEnabled = results[17] as bool;
       _loading = false;
     });
   }
@@ -246,6 +249,16 @@ class _AiChatSectionState extends State<AiChatSection> {
           onChanged: (value) async {
             await _settings.setStreamEnabled(value);
             setState(() => _streamEnabled = value);
+          },
+        ),
+        SwitchListTile(
+          secondary: Icon(Icons.title, color: colorScheme.primary),
+          title: const Text('自动生成对话标题'),
+          subtitle: const Text('首轮回答后根据提问与回答总结标题；每次新对话额外发起一次很小的请求'),
+          value: _autoTitleEnabled,
+          onChanged: (value) async {
+            await _settings.setAutoTitleEnabled(value);
+            setState(() => _autoTitleEnabled = value);
           },
         ),
         const Divider(),

@@ -44,6 +44,7 @@ class AiChatSettings {
       'ai_chat_inject_runtime_context';
   static const String injectTimeContextKey = 'ai_chat_inject_time_context';
   static const String showUsageBadgeKey = 'ai_chat_show_usage_badge';
+  static const String autoTitleEnabledKey = 'ai_chat_auto_title_enabled';
 
   // ── 取值范围 ──────────────────────────────────────
   static const int minMaxTokens = 64;
@@ -233,6 +234,19 @@ class AiChatSettings {
   Future<void> setShowUsageBadge(bool value) async {
     final prefs = await _prefs;
     await prefs.setBool(showUsageBadgeKey, value);
+  }
+
+  // ── 会话标题 ──────────────────────────────────────
+
+  /// 是否用首条问答自动生成会话标题（默认开启，每次新对话多一次小请求）。
+  Future<bool> getAutoTitleEnabled() async {
+    final prefs = await _prefs;
+    return prefs.getBool(autoTitleEnabledKey) ?? true;
+  }
+
+  Future<void> setAutoTitleEnabled(bool value) async {
+    final prefs = await _prefs;
+    await prefs.setBool(autoTitleEnabledKey, value);
   }
 
   // ── 工具调用 ──────────────────────────────────────

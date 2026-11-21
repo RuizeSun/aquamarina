@@ -20,8 +20,22 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+/// 假服务基类：默认的非流式调用返回空串，避免自动标题用例触发真实网络。
+class _BaseFakeAiService extends AiService {
+  @override
+  Future<String> chatOnce({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+  }) async {
+    return '';
+  }
+}
+
 /// 可编排的假 AI 服务：按调用顺序依次放出预设的流事件。
-class _FakeAiService extends AiService {
+class _FakeAiService extends _BaseFakeAiService {
   _FakeAiService(this.rounds);
 
   final List<List<AiChatEvent>> rounds;
@@ -57,7 +71,7 @@ class _FakeAiService extends AiService {
 
 /// 可观察时序的假服务：第一轮/首个增量送达后放行测试回调，
 /// 便于在流式途中注入 cancel 或切换会话。
-class _ControllableAiService extends AiService {
+class _ControllableAiService extends _BaseFakeAiService {
   _ControllableAiService(this.rounds);
 
   final List<List<AiChatEvent>> rounds;
@@ -115,7 +129,7 @@ class _ControllableAiService extends AiService {
 }
 
 /// 记录每次请求消息的假服务。
-class _CapturingAiService extends AiService {
+class _CapturingAiService extends _BaseFakeAiService {
   _CapturingAiService(this.captured);
 
   final List<List<Map<String, dynamic>>> captured;
@@ -140,7 +154,7 @@ class _CapturingAiService extends AiService {
 }
 
 /// 会回调 usage 的假服务，用于验证消息级 token / 费用角标。
-class _UsageAiService extends AiService {
+class _UsageAiService extends _BaseFakeAiService {
   _UsageAiService(this.snapshot);
 
   final AiUsageSnapshot snapshot;
@@ -163,7 +177,7 @@ class _UsageAiService extends AiService {
 }
 
 /// 只实现非流式接口的假服务，用于验证「关闭流式」分支。
-class _NonStreamFakeAiService extends AiService {
+class _NonStreamFakeAiService extends _BaseFakeAiService {
   _NonStreamFakeAiService(this.reply);
 
   final String reply;
@@ -195,6 +209,30 @@ class _NonStreamFakeAiService extends AiService {
   }) {
     streamCalls += 1;
     return const Stream<AiChatEvent>.empty();
+  }
+}
+
+/// 自动标题用例：记录非流式调用次数，可返回固定标题或等待外部放行。
+class _TitleAiService extends _FakeAiService {
+  _TitleAiService(super.rounds, {this.reply = '', this.gate, this.error});
+
+  final String reply;
+  final Completer<String>? gate;
+  final Object? error;
+  int titleCalls = 0;
+
+  @override
+  Future<String> chatOnce({
+    required List<Map<String, dynamic>> messages,
+    AiProfile? profile,
+    double? temperatureOverride,
+    int? maxTokensOverride,
+    CancelToken? cancelToken,
+  }) async {
+    titleCalls += 1;
+    if (gate != null) return gate!.future;
+    if (error != null) throw error!;
+    return reply;
   }
 }
 
@@ -425,6 +463,93 @@ void main() {
       final usage = controller.messages.last.usage;
       expect(usage, isNotNull);
       expect(usage!.cost, isNull);
+    });
+  });
+
+  group('自动标题', () {
+    Future<bool> waitTitle(String sessionId, String expected) async {
+      for (var i = 0; i < 200; i++) {
+        final session = await chatService.getSession(sessionId);
+        if (session?.title == expected) {
+          return true;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      return false;
+    }
+
+    Future<void> waitUntil(bool Function() predicate) async {
+      for (var i = 0; i < 200; i++) {
+        if (predicate()) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    }
+
+    test('首轮回答完成后用模型总结替换占位标题', () async {
+      final ai = _TitleAiService([
+        [const ChatTextDelta('prevalent 是形容词，意思是普遍的。'), const ChatDone('stop')],
+      ], reply: '「prevalent 的常见用法。」');
+      final controller = build(ai, AiToolRegistry([]));
+      final session = await controller.createSession();
+      await controller.send('帮我看看 prevalent 怎么用在句子里');
+
+      expect(await waitTitle(session.id, 'prevalent 的常见用法'), isTrue);
+      expect(ai.titleCalls, 1);
+      expect(controller.session?.title, 'prevalent 的常见用法');
+      expect(controller.titleRevision, 1);
+    });
+
+    test('关闭自动标题时不发起请求，保留本地占位标题', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'ai_chat_auto_title_enabled': false,
+      });
+      final ai = _TitleAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ], reply: '不应出现');
+      final controller = build(ai, AiToolRegistry([]));
+      final session = await controller.createSession();
+      await controller.send('帮我看看 prevalent 怎么用');
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+
+      expect(ai.titleCalls, 0);
+      final saved = await chatService.getSession(session.id);
+      expect(saved?.title, AiChatService.suggestTitle('帮我看看 prevalent 怎么用'));
+      expect(controller.titleRevision, 0);
+    });
+
+    test('用户手动改名后不被自动标题覆盖', () async {
+      final gate = Completer<String>();
+      final ai = _TitleAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ], gate: gate);
+      final controller = build(ai, AiToolRegistry([]));
+      final session = await controller.createSession();
+      await controller.send('帮我看看 prevalent 怎么用');
+
+      await waitUntil(() => ai.titleCalls == 1);
+      await chatService.renameSession(session.id, '我的标题');
+      gate.complete('自动标题');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      final saved = await chatService.getSession(session.id);
+      expect(saved?.title, '我的标题');
+      expect(controller.titleRevision, 0);
+    });
+
+    test('模型调用失败时保留占位标题且不报错', () async {
+      final ai = _TitleAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ], error: StateError('boom'));
+      final controller = build(ai, AiToolRegistry([]));
+      final session = await controller.createSession();
+      await controller.send('帮我看看 prevalent 怎么用');
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+
+      final saved = await chatService.getSession(session.id);
+      expect(saved?.title, AiChatService.suggestTitle('帮我看看 prevalent 怎么用'));
+      expect(controller.titleRevision, 0);
     });
   });
 
@@ -887,8 +1012,9 @@ void main() {
         final content = message['content'];
         if (content is List) {
           for (final part in content) {
-            if (part is Map && part['type'] == 'image_url')
+            if (part is Map && part['type'] == 'image_url') {
               imageParts.add(part);
+            }
           }
         }
       }
@@ -925,6 +1051,8 @@ void main() {
     test('关闭流式输出时走单次请求且不启用工具', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
         AiChatSettings.streamEnabledKey: false,
+        // 本用例只验证单次请求分支，关闭自动标题避免额外请求干扰计数。
+        AiChatSettings.autoTitleEnabledKey: false,
       });
       final ai = _NonStreamFakeAiService('一次性回答');
       final controller = AiChatController(

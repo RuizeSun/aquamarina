@@ -9,6 +9,7 @@ import '../../models/ai_profile.dart';
 import '../system/log_service.dart';
 import 'ai_chat_service.dart';
 import 'ai_chat_settings.dart';
+import 'ai_chat_title_service.dart';
 import 'ai_context_builder.dart';
 import 'ai_context_compressor.dart';
 import 'ai_context_window.dart';
@@ -56,9 +57,11 @@ class AiChatController extends ChangeNotifier {
     AiImageService? imageService,
     AiContextBuilder? contextBuilder,
     AiContextCompressor? contextCompressor,
+    AiChatTitleService? titleService,
   }) : _chatService = chatService ?? AiChatService.instance,
        _contextBuilder = contextBuilder ?? AiContextBuilder(),
        _contextCompressor = contextCompressor ?? const AiContextCompressor(),
+       _titleService = titleService ?? AiChatTitleService(aiService: aiService),
        _imageService = imageService ?? AiImageService.instance,
        _aiService = aiService ?? AiService(),
        _profileService = profileService ?? AiProfileService(),
@@ -74,6 +77,7 @@ class AiChatController extends ChangeNotifier {
   final AiImageService _imageService;
   final AiContextBuilder _contextBuilder;
   final AiContextCompressor _contextCompressor;
+  final AiChatTitleService _titleService;
 
   /// 页面注入的批准回调；页面销毁后置空 → 所有写操作自动拒绝。
   AiToolApprovalHandler? _approvalHandler;
@@ -111,6 +115,13 @@ class AiChatController extends ChangeNotifier {
   String? get imageWarning => _imageWarning;
 
   bool get isBusy => _state != AiChatStreamState.idle;
+
+  /// 会话标题被替换的次数，页面据此刷新左侧列表。
+  int _titleRevision = 0;
+  int get titleRevision => _titleRevision;
+
+  /// 已尝试过自动生成标题的会话，避免同一会话重复请求。
+  final Set<String> _autoTitleAttempted = {};
 
   /// 本会话内「总是允许」的工具名（内存，不落库）。
   final Set<String> _sessionApprovedTools = {};
@@ -230,17 +241,79 @@ class AiChatController extends ChangeNotifier {
     );
     _messages.add(userMessage);
 
-    // 首条用户消息顺带命名会话
+    // 首条用户消息先用本地截断做占位标题，等首轮回答完成后再由模型总结替换。
+    String? titlePlaceholder;
+    String? firstUserText;
     if (_messages.where((m) => m.role == AiChatRole.user).length == 1) {
-      final title = AiChatService.suggestTitle(
-        text.isEmpty ? (attachments.isEmpty ? '' : '图片对话') : text,
-      );
-      await _chatService.renameSession(session.id, title);
-      _session = _session?.copyWith(title: title);
+      firstUserText = text.isEmpty ? (attachments.isEmpty ? '' : '图片对话') : text;
+      titlePlaceholder = AiChatService.suggestTitle(firstUserText);
+      await _chatService.renameSession(session.id, titlePlaceholder);
+      _session = _session?.copyWith(title: titlePlaceholder);
     }
 
     _notify();
     await _runConversation();
+
+    if (titlePlaceholder != null) {
+      unawaited(
+        _generateSessionTitle(
+          sessionId: session.id,
+          placeholder: titlePlaceholder,
+          firstUserText: firstUserText ?? '',
+        ),
+      );
+    }
+  }
+
+  /// 首轮回答完成后，用用户第一句 + 助手正文让模型总结标题。
+  ///
+  /// 只在标题仍是本地占位值时替换：用户中途手动改名不会被覆盖。
+  Future<void> _generateSessionTitle({
+    required String sessionId,
+    required String placeholder,
+    required String firstUserText,
+  }) async {
+    if (_disposed || _autoTitleAttempted.contains(sessionId)) return;
+    if (!await _settings.getAutoTitleEnabled()) return;
+    if (_disposed) return;
+    _autoTitleAttempted.add(sessionId);
+
+    final assistantText = _firstAssistantBody(sessionId);
+    if (assistantText == null) return;
+
+    final profile = await _resolveProfile();
+    if (profile == null || _disposed) return;
+
+    final title = await _titleService.generate(
+      profile: profile,
+      firstUserText: firstUserText,
+      firstAssistantText: assistantText,
+    );
+    if (title == null || _disposed) return;
+
+    final current = await _chatService.getSession(sessionId);
+    if (current == null || current.title != placeholder) return;
+    await _chatService.renameSession(sessionId, title);
+    if (_disposed) return;
+
+    if (_session?.id == sessionId) {
+      _session = _session?.copyWith(title: title);
+    }
+    _titleRevision += 1;
+    _notify();
+  }
+
+  /// 取该会话首条完整、非工具调用的助手正文。
+  String? _firstAssistantBody(String sessionId) {
+    for (final message in _messages) {
+      if (message.sessionId != sessionId) continue;
+      if (message.role != AiChatRole.assistant) continue;
+      if (message.status != AiChatMessageStatus.complete) continue;
+      if (message.hasToolCalls) continue;
+      final text = message.content.trim();
+      if (text.isNotEmpty) return text;
+    }
+    return null;
   }
 
   /// 重试最后一条失败/取消的消息。

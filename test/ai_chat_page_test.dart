@@ -6,6 +6,7 @@ import 'package:aquamarina/services/ai/ai_chat_service.dart';
 import 'package:aquamarina/services/ai/ai_profile_service.dart';
 import 'package:aquamarina/services/data/database_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -110,6 +111,50 @@ void main() {
     await tester.tap(find.text('换一批'));
     await tester.pump();
     expect(find.byType(OutlinedButton), findsNWidgets(3));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Ctrl+V 粘贴文本，且不再显示单独的粘贴按钮', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.getData') {
+        return const <String, dynamic>{'text': '来自剪贴板'};
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    final controller = AiChatController(chatService: service);
+    addTearDown(controller.dispose);
+
+    await pumpPage(tester, controller);
+
+    expect(find.byIcon(Icons.content_paste_go), findsNothing);
+
+    final field = find.descendant(
+      of: find.byType(CallbackShortcuts),
+      matching: find.byType(TextField),
+    );
+    await tester.tap(field);
+    await tester.pump();
+
+    await tester.runAsync(() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tester.pump();
+
+    expect(find.text('来自剪贴板'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

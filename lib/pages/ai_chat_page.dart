@@ -85,6 +85,9 @@ class AiChatPageState extends State<AiChatPage> {
   bool _loadingSessions = true;
   String? _setupHint;
 
+  /// 已同步过的标题版本；控制器替换标题后据此刷新左侧列表。
+  int _seenTitleRevision = 0;
+
   /// 会话搜索框。
   final TextEditingController _searchController = TextEditingController();
   Timer? _searchDebounce;
@@ -108,6 +111,7 @@ class AiChatPageState extends State<AiChatPage> {
           approvalHandler: _requestApproval,
         );
     _controller.addListener(_onControllerChanged);
+    _seenTitleRevision = _controller.titleRevision;
     _load();
     _loadUsageBadgeSetting();
   }
@@ -181,6 +185,10 @@ class AiChatPageState extends State<AiChatPage> {
 
   void _onControllerChanged() {
     if (!mounted) return;
+    if (_controller.titleRevision != _seenTitleRevision) {
+      _seenTitleRevision = _controller.titleRevision;
+      _reloadSessions();
+    }
     setState(() {});
     _scheduleScrollToBottom();
   }
@@ -565,17 +573,16 @@ class AiChatPageState extends State<AiChatPage> {
     }
   }
 
-  /// 从剪贴板粘贴图片（桌面端常用）。
-  Future<void> _pasteImage() async {
+  /// Ctrl+V：剪贴板有图片时添加为附件，否则按普通文本粘贴。
+  Future<void> _pasteFromClipboard() async {
+    if (_controller.isBusy || !_visionEnabled) {
+      await _pasteText();
+      return;
+    }
     final bytes = await Pasteboard.image;
+    if (!mounted) return;
     if (bytes == null || bytes.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('剪贴板中没有图片'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      await _pasteText();
       return;
     }
     if (_pendingAttachments.length >= AiImageService.maxAttachmentsPerMessage) {
@@ -589,6 +596,21 @@ class AiChatPageState extends State<AiChatPage> {
     );
     if (attachment == null || !mounted) return;
     setState(() => _pendingAttachments.add(attachment));
+  }
+
+  /// 快捷键接管 Ctrl+V 后，手动把剪贴板文本插到光标/选区处。
+  Future<void> _pasteText() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null || text.isEmpty || !mounted) return;
+    final value = _inputController.value;
+    final selection = value.selection;
+    final start = selection.isValid ? selection.start : value.text.length;
+    final end = selection.isValid ? selection.end : value.text.length;
+    _inputController.value = TextEditingValue(
+      text: value.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
   }
 
   Future<void> _send() async {
@@ -1408,13 +1430,6 @@ class AiChatPageState extends State<AiChatPage> {
                   onPressed: busy || !_visionEnabled ? null : _pickImages,
                   icon: const Icon(Icons.add_photo_alternate_outlined),
                 ),
-                IconButton(
-                  tooltip: _visionEnabled
-                      ? '粘贴图片（Ctrl+Shift+V）'
-                      : '当前 AI 配置未开启图片输入',
-                  onPressed: busy || !_visionEnabled ? null : _pasteImage,
-                  icon: const Icon(Icons.content_paste_go),
-                ),
                 Expanded(
                   child: CallbackShortcuts(
                     bindings: {
@@ -1426,8 +1441,11 @@ class AiChatPageState extends State<AiChatPage> {
                       const SingleActivator(
                         LogicalKeyboardKey.keyV,
                         control: true,
-                        shift: true,
-                      ): _pasteImage,
+                      ): _pasteFromClipboard,
+                      const SingleActivator(
+                        LogicalKeyboardKey.keyV,
+                        meta: true,
+                      ): _pasteFromClipboard,
                     },
                     child: TextField(
                       controller: _inputController,
