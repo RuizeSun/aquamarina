@@ -298,46 +298,55 @@ class BackupService {
     return jsonEncode(map);
   }
 
-  /// 读取 AI API Keys。
+  /// 固定的 Secure Storage key（不随 AI 配置数量变化）。
   ///
-  /// Secure Storage 无法枚举所有 key，因此通过已知的 key 约定导出：
-  ///   - `ai_api_key`（旧版 AiConfigService）
-  ///   - `ai_api_key_<profileId>`（AiProfileService._secureKeyFor）
-  ///   - `tts_mimo_api_key`（MimoTtsCredentials.storageKey，小米 MiMo TTS）
-  /// 若后续新增 key 约定，需同步维护此处。
-  static Future<String> _exportSecureStorage() async {
-    final map = <String, String>{};
+  /// Secure Storage 无法枚举，只能按约定维护：导出、恢复、清除三处
+  /// 都必须以这份列表为准，否则会出现「清空后凭据仍在」或
+  /// 「恢复后旧设备凭据残留」。新增 key 时只改这里。
+  static const List<String> _fixedSecureKeys = [
+    'ai_api_key',
+    MimoTtsCredentials.storageKey,
+    CloudSyncSettings.accessKeyStorageKey,
+    CloudSyncSettings.secretKeyStorageKey,
+  ];
 
-    final legacy = await _readSecure('ai_api_key');
-    if (legacy != null && legacy.isNotEmpty) {
-      map['ai_api_key'] = legacy;
-    }
+  /// 全部需要处理的 Secure Storage key（固定 key + 每个 AI 配置的 key）。
+  @visibleForTesting
+  static Set<String> knownSecureKeys(SharedPreferences prefs) =>
+      _knownSecureKeys(prefs);
 
-    final prefs = await SharedPreferences.getInstance();
+  static Set<String> _knownSecureKeys(SharedPreferences prefs) {
+    final keys = <String>{..._fixedSecureKeys};
     final profilesJson = prefs.getString('ai_profiles_v2');
     if (profilesJson != null) {
       try {
         final list = jsonDecode(profilesJson) as List<dynamic>;
         for (final item in list) {
           final id = (item as Map<String, dynamic>)['id'] as String?;
-          if (id == null || id.isEmpty) continue;
-          final key = 'ai_api_key_$id';
-          final value = await _readSecure(key);
-          if (value != null && value.isNotEmpty) {
-            map[key] = value;
+          if (id != null && id.isNotEmpty) {
+            keys.add('ai_api_key_$id');
           }
         }
       } catch (_) {
-        // profiles 数据损坏时忽略，仅导出能读到的 key
+        // profiles 数据损坏时退回固定 key
       }
     }
+    return keys;
+  }
 
-    // 小米 MiMo TTS 的 API Key
-    final mimoKey = await _readSecure(MimoTtsCredentials.storageKey);
-    if (mimoKey != null && mimoKey.isNotEmpty) {
-      map[MimoTtsCredentials.storageKey] = mimoKey;
+  /// 读取 AI API Keys。
+  ///
+  /// Secure Storage 无法枚举所有 key，因此通过 [_knownSecureKeys] 导出。
+  /// 只导出实际有值的 key。
+  static Future<String> _exportSecureStorage() async {
+    final map = <String, String>{};
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in _knownSecureKeys(prefs)) {
+      final value = await _readSecure(key);
+      if (value != null && value.isNotEmpty) {
+        map[key] = value;
+      }
     }
-
     return jsonEncode(map);
   }
 
@@ -890,22 +899,11 @@ class BackupService {
   }
 
   static Future<void> _restoreSecureStorage(Map<String, String> backup) async {
-    // 清理现有的已知 key（配置列表此时已从备份恢复，以其为准）
+    // 先清除全部已知 key，再写入备份中的值。
+    // 必须先删后写：备份可能缺少某些 key（旧版本备份、或用户没勾选
+    // 导出 API Key），残留的旧凭据会与新配置产生错配。
     final prefs = await SharedPreferences.getInstance();
-    final keysToClear = <String>{'ai_api_key'};
-    final profilesJson = prefs.getString('ai_profiles_v2');
-    if (profilesJson != null) {
-      try {
-        final list = jsonDecode(profilesJson) as List<dynamic>;
-        for (final item in list) {
-          final id = (item as Map<String, dynamic>)['id'] as String?;
-          if (id != null && id.isNotEmpty) {
-            keysToClear.add('ai_api_key_$id');
-          }
-        }
-      } catch (_) {}
-    }
-    for (final key in keysToClear) {
+    for (final key in _knownSecureKeys(prefs)) {
       try {
         await _secureStorage.delete(key: key);
       } catch (_) {}
@@ -953,26 +951,14 @@ class BackupService {
     await DatabaseService.database;
   }
 
-  /// 清空 Secure Storage 中所有已知的 API Key。
+  /// 清空 Secure Storage 中所有已知的凭据。
+  ///
+  /// 必须在 SharedPreferences 被清空**之前**调用：profile 列表还在时
+  /// 才能枚举出 `ai_api_key_<id>`。Ai/MiMo/云同步凭据全部覆盖，
+  /// 避免「清除全部数据」后仍有 key 残留在系统钥匙串。
   static Future<void> _clearSecureStorage() async {
-    final keysToClear = <String>{'ai_api_key'};
-
-    // 尝试从即将被清空的 SharedPreferences 中读取 profile IDs
     final prefs = await SharedPreferences.getInstance();
-    final profilesJson = prefs.getString('ai_profiles_v2');
-    if (profilesJson != null) {
-      try {
-        final list = jsonDecode(profilesJson) as List<dynamic>;
-        for (final item in list) {
-          final id = (item as Map<String, dynamic>)['id'] as String?;
-          if (id != null && id.isNotEmpty) {
-            keysToClear.add('ai_api_key_$id');
-          }
-        }
-      } catch (_) {}
-    }
-
-    for (final key in keysToClear) {
+    for (final key in _knownSecureKeys(prefs)) {
       try {
         await _secureStorage.delete(key: key);
       } catch (_) {}
