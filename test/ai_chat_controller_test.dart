@@ -224,71 +224,9 @@ void main() {
     );
   }
 
-  group('trimContext', () {
-    AiChatMessage msg(AiChatRole role, String content, {double index = 0}) =>
-        AiChatMessage.create(
-          sessionId: 's',
-          role: role,
-          content: content,
-          sortIndex: index,
-        );
-
-    test('保留 system 与最近 N 条', () {
-      final all = [
-        msg(AiChatRole.user, 'u1'),
-        msg(AiChatRole.assistant, 'a1'),
-        msg(AiChatRole.user, 'u2'),
-      ];
-      final trimmed = AiChatController.trimContext(all, 2, system: 'SYS');
-      expect(trimmed.first['role'], 'system');
-      expect(trimmed.skip(1).map((m) => m['content']), ['a1', 'u2']);
-    });
-
-    test('tool_call 与 tool 结果成对保留', () {
-      final call = AiToolCall.parse(
-        id: 'c1',
-        name: 'search_dictionary',
-        rawArguments: '{}',
-      );
-      final all = [
-        msg(AiChatRole.user, 'u1'),
-        AiChatMessage.create(
-          sessionId: 's',
-          role: AiChatRole.assistant,
-          content: '',
-          toolCalls: [call],
-        ),
-        AiChatMessage.create(
-          sessionId: 's',
-          role: AiChatRole.tool,
-          content: '结果',
-          toolCallId: 'c1',
-          toolName: 'search_dictionary',
-        ),
-        msg(AiChatRole.user, 'u2'),
-      ];
-      // 只保留 2 条时，边界落在 tool 上 → 回退到 assistant(tool_calls)
-      final trimmed = AiChatController.trimContext(all, 2, system: 'SYS');
-      final roles = trimmed.map((m) => m['role']).toList();
-      expect(roles.first, 'system');
-      expect(roles.contains('tool'), isTrue);
-      expect(roles.contains('assistant'), isTrue);
-    });
-
-    test('空 system 不注入', () {
-      final trimmed = AiChatController.trimContext(
-        [msg(AiChatRole.user, 'u')],
-        10,
-        system: '   ',
-      );
-      expect(trimmed, hasLength(1));
-    });
-  });
-
   group('上下文处理', () {
     test('压缩后仍超限时落一条可见错误，不发起模型请求', () async {
       SharedPreferences.setMockInitialValues(<String, Object>{
-        'ai_chat_context_messages': 20,
         'ai_chat_context_compression_enabled': true,
         'ai_chat_context_threshold_mode': 'absolute',
         'ai_chat_context_threshold_tokens': 500,
@@ -306,6 +244,57 @@ void main() {
       expect(controller.state, AiChatStreamState.idle);
       expect(controller.messages.last.status, AiChatMessageStatus.error);
       expect(controller.messages.last.errorMessage, contains('超出模型上下文窗口'));
+    });
+
+    test('会话用量达到提示比例时暴露 contextUsage', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'ai_chat_context_compression_enabled': false,
+        'ai_chat_context_usage_warning_enabled': true,
+        'ai_chat_context_usage_warning_ratio': 0.7,
+      });
+      final ai = _FakeAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ]);
+      final controller = build(
+        ai,
+        AiToolRegistry([]),
+        profile: _profile().copyWith(contextWindow: 20000),
+      );
+      await controller.createSession();
+      await controller.send(List.filled(16000, '字').join());
+
+      final usage = controller.contextUsage;
+      expect(usage, isNotNull);
+      expect(usage!.windowTokens, 20000);
+      expect(usage.warningTokens, 14000);
+      expect(usage.usedTokens, greaterThanOrEqualTo(14000));
+      expect(usage.isWarning, isTrue);
+      expect(
+        controller.messages.where((m) => m.status == AiChatMessageStatus.error),
+        isEmpty,
+      );
+    });
+
+    test('用量提示关闭时不暴露提示状态', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'ai_chat_context_compression_enabled': false,
+        'ai_chat_context_usage_warning_enabled': false,
+      });
+      final ai = _FakeAiService([
+        [const ChatTextDelta('好的'), const ChatDone('stop')],
+      ]);
+      final controller = build(
+        ai,
+        AiToolRegistry([]),
+        profile: _profile().copyWith(contextWindow: 20000),
+      );
+      await controller.createSession();
+      await controller.send(List.filled(16000, '字').join());
+
+      final usage = controller.contextUsage;
+      expect(usage, isNotNull);
+      expect(usage!.warningTokens, 0);
+      expect(usage.isWarning, isFalse);
     });
   });
 

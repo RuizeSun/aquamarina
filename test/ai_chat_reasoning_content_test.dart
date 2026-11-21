@@ -52,7 +52,9 @@ void main() {
 
   group('toOpenAiMessage', () {
     test('assistant 消息带出 reasoning_content', () {
-      final payload = assistantWithReasoning(reasoning: '先想想').toOpenAiMessage();
+      final payload = assistantWithReasoning(
+        reasoning: '先想想',
+      ).toOpenAiMessage();
       expect(payload['reasoning_content'], '先想想');
       expect((payload['tool_calls'] as List).single['id'], 'c1');
     });
@@ -78,10 +80,7 @@ void main() {
         ],
       );
       final messages = body['messages'] as List<dynamic>;
-      expect(
-        (messages[1] as Map)['reasoning_content'],
-        '先查日期',
-      );
+      expect((messages[1] as Map)['reasoning_content'], '先查日期');
       expect(
         (messages[3] as Map)['reasoning_content'],
         '',
@@ -95,12 +94,13 @@ void main() {
         profile: openai,
         stream: true,
         tools: tools,
-        messages: [
-          assistantWithReasoning(reasoning: '先想想').toOpenAiMessage(),
-        ],
+        messages: [assistantWithReasoning(reasoning: '先想想').toOpenAiMessage()],
       );
       final messages = body['messages'] as List<dynamic>;
-      expect((messages.single as Map).containsKey('reasoning_content'), isFalse);
+      expect(
+        (messages.single as Map).containsKey('reasoning_content'),
+        isFalse,
+      );
     });
 
     test('DeepSeek 未开思考模式：同样剔除', () {
@@ -108,45 +108,13 @@ void main() {
         profile: deepSeek.copyWith(enableThinking: false),
         stream: true,
         tools: tools,
-        messages: [
-          assistantWithReasoning(reasoning: '先想想').toOpenAiMessage(),
-        ],
+        messages: [assistantWithReasoning(reasoning: '先想想').toOpenAiMessage()],
       );
       final messages = body['messages'] as List<dynamic>;
-      expect((messages.single as Map).containsKey('reasoning_content'), isFalse);
-    });
-  });
-
-  group('trimContext', () {
-    test('回传的 assistant 消息保留 reasoning_content', () {
-      final trimmed = AiChatController.trimContext([
-        AiChatMessage.create(sessionId: 's', role: AiChatRole.user, content: 'u'),
-        AiChatMessage.create(
-          sessionId: 's',
-          role: AiChatRole.assistant,
-          content: 'a',
-          reasoning: '思维链',
-        ),
-      ], 10);
-      expect(trimmed.last['reasoning_content'], '思维链');
-    });
-
-    test('工具结果缺失的调用组整组丢弃', () {
-      final call = AiToolCall.parse(
-        id: 'c1',
-        name: 'noop',
-        rawArguments: '{}',
+      expect(
+        (messages.single as Map).containsKey('reasoning_content'),
+        isFalse,
       );
-      final trimmed = AiChatController.trimContext([
-        AiChatMessage.create(sessionId: 's', role: AiChatRole.user, content: 'u'),
-        AiChatMessage.create(
-          sessionId: 's',
-          role: AiChatRole.assistant,
-          content: '',
-          toolCalls: [call],
-        ),
-      ], 10);
-      expect(trimmed.map((m) => m['role']), ['user']);
     });
   });
 

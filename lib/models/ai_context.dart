@@ -1,4 +1,4 @@
-/// 上下文处理策略：消息条数限制 + 阈值触发的摘要压缩。
+/// 上下文处理策略：阈值触发的摘要压缩 + 会话用量提示。
 ///
 /// 这里的阈值是「触发压缩」的软阈值；真正的硬上限是 AI 配置里的上下文窗口
 /// （未填写时，绝对阈值同时充当上限）。两者都由 [AiContextPolicy] 与
@@ -18,11 +18,6 @@ enum AiContextThresholdMode {
 
 /// 用户在「上下文处理」里配置的策略。
 class AiContextPolicy {
-  /// 消息条数下限 / 上限 / 默认值（默认 20 条）。
-  static const int minMessageCount = 2;
-  static const int maxMessageCount = 100;
-  static const int defaultMessageCount = 20;
-
   /// 绝对阈值范围（tokens）。
   static const int minAbsoluteThreshold = 256;
   static const int maxAbsoluteThreshold = 2000000;
@@ -33,27 +28,33 @@ class AiContextPolicy {
   static const double maxRatio = 1.0;
   static const double defaultRatio = 0.5;
 
-  final int maxMessages;
+  /// 用量提示阈值范围（0.10 = 10%，0.95 = 95%）。
+  static const double minUsageWarningRatio = 0.10;
+  static const double maxUsageWarningRatio = 0.95;
+  static const double defaultUsageWarningRatio = 0.70;
+
   final bool compressionEnabled;
   final AiContextThresholdMode thresholdMode;
   final int absoluteThreshold;
   final double ratioThreshold;
+  final bool usageWarningEnabled;
+  final double usageWarningRatio;
 
   const AiContextPolicy({
-    this.maxMessages = defaultMessageCount,
-    this.compressionEnabled = false,
+    this.compressionEnabled = true,
     this.thresholdMode = AiContextThresholdMode.absolute,
     this.absoluteThreshold = defaultAbsoluteThreshold,
     this.ratioThreshold = defaultRatio,
+    this.usageWarningEnabled = true,
+    this.usageWarningRatio = defaultUsageWarningRatio,
   });
 
-  /// 默认策略：保留最近 20 条消息，摘要压缩默认关闭（避免升级后自动产生额外请求）。
+  /// 默认策略：摘要压缩默认开启，会话用量提示默认开启。
   static const AiContextPolicy defaults = AiContextPolicy();
 
   /// 把用户输入收敛到安全范围。
   AiContextPolicy normalized() {
     return AiContextPolicy(
-      maxMessages: maxMessages.clamp(minMessageCount, maxMessageCount),
       compressionEnabled: compressionEnabled,
       thresholdMode: thresholdMode,
       absoluteThreshold: absoluteThreshold.clamp(
@@ -61,6 +62,11 @@ class AiContextPolicy {
         maxAbsoluteThreshold,
       ),
       ratioThreshold: ratioThreshold.clamp(minRatio, maxRatio),
+      usageWarningEnabled: usageWarningEnabled,
+      usageWarningRatio: usageWarningRatio.clamp(
+        minUsageWarningRatio,
+        maxUsageWarningRatio,
+      ),
     );
   }
 
@@ -83,37 +89,76 @@ class AiContextPolicy {
     return value < 1 ? 1 : value;
   }
 
+  /// 解析会话用量提示的 token 阈值；返回 0 表示不提示。
+  int resolveUsageWarningTokens(int contextWindow) {
+    if (!usageWarningEnabled || contextWindow <= 0) return 0;
+    final value =
+        (contextWindow *
+                usageWarningRatio.clamp(
+                  minUsageWarningRatio,
+                  maxUsageWarningRatio,
+                ))
+            .floor();
+    return value < 1 ? 1 : value;
+  }
+
   AiContextPolicy copyWith({
-    int? maxMessages,
     bool? compressionEnabled,
     AiContextThresholdMode? thresholdMode,
     int? absoluteThreshold,
     double? ratioThreshold,
+    bool? usageWarningEnabled,
+    double? usageWarningRatio,
   }) {
     return AiContextPolicy(
-      maxMessages: maxMessages ?? this.maxMessages,
       compressionEnabled: compressionEnabled ?? this.compressionEnabled,
       thresholdMode: thresholdMode ?? this.thresholdMode,
       absoluteThreshold: absoluteThreshold ?? this.absoluteThreshold,
       ratioThreshold: ratioThreshold ?? this.ratioThreshold,
+      usageWarningEnabled: usageWarningEnabled ?? this.usageWarningEnabled,
+      usageWarningRatio: usageWarningRatio ?? this.usageWarningRatio,
     );
   }
 
   @override
   bool operator ==(Object other) =>
       other is AiContextPolicy &&
-      other.maxMessages == maxMessages &&
       other.compressionEnabled == compressionEnabled &&
       other.thresholdMode == thresholdMode &&
       other.absoluteThreshold == absoluteThreshold &&
-      other.ratioThreshold == ratioThreshold;
+      other.ratioThreshold == ratioThreshold &&
+      other.usageWarningEnabled == usageWarningEnabled &&
+      other.usageWarningRatio == usageWarningRatio;
 
   @override
   int get hashCode => Object.hash(
-    maxMessages,
     compressionEnabled,
     thresholdMode,
     absoluteThreshold,
     ratioThreshold,
+    usageWarningEnabled,
+    usageWarningRatio,
   );
+}
+
+/// 当前会话历史相对上下文窗口的用量快照。
+class AiContextUsage {
+  /// 会话历史的估算 tokens（system + 全量消息 + 工具定义）。
+  final int usedTokens;
+
+  /// AI 配置的上下文窗口；0 表示未配置。
+  final int windowTokens;
+
+  /// 达到该值即提示用户；0 表示不提示。
+  final int warningTokens;
+
+  const AiContextUsage({
+    required this.usedTokens,
+    required this.windowTokens,
+    required this.warningTokens,
+  });
+
+  double get ratio => windowTokens <= 0 ? 0 : usedTokens / windowTokens;
+
+  bool get isWarning => warningTokens > 0 && usedTokens >= warningTokens;
 }

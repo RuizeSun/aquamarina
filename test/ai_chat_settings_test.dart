@@ -22,17 +22,17 @@ void main() {
       );
       expect(await settings.getTemperatureOverride(), isNull);
       expect(await settings.getMaxTokensOverride(), isNull);
-      expect(
-        await settings.getContextMessages(),
-        AiChatSettings.defaultContextMessages,
-      );
       final policy = await settings.getContextPolicy();
-      expect(policy.maxMessages, 20);
-      expect(policy.compressionEnabled, isFalse);
+      expect(policy.compressionEnabled, isTrue);
       expect(policy.thresholdMode, AiContextThresholdMode.absolute);
       expect(
         policy.absoluteThreshold,
         AiContextPolicy.defaultAbsoluteThreshold,
+      );
+      expect(policy.usageWarningEnabled, isTrue);
+      expect(
+        policy.usageWarningRatio,
+        AiContextPolicy.defaultUsageWarningRatio,
       );
       expect(await settings.getToolsEnabled(), isTrue);
       expect(await settings.getAutoApproveReadOnly(), isTrue);
@@ -46,50 +46,37 @@ void main() {
   });
 
   group('越界收敛', () {
-    test('上下文条数被 clamp 到 2..100', () async {
-      await settings.setContextMessages(0);
-      expect(
-        await settings.getContextMessages(),
-        AiChatSettings.minContextMessages,
-      );
-      await settings.setContextMessages(9999);
-      expect(
-        await settings.getContextMessages(),
-        AiChatSettings.maxContextMessages,
-      );
-    });
-
     test('上下文策略保存并可换算比例阈值', () async {
       await settings.setContextPolicy(
         const AiContextPolicy(
-          maxMessages: 12,
           compressionEnabled: true,
           thresholdMode: AiContextThresholdMode.ratio,
           ratioThreshold: 0.5,
+          usageWarningEnabled: true,
+          usageWarningRatio: 0.8,
         ),
       );
       final policy = await settings.getContextPolicy();
-      expect(policy.maxMessages, 12);
       expect(policy.compressionEnabled, isTrue);
       expect(policy.thresholdMode, AiContextThresholdMode.ratio);
       expect(policy.resolveThresholdTokens(32000), 16000);
-      expect(await settings.getContextMessages(), 12);
+      expect(policy.resolveUsageWarningTokens(32000), 25600);
     });
 
     test('上下文策略越界值被收敛', () async {
       await settings.setContextPolicy(
         const AiContextPolicy(
-          maxMessages: 999,
           compressionEnabled: true,
           thresholdMode: AiContextThresholdMode.absolute,
           absoluteThreshold: 1,
           ratioThreshold: 5,
+          usageWarningRatio: 2,
         ),
       );
       final policy = await settings.getContextPolicy();
-      expect(policy.maxMessages, AiContextPolicy.maxMessageCount);
       expect(policy.absoluteThreshold, AiContextPolicy.minAbsoluteThreshold);
       expect(policy.ratioThreshold, AiContextPolicy.maxRatio);
+      expect(policy.usageWarningRatio, AiContextPolicy.maxUsageWarningRatio);
     });
 
     test('工具轮次被 clamp 到 1..10', () async {

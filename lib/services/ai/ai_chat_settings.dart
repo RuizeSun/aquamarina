@@ -18,6 +18,8 @@ class AiChatSettings {
   static const String systemPromptKey = 'ai_chat_system_prompt';
   static const String temperatureOverrideKey = 'ai_chat_temperature_override';
   static const String maxTokensOverrideKey = 'ai_chat_max_tokens_override';
+
+  /// 已废弃：仅保留键名兼容旧数据，不再读写。
   static const String contextMessagesKey = 'ai_chat_context_messages';
   static const String contextCompressionEnabledKey =
       'ai_chat_context_compression_enabled';
@@ -27,6 +29,10 @@ class AiChatSettings {
       'ai_chat_context_threshold_tokens';
   static const String contextThresholdRatioKey =
       'ai_chat_context_threshold_ratio';
+  static const String contextUsageWarningEnabledKey =
+      'ai_chat_context_usage_warning_enabled';
+  static const String contextUsageWarningRatioKey =
+      'ai_chat_context_usage_warning_ratio';
   static const String toolsEnabledKey = 'ai_chat_tools_enabled';
   static const String toolDisabledNamesKey = 'ai_chat_tool_disabled_names';
   static const String autoApproveReadOnlyKey = 'ai_chat_auto_approve_readonly';
@@ -40,10 +46,6 @@ class AiChatSettings {
   static const String showUsageBadgeKey = 'ai_chat_show_usage_badge';
 
   // ── 取值范围 ──────────────────────────────────────
-  static const int minContextMessages = AiContextPolicy.minMessageCount;
-  static const int maxContextMessages = AiContextPolicy.maxMessageCount;
-  static const int defaultContextMessages = AiContextPolicy.defaultMessageCount;
-
   static const int minMaxTokens = 64;
   static const int maxMaxTokens = 8192;
 
@@ -145,11 +147,10 @@ class AiChatSettings {
 
   // ── 上下文处理 ────────────────────────────────────
 
-  /// 读取完整的上下文处理策略（消息条数 + 摘要压缩阈值）。
+  /// 读取完整的上下文处理策略（摘要压缩阈值 + 会话用量提示）。
   Future<AiContextPolicy> getContextPolicy() async {
     final prefs = await _prefs;
-    final messages = prefs.getInt(contextMessagesKey) ?? defaultContextMessages;
-    final enabled = prefs.getBool(contextCompressionEnabledKey) ?? false;
+    final enabled = prefs.getBool(contextCompressionEnabledKey) ?? true;
     final mode = AiContextThresholdMode.fromName(
       prefs.getString(contextThresholdModeKey),
     );
@@ -159,19 +160,24 @@ class AiChatSettings {
     final ratio =
         prefs.getDouble(contextThresholdRatioKey) ??
         AiContextPolicy.defaultRatio;
+    final usageWarningEnabled =
+        prefs.getBool(contextUsageWarningEnabledKey) ?? true;
+    final usageWarningRatio =
+        prefs.getDouble(contextUsageWarningRatioKey) ??
+        AiContextPolicy.defaultUsageWarningRatio;
     return AiContextPolicy(
-      maxMessages: messages,
       compressionEnabled: enabled,
       thresholdMode: mode,
       absoluteThreshold: tokens,
       ratioThreshold: ratio,
+      usageWarningEnabled: usageWarningEnabled,
+      usageWarningRatio: usageWarningRatio,
     ).normalized();
   }
 
   Future<void> setContextPolicy(AiContextPolicy policy) async {
     final prefs = await _prefs;
     final normalized = policy.normalized();
-    await prefs.setInt(contextMessagesKey, normalized.maxMessages);
     await prefs.setBool(
       contextCompressionEnabledKey,
       normalized.compressionEnabled,
@@ -182,17 +188,14 @@ class AiChatSettings {
     );
     await prefs.setInt(contextThresholdTokensKey, normalized.absoluteThreshold);
     await prefs.setDouble(contextThresholdRatioKey, normalized.ratioThreshold);
-  }
-
-  /// 仅消息条数（兼容旧调用点 / 旧偏好键）。
-  Future<int> getContextMessages() async {
-    final policy = await getContextPolicy();
-    return policy.maxMessages;
-  }
-
-  Future<void> setContextMessages(int value) async {
-    final policy = await getContextPolicy();
-    await setContextPolicy(policy.copyWith(maxMessages: value));
+    await prefs.setBool(
+      contextUsageWarningEnabledKey,
+      normalized.usageWarningEnabled,
+    );
+    await prefs.setDouble(
+      contextUsageWarningRatioKey,
+      normalized.usageWarningRatio,
+    );
   }
 
   // ── 上下文自动注入 ────────────────────────────────

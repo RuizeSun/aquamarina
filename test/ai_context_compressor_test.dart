@@ -44,7 +44,7 @@ AiChatMessage _msg(AiChatRole role, String content) =>
 void main() {
   const compressor = AiContextCompressor();
 
-  test('未启用压缩时只按条数裁剪，默认 20 条', () async {
+  test('未启用压缩时全量发送历史', () async {
     final ai = _FakeAiService('不该被调用');
     final messages = [
       for (var i = 0; i < 30; i++)
@@ -56,16 +56,38 @@ void main() {
       systemPrompt: 'SYS',
       tools: const [],
       profile: _profile(),
-      policy: AiContextPolicy.defaults,
+      policy: AiContextPolicy.defaults.copyWith(compressionEnabled: false),
     );
 
     expect(ai.calls, 0);
     expect(preparation.compressed, isFalse);
     expect(preparation.summary, isNull);
-    // system + 最近 20 条
-    expect(preparation.messages, hasLength(21));
+    // system + 全量 30 条
+    expect(preparation.messages, hasLength(31));
     expect(preparation.messages.first['role'], 'system');
-    expect(preparation.messages[1]['content'], '消息 10');
+    expect(preparation.messages[1]['content'], '消息 0');
+    // 未填写上下文窗口时不估算历史用量
+    expect(preparation.rawEstimatedTokens, 0);
+  });
+
+  test('配置窗口后给出全量历史估算', () async {
+    final ai = _FakeAiService('不该被调用');
+    final messages = [
+      for (var i = 0; i < 100; i++)
+        _msg(i.isEven ? AiChatRole.user : AiChatRole.assistant, _longText(100)),
+    ];
+    final preparation = await compressor.prepare(
+      aiService: ai,
+      messages: messages,
+      systemPrompt: 'SYS',
+      tools: const [],
+      profile: _profile(contextWindow: 1000000),
+      policy: AiContextPolicy.defaults,
+    );
+
+    expect(ai.calls, 0);
+    expect(preparation.rawEstimatedTokens, greaterThan(10000));
+    expect(preparation.messages, hasLength(101));
   });
 
   test('达到绝对 token 阈值时生成摘要并替换较早消息', () async {
@@ -75,7 +97,6 @@ void main() {
         _msg(i.isEven ? AiChatRole.user : AiChatRole.assistant, _longText(100)),
     ];
     const policy = AiContextPolicy(
-      maxMessages: 20,
       compressionEnabled: true,
       thresholdMode: AiContextThresholdMode.absolute,
       absoluteThreshold: 800,
@@ -109,7 +130,6 @@ void main() {
         _msg(i.isEven ? AiChatRole.user : AiChatRole.assistant, _longText(300)),
     ];
     const policy = AiContextPolicy(
-      maxMessages: 20,
       compressionEnabled: true,
       thresholdMode: AiContextThresholdMode.ratio,
       ratioThreshold: 0.5,
@@ -128,6 +148,7 @@ void main() {
     expect(preparation.hardLimitTokens, 10000);
     expect(preparation.compressed, isTrue);
     expect(preparation.estimatedTokens, lessThanOrEqualTo(5000));
+    expect(preparation.rawEstimatedTokens, greaterThan(5000));
     expect(ai.calls, 1);
   });
 
@@ -162,7 +183,6 @@ void main() {
     final ai = _FakeAiService('摘要');
     final messages = [_msg(AiChatRole.user, _longText(600))];
     const policy = AiContextPolicy(
-      maxMessages: 20,
       compressionEnabled: true,
       thresholdMode: AiContextThresholdMode.absolute,
       absoluteThreshold: 500,
@@ -195,7 +215,6 @@ void main() {
         _msg(i.isEven ? AiChatRole.user : AiChatRole.assistant, _longText(100)),
     ];
     const policy = AiContextPolicy(
-      maxMessages: 20,
       compressionEnabled: true,
       thresholdMode: AiContextThresholdMode.absolute,
       absoluteThreshold: 500,

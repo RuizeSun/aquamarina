@@ -127,6 +127,13 @@ class AiChatController extends ChangeNotifier {
   String? _contextSummary;
   int _contextSummaryCovered = 0;
 
+  /// 当前会话历史相对上下文窗口的用量快照；未配置窗口时为 null。
+  AiContextUsage? _contextUsage;
+  AiContextUsage? get contextUsage => _contextUsage;
+
+  /// 上一次的用量提示状态，仅在跨越提示线时通知 UI。
+  bool _lastUsageWarning = false;
+
   /// 上一次已注入过的运行环境 / 时间原值。
   ///
   /// 只有内容真的变化时才重新注入：runtime 在会话内基本恒定，
@@ -499,7 +506,7 @@ class AiChatController extends ChangeNotifier {
     }
   }
 
-  /// 按当前策略准备一轮请求上下文（条数裁剪 + 阈值摘要压缩）。
+  /// 按当前策略准备一轮请求上下文（阈值摘要压缩 + 用量提示）。
   ///
   /// 摘要结果缓存在控制器内存中，下一轮只压缩新加入的旧消息。
   Future<List<Map<String, dynamic>>> _prepareContext({
@@ -537,13 +544,28 @@ class AiChatController extends ChangeNotifier {
     _contextSummary = preparation.summary;
     _contextSummaryCovered = preparation.summaryCovered;
 
+    final window = profile.contextWindow;
+    _contextUsage = window > 0
+        ? AiContextUsage(
+            usedTokens: preparation.rawEstimatedTokens,
+            windowTokens: window,
+            warningTokens: policy.resolveUsageWarningTokens(window),
+          )
+        : null;
+    final warning = _contextUsage?.isWarning ?? false;
+    if (warning != _lastUsageWarning) {
+      _lastUsageWarning = warning;
+      _notify();
+    }
+
     if (compressionStarted) {
       logInfo(
         'AiChatController',
         '上下文已压缩：摘要覆盖前 ${preparation.summaryCovered} 条消息，'
             '估算 ${preparation.estimatedTokens} tokens'
             '（阈值 ${preparation.thresholdTokens}，'
-            '上限 ${preparation.hardLimitTokens}）',
+            '上限 ${preparation.hardLimitTokens}，'
+            '历史 ${preparation.rawEstimatedTokens}）',
       );
       if (_state == AiChatStreamState.compressing) {
         _state = AiChatStreamState.idle;
@@ -556,6 +578,8 @@ class AiChatController extends ChangeNotifier {
   void _resetContextSummary() {
     _contextSummary = null;
     _contextSummaryCovered = 0;
+    _contextUsage = null;
+    _lastUsageWarning = false;
   }
 
   /// 给需要发送的 user 消息注入图片 data URL（按设置形态）。
@@ -1049,28 +1073,6 @@ class AiChatController extends ChangeNotifier {
   }
 
   // ── 上下文裁剪 ────────────────────────────────────
-
-  /// 按条数裁剪上下文，并保证 assistant(tool_calls) 与其 tool 结果不被拆散。
-  ///
-  /// 规则：
-  /// 1. system 提示词总是放在最前面（单独参数传入）；
-  /// 2. 保留最近 [maxMessages] 条；
-  /// 3. 若裁剪边界落在某个工具调用组中间，则整体前移到该组之前；
-  /// 4. 可选地合并一段较早对话摘要。
-  @visibleForTesting
-  static List<Map<String, dynamic>> trimContext(
-    List<AiChatMessage> all,
-    int maxMessages, {
-    String? system,
-    String? summary,
-  }) {
-    return AiContextWindow.trimContext(
-      all,
-      maxMessages,
-      system: system,
-      summary: summary,
-    );
-  }
 
   /// 丢弃「工具调用组不完整」的消息。
   ///

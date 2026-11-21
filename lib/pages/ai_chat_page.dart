@@ -14,6 +14,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/ai_chat.dart';
+import '../models/ai_context.dart';
 import '../services/ai/ai_chat_controller.dart';
 import '../services/ai/ai_chat_export.dart';
 import '../services/ai/ai_chat_service.dart';
@@ -859,6 +860,8 @@ class AiChatPageState extends State<AiChatPage> {
     return Column(
       children: [
         if (_setupHint != null) _buildSetupBanner(_setupHint!),
+        if (_controller.contextUsage?.isWarning ?? false)
+          _buildContextUsageBanner(_controller.contextUsage!),
         Expanded(
           child: messages.isEmpty && !_controller.isBusy
               ? _buildEmptyState()
@@ -970,6 +973,32 @@ class AiChatPageState extends State<AiChatPage> {
             const SizedBox(width: 8),
             Expanded(child: Text(hint, style: theme.textTheme.bodySmall)),
             TextButton(onPressed: _openSettings, child: const Text('去设置')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContextUsageBanner(AiContextUsage usage) {
+    final theme = Theme.of(context);
+    final percent = (usage.ratio * 100).round();
+    return Material(
+      color: theme.colorScheme.tertiaryContainer.withValues(alpha: 0.5),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+        child: Row(
+          children: [
+            Icon(Icons.data_usage, size: 18, color: theme.colorScheme.tertiary),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '本会话历史约 ${AiChatExport.formatTokenCount(usage.usedTokens)} tokens，'
+                '已占上下文窗口 $percent%'
+                '（${AiChatExport.formatTokenCount(usage.windowTokens)}）',
+                style: theme.textTheme.bodySmall,
+              ),
+            ),
+            TextButton(onPressed: _openSettings, child: const Text('调整')),
           ],
         ),
       ),

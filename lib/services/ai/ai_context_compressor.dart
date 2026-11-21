@@ -35,6 +35,11 @@ class AiContextPreparation {
   /// 本次是否真的触发过摘要压缩。
   final bool compressed;
 
+  /// 会话历史的估算 tokens（system + 全量消息 + 工具定义）。
+  ///
+  /// 仅当 AI 配置填写了上下文窗口时计算，否则为 0；供「会话用量提示」使用。
+  final int rawEstimatedTokens;
+
   /// 本次解析出的压缩触发阈值（0 表示未启用）。
   final int thresholdTokens;
 
@@ -47,6 +52,7 @@ class AiContextPreparation {
     required this.summaryCovered,
     required this.estimatedTokens,
     required this.compressed,
+    required this.rawEstimatedTokens,
     required this.thresholdTokens,
     required this.hardLimitTokens,
   });
@@ -55,7 +61,7 @@ class AiContextPreparation {
 /// 上下文压缩器。
 ///
 /// 设计目标：
-/// - 先按消息条数裁剪（默认 20 条）；
+/// - 不做消息条数裁剪，全量发送历史；
 /// - 估算 prompt tokens，达到阈值时把较早的消息交给模型做摘要；
 /// - 摘要后再估算一次，仍超过上下文窗口则抛出 [AiContextOverflowException]；
 /// - 摘要结果可由调用方缓存，下一轮只压缩新增加的旧消息。
@@ -109,6 +115,7 @@ class AiContextCompressor {
     final hardLimit = profile.contextWindow > 0
         ? profile.contextWindow
         : threshold;
+    final rawEstimated = _estimateHistory(profile, systemPrompt, usable, tools);
     var compressed = false;
     var keepRecent = _recentKeep;
 
@@ -116,11 +123,7 @@ class AiContextCompressor {
       final remaining = covered >= usable.length
           ? const <AiChatMessage>[]
           : usable.sublist(covered);
-      final windowLimit = policy.maxMessages - (currentSummary != null ? 1 : 0);
-      final window = AiContextWindow.takeRecent(
-        remaining,
-        windowLimit <= 0 ? 1 : windowLimit,
-      );
+      final window = remaining;
       final request = _buildRequest(systemPrompt, currentSummary, window);
       final estimate = _estimate(request, tools);
       final overThreshold = threshold > 0 && estimate > threshold;
@@ -133,6 +136,7 @@ class AiContextCompressor {
           summaryCovered: covered,
           estimatedTokens: estimate,
           compressed: compressed,
+          rawEstimatedTokens: rawEstimated,
           thresholdTokens: threshold,
           hardLimitTokens: hardLimit,
         );
@@ -151,6 +155,7 @@ class AiContextCompressor {
           summaryCovered: covered,
           estimatedTokens: estimate,
           compressed: compressed,
+          rawEstimatedTokens: rawEstimated,
           thresholdTokens: threshold,
           hardLimitTokens: hardLimit,
         );
@@ -170,6 +175,7 @@ class AiContextCompressor {
           summaryCovered: covered,
           estimatedTokens: estimate,
           compressed: compressed,
+          rawEstimatedTokens: rawEstimated,
           thresholdTokens: threshold,
           hardLimitTokens: hardLimit,
         );
@@ -196,11 +202,7 @@ class AiContextCompressor {
     final remaining = covered >= usable.length
         ? const <AiChatMessage>[]
         : usable.sublist(covered);
-    final windowLimit = policy.maxMessages - (currentSummary != null ? 1 : 0);
-    final finalWindow = AiContextWindow.takeRecent(
-      remaining,
-      windowLimit <= 0 ? 1 : windowLimit,
-    );
+    final finalWindow = remaining;
     final finalRequest = _buildRequest(
       systemPrompt,
       currentSummary,
@@ -218,6 +220,7 @@ class AiContextCompressor {
       summaryCovered: covered,
       estimatedTokens: finalEstimate,
       compressed: compressed,
+      rawEstimatedTokens: rawEstimated,
       thresholdTokens: threshold,
       hardLimitTokens: hardLimit,
     );
@@ -257,6 +260,17 @@ class AiContextCompressor {
   ) {
     return AiTokenEstimator.estimateChatMessages(messages) +
         AiTokenEstimator.estimateTools(tools);
+  }
+
+  /// 估算全量历史（不做条数裁剪）的 tokens；未配置上下文窗口时跳过。
+  int _estimateHistory(
+    AiProfile profile,
+    String systemPrompt,
+    List<AiChatMessage> usable,
+    List<Map<String, dynamic>> tools,
+  ) {
+    if (profile.contextWindow <= 0) return 0;
+    return _estimate(_buildRequest(systemPrompt, null, usable), tools);
   }
 
   /// 计算窗口内可以从哪里切开做摘要。
