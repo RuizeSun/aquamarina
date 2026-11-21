@@ -284,66 +284,85 @@ class AiService {
           final responseStream = response.data as ResponseBody;
           String buffer = '';
           dynamic usageMap; // 流式结束时携带的 usage（通常位于最后一个分块）
+          var parseFailures = 0;
+          var emitted = 0;
+          var sawDone = false;
+
+          /// 处理一整行 SSE 文本；返回 true 表示遇到提前收尾。
+          bool handleLine(String rawLine) {
+            final line = rawLine.trim();
+            if (line.isEmpty || line.startsWith(':')) return false;
+
+            if (line == 'data: [DONE]') {
+              return true;
+            }
+
+            if (!line.startsWith('data: ')) return false;
+
+            Map<String, dynamic> data;
+            try {
+              data = jsonDecode(line.substring(6)) as Map<String, dynamic>;
+            } catch (_) {
+              // 解析失败不再静默吞掉：计数后继续，流结束时若一个 token
+              // 都没拿到就明确报错，避免用户看到空白回答。
+              parseFailures += 1;
+              return false;
+            }
+
+            // 捕获 usage（无论 choices 是否为空）
+            if (data['usage'] is Map) {
+              usageMap = data['usage'];
+            }
+            final choices = data['choices'] as List<dynamic>?;
+            if (choices == null || choices.isEmpty) return false;
+
+            final delta = choices[0]['delta'] as Map<String, dynamic>?;
+            if (delta == null) return false;
+
+            final content = delta['content'] as String?;
+            if (content != null && content.isNotEmpty) {
+              controller.add(content);
+              emitted += 1;
+            }
+            // 提取 DeepSeek reasoning_content（思维链）
+            final reasoningContent = delta['reasoning_content'] as String?;
+            if (includeReasoningContent &&
+                reasoningContent != null &&
+                reasoningContent.isNotEmpty) {
+              controller.add(reasoningContent);
+              emitted += 1;
+            }
+            return false;
+          }
 
           // 使用有状态的 utf8.decoder 转换流，正确处理跨 chunk 的
-          // UTF-8 多字节字符拼接，避免 chunk 边界截断导致 FormatException
-          await for (final chunk in utf8.decoder.bind(responseStream.stream)) {
+          // UTF-8 多字节字符拼接；allowMalformed 让代理插入的坏字节
+          // 不再抛 FormatException 打断整条流。
+          await for (final chunk
+              in const Utf8Decoder(allowMalformed: true)
+                  .bind(responseStream.stream)) {
             buffer += chunk;
 
             // 解析 SSE 格式：data: {...}\n\n
             while (buffer.contains('\n')) {
               final lineEnd = buffer.indexOf('\n');
-              final line = buffer.substring(0, lineEnd).trim();
+              final line = buffer.substring(0, lineEnd);
               buffer = buffer.substring(lineEnd + 1);
 
-              if (line.isEmpty || line.startsWith(':')) continue;
-
-              if (line == 'data: [DONE]') {
-                _recordUsage(
-                  cfg,
-                  AiUsageRequestMode.stream,
-                  usageMap,
-                  onUsage: onUsage,
-                );
-                await controller.close();
-                return;
-              }
-
-              if (line.startsWith('data: ')) {
-                try {
-                  final jsonStr = line.substring(6);
-                  final data = jsonDecode(jsonStr) as Map<String, dynamic>;
-                  // 捕获 usage（无论 choices 是否为空）
-                  if (data['usage'] is Map) {
-                    usageMap = data['usage'];
-                  }
-                  final choices = data['choices'] as List<dynamic>?;
-                  if (choices != null && choices.isNotEmpty) {
-                    final delta = choices[0]['delta'] as Map<String, dynamic>?;
-                    if (delta != null) {
-                      // 提取 content
-                      final content = delta['content'] as String?;
-                      if (content != null && content.isNotEmpty) {
-                        controller.add(content);
-                      }
-                      // 提取 DeepSeek reasoning_content（思维链）
-                      final reasoningContent =
-                          delta['reasoning_content'] as String?;
-                      if (includeReasoningContent &&
-                          reasoningContent != null &&
-                          reasoningContent.isNotEmpty) {
-                        controller.add(reasoningContent);
-                      }
-                    }
-                  }
-                } catch (_) {
-                  // 忽略解析错误，继续处理下一行
-                }
+              if (handleLine(line)) {
+                sawDone = true;
+                break;
               }
             }
+            if (sawDone) break;
           }
 
-          // 流结束
+          // 流结束时 buffer 里可能还残留最后一个分块（很多网关最后一条
+          // data: 不带尾随换行）。不 flush 会丢掉最后几个 token 与 usage。
+          if (!sawDone && buffer.trim().isNotEmpty) {
+            handleLine(buffer);
+          }
+
           _recordUsage(
             cfg,
             AiUsageRequestMode.stream,
@@ -351,6 +370,11 @@ class AiService {
             onUsage: onUsage,
           );
           if (!controller.isClosed) {
+            if (emitted == 0 && parseFailures > 0) {
+              controller.addError(
+                AiServiceException('响应格式异常：无法解析服务端返回的流式数据'),
+              );
+            }
             await controller.close();
           }
         })
@@ -474,96 +498,110 @@ class AiService {
           final responseStream = response.data as ResponseBody;
           String buffer = '';
           dynamic usageMap;
+          var parseFailures = 0;
+          var emitted = 0;
+          var sawDone = false;
 
-          await for (final chunk in utf8.decoder.bind(responseStream.stream)) {
-            buffer += chunk;
-            while (buffer.contains('\n')) {
-              final lineEnd = buffer.indexOf('\n');
-              final line = buffer.substring(0, lineEnd).trim();
-              buffer = buffer.substring(lineEnd + 1);
+          /// 处理一整行 SSE 文本；返回 true 表示遇到需要收尾退出。
+          bool handleLine(String rawLine) {
+            final line = rawLine.trim();
+            if (line.isEmpty || line.startsWith(':')) return false;
 
-              if (line.isEmpty || line.startsWith(':')) continue;
+            if (line == 'data: [DONE]') {
+              return true;
+            }
 
-              if (line == 'data: [DONE]') {
-                _emitToolCalls(controller, toolBuffers, finishReason);
-                _recordUsage(
-                  cfg,
-                  AiUsageRequestMode.stream,
-                  usageMap,
-                  onUsage: onUsage,
+            if (!line.startsWith('data: ')) return false;
+
+            Map<String, dynamic> data;
+            try {
+              data = jsonDecode(line.substring(6)) as Map<String, dynamic>;
+            } catch (_) {
+              // 解析失败不再静默吞掉，流结束时统一判定是否属于格式异常。
+              parseFailures += 1;
+              return false;
+            }
+
+            if (data['usage'] is Map) {
+              usageMap = data['usage'];
+            }
+
+            final choices = data['choices'] as List<dynamic>?;
+            if (choices == null || choices.isEmpty) return false;
+
+            final choice = choices.first;
+            final reason = choice['finish_reason'] as String?;
+            if (reason != null && reason.isNotEmpty) {
+              finishReason = reason;
+            }
+
+            final delta = choice['delta'] as Map<String, dynamic>?;
+            if (delta == null) return false;
+
+            final content = delta['content'] as String?;
+            if (content != null && content.isNotEmpty) {
+              controller.add(ChatTextDelta(content));
+              emitted += 1;
+            }
+
+            final reasoning = delta['reasoning_content'] as String?;
+            if (reasoning != null && reasoning.isNotEmpty) {
+              controller.add(ChatReasoningDelta(reasoning));
+              emitted += 1;
+            }
+
+            final rawCalls = delta['tool_calls'] as List<dynamic>?;
+            if (rawCalls != null) {
+              for (final raw in rawCalls) {
+                if (raw is! Map) continue;
+                final index = (raw['index'] as num?)?.toInt() ?? 0;
+                final acc = toolBuffers.putIfAbsent(
+                  index,
+                  () => _ToolCallBuffer(),
                 );
-                if (!controller.isClosed) {
-                  controller.add(ChatDone(finishReason));
-                  await controller.close();
+                final id = raw['id'];
+                if (id is String && id.isNotEmpty) {
+                  acc.id = id;
                 }
-                return;
-              }
-
-              if (!line.startsWith('data: ')) continue;
-
-              Map<String, dynamic> data;
-              try {
-                data = jsonDecode(line.substring(6)) as Map<String, dynamic>;
-              } catch (_) {
-                // 忽略解析错误，继续处理下一行
-                continue;
-              }
-
-              if (data['usage'] is Map) {
-                usageMap = data['usage'];
-              }
-
-              final choices = data['choices'] as List<dynamic>?;
-              if (choices == null || choices.isEmpty) continue;
-
-              final choice = choices.first;
-              final reason = choice['finish_reason'] as String?;
-              if (reason != null && reason.isNotEmpty) {
-                finishReason = reason;
-              }
-
-              final delta = choice['delta'] as Map<String, dynamic>?;
-              if (delta == null) continue;
-
-              final content = delta['content'] as String?;
-              if (content != null && content.isNotEmpty) {
-                controller.add(ChatTextDelta(content));
-              }
-
-              final reasoning = delta['reasoning_content'] as String?;
-              if (reasoning != null && reasoning.isNotEmpty) {
-                controller.add(ChatReasoningDelta(reasoning));
-              }
-
-              final rawCalls = delta['tool_calls'] as List<dynamic>?;
-              if (rawCalls != null) {
-                for (final raw in rawCalls) {
-                  if (raw is! Map) continue;
-                  final index = (raw['index'] as num?)?.toInt() ?? 0;
-                  final acc = toolBuffers.putIfAbsent(
-                    index,
-                    () => _ToolCallBuffer(),
-                  );
-                  final id = raw['id'];
-                  if (id is String && id.isNotEmpty) {
-                    acc.id = id;
+                final fn = raw['function'];
+                if (fn is Map) {
+                  final name = fn['name'];
+                  if (name is String && name.isNotEmpty) {
+                    acc.name = name;
                   }
-                  final fn = raw['function'];
-                  if (fn is Map) {
-                    final name = fn['name'];
-                    if (name is String && name.isNotEmpty) {
-                      acc.name = name;
-                    }
-                    final args = fn['arguments'];
-                    if (args is String) {
-                      acc.arguments.write(args);
-                    } else if (args is Map) {
-                      acc.arguments.write(jsonEncode(args));
-                    }
+                  final args = fn['arguments'];
+                  if (args is String) {
+                    acc.arguments.write(args);
+                  } else if (args is Map) {
+                    acc.arguments.write(jsonEncode(args));
                   }
                 }
               }
             }
+            return false;
+          }
+
+          // allowMalformed：代理插入的坏字节不应抛 FormatException 打断整条流。
+          await for (final chunk
+              in const Utf8Decoder(allowMalformed: true)
+                  .bind(responseStream.stream)) {
+            buffer += chunk;
+            while (buffer.contains('\n')) {
+              final lineEnd = buffer.indexOf('\n');
+              final line = buffer.substring(0, lineEnd);
+              buffer = buffer.substring(lineEnd + 1);
+              if (handleLine(line)) {
+                sawDone = true;
+                break;
+              }
+            }
+            if (sawDone) break;
+          }
+
+          // 流末尾残留的最后一条 data（无尾随换行）必须处理，否则会丢掉
+          // 最后的 token 与 usage。
+          if (!sawDone && buffer.trim().isNotEmpty) {
+            handleLine(buffer);
           }
 
           // 流结束（服务端未发送 [DONE] 时的兜底）
@@ -575,6 +613,15 @@ class AiService {
             onUsage: onUsage,
           );
           if (!controller.isClosed) {
+            if (emitted == 0 &&
+                parseFailures > 0 &&
+                toolBuffers.isEmpty) {
+              controller.add(
+                ChatError(
+                  AiServiceException('响应格式异常：无法解析服务端返回的流式数据'),
+                ),
+              );
+            }
             controller.add(ChatDone(finishReason));
             await controller.close();
           }
